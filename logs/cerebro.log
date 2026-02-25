@@ -1,0 +1,494 @@
+13:07:07 [INFO] CEREBRO: [UI] Theme changed: dark
+13:07:09 [INFO] CEREBRO: [UI] Navigated to mission
+13:07:09 [INFO] CEREBRO: [UI] MainWindow initialized
+13:07:20 [INFO] CEREBRO: [UI] Navigated to scan
+13:07:39 [INFO] CEREBRO: [UI] Scan started: a901fa95-ecb6-4f93-9d4e-132a6a87c549
+13:23:34 [INFO] CEREBRO: [UI] Theme changed: dark
+13:23:34 [INFO] CEREBRO: [UI] Navigated to mission
+13:23:34 [INFO] CEREBRO: [UI] MainWindow initialized
+13:23:38 [INFO] CEREBRO: [UI] Navigated to scan
+13:24:24 [INFO] CEREBRO: [UI] Navigated to review
+13:32:05 [INFO] CEREBRO: [UI] Theme changed: dark
+13:32:06 [INFO] CEREBRO: [UI] Navigated to mission
+13:32:06 [INFO] CEREBRO: [UI] MainWindow initialized
+13:32:10 [INFO] CEREBRO: [UI] Navigated to scan
+13:45:24 [INFO] CEREBRO: [UI] Theme changed: dark
+13:45:25 [INFO] CEREBRO: [UI] Navigated to mission
+13:45:25 [INFO] CEREBRO: [UI] MainWindow initialized
+13:45:28 [INFO] CEREBRO: [UI] Navigated to scan
+13:45:47 [INFO] CEREBRO: [UI] Scan started: 14b72fbf-c559-43f7-9428-b0b2c5f23113
+13:52:10 [INFO] CEREBRO: [UI] Theme changed: dark
+13:52:12 [INFO] CEREBRO: [UI] Navigated to mission
+13:52:12 [INFO] CEREBRO: [UI] MainWindow initialized
+13:52:21 [INFO] CEREBRO: [UI] Navigated to scan
+13:52:41 [INFO] CEREBRO: [UI] Scan started: fc044292-8b72-4cfb-9cc2-b924d3c238dd
+13:59:21 [INFO] CEREBRO: [UI] Theme changed: dark
+13:59:23 [INFO] CEREBRO: [UI] Navigated to mission
+13:59:23 [INFO] CEREBRO: [UI] MainWindow initialized
+14:01:14 [INFO] CEREBRO: [UI] Navigated to scan
+14:01:33 [INFO] CEREBRO: [UI] Scan started: 72498274-d341-4073-95f0-3eccb57c5df5
+14:01:34 [INFO] CEREBRO: [UI] Navigated to review
+19:30:26 [INFO] CEREBRO: [UI] Theme changed: dark
+19:30:27 [INFO] CEREBRO: [UI] Navigated to mission
+19:30:27 [INFO] CEREBRO: [UI] MainWindow initialized
+19:30:41 [INFO] CEREBRO: [UI] Navigated to scan
+19:31:25 [INFO] CEREBRO: [UI] Scan started: 4d964b63-476a-472c-8435-40c62ef11cc1
+19:31:27 [INFO] CEREBRO: [UI] Navigated to review
+21:18:47 [INFO] CEREBRO: [UI] Theme changed: dark
+21:18:48 [INFO] CEREBRO: [UI] Navigated to mission
+21:18:48 [INFO] CEREBRO: [UI] MainWindow initialized
+21:19:03 [INFO] CEREBRO: [UI] Navigated to scan
+21:19:08 [INFO] CEREBRO: [UI] Navigated to scan
+21:19:29 [INFO] CEREBRO: [UI] Scan started: 94a8b571-52ed-4403-9b63-92393aaaea05
+21:19:30 [INFO] CEREBRO: [UI] Navigated to review
+21:38:24 [INFO] CEREBRO: [UI] Navigated to themes
+21:38:33 [INFO] CEREBRO: [UI] Theme changed: mint_terminal
+21:38:36 [INFO] CEREBRO: [UI] Navigated to scan
+21:38:39 [INFO] CEREBRO: [UI] Navigated to mission
+21:38:42 [INFO] CEREBRO: [UI] Navigated to scan
+22:03:40 [INFO] CEREBRO: [UI] Theme changed: dark
+22:03:40 [INFO] CEREBRO: [UI] Navigated to mission
+22:03:40 [INFO] CEREBRO: [UI] MainWindow initialized
+22:03:49 [INFO] CEREBRO: [UI] Navigated to scan
+22:04:18 [INFO] CEREBRO: [UI] Scan started: 16a3f5ec-5298-4d51-a43b-bce3282909c0
+22:04:18 [INFO] CEREBRO: [UI] Navigated to review
+22:05:32 [INFO] CEREBRO: [CLEANUP] Starting cleanup job
+22:05:32 [INFO] CEREBRO: [CLEANUP] Moved to trash: C:\Users\S8633\Desktop\DCIM\2025-04-28-17-58-21-534 - Copy.jpg
+22:05:32 [INFO] CEREBRO: [CLEANUP] Moved to trash: C:\Users\S8633\Desktop\DCIM\100D5300 - Copy\DSC_4950.JPG
+22:05:32 [INFO] CEREBRO: [CLEANUP] Finished - Deleted: 2, Failed: 0
+22:05:32 [ERROR] CEREBRO: [UI] Cleanup finished handler error: object of type 'int' has no len()
+22:08:03 [INFO] CEREBRO: [CLEANUP] Starting cleanup job
+22:08:03 [WARNING] CEREBRO: [CLEANUP] Skipping missing: C:\Users\S8633\Desktop\DCIM\2025-04-28-17-58-21-534 - Copy.jpg
+22:08:03 [WARNING] CEREBRO: [CLEANUP] Skipping missing: C:\Users\S8633\Desktop\DCIM\100D5300 - Copy\DSC_4950.JPG
+22:08:03 [INFO] CEREBRO: [CLEANUP] Finished - Deleted: 2, Failed: 0
+22:08:03 [ERROR] CEREBRO: [UI] Cleanup finished handler error: object of type 'int' has no len()
+00:32:07 [INFO] CEREBRO: [UI] Theme changed: dark
+00:32:08 [INFO] CEREBRO: [UI] Navigated to mission
+00:32:08 [INFO] CEREBRO: [UI] MainWindow initialized
+00:32:13 [INFO] CEREBRO: [UI] Navigated to hub
+00:32:15 [INFO] CEREBRO: [UI] Navigated to audit
+00:32:19 [INFO] CEREBRO: [UI] Navigated to settings
+00:33:06 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:07 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:07 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:08 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:14 [INFO] CEREBRO: [UI] Theme changed: hacker_sunrise
+00:33:19 [INFO] CEREBRO: [UI] Theme changed: hacker_sunrise
+00:33:20 [INFO] CEREBRO: [UI] Navigated to mission
+00:33:24 [INFO] CEREBRO: [UI] Navigated to scan
+00:34:24 [INFO] CEREBRO: [UI] Scan started: 72990b4a-8e07-450f-85ac-7395ad73fcc8
+00:34:26 [INFO] CEREBRO: [UI] Navigated to review
+00:36:42 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.
+00:39:17 [INFO] CEREBRO: [UI] Theme changed: dark
+00:39:18 [INFO] CEREBRO: [UI] Navigated to mission
+00:39:18 [INFO] CEREBRO: [UI] MainWindow initialized
+00:39:58 [INFO] CEREBRO: [UI] Navigated to scan
+00:40:02 [INFO] CEREBRO: [UI] Navigated to scan
+00:40:49 [INFO] CEREBRO: [UI] Scan started: d8f04299-e12e-4b52-b048-7c694019bfcf
+00:40:50 [INFO] CEREBRO: [UI] Navigated to review
+00:41:46 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.
+10:36:14 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.
+10:57:18 [INFO] CEREBRO: [UI] Theme changed: dark
+10:57:19 [INFO] CEREBRO: [UI] Navigated to mission
+10:57:19 [INFO] CEREBRO: [UI] MainWindow initialized
+10:57:23 [INFO] CEREBRO: [UI] Navigated to settings
+10:57:36 [INFO] CEREBRO: [UI] Navigated to scan
+10:58:09 [INFO] CEREBRO: [UI] Scan started: 688a5974-46c8-40be-9e19-ec33e032ea4d
+10:58:11 [INFO] CEREBRO: [UI] Navigated to review
+12:41:25 [INFO] CEREBRO: [UI] Theme changed: dark
+12:41:27 [INFO] CEREBRO: [UI] Navigated to mission
+12:41:27 [INFO] CEREBRO: [UI] MainWindow initialized
+12:41:32 [INFO] CEREBRO: [UI] Navigated to mission
+12:41:33 [INFO] CEREBRO: [UI] Navigated to scan
+12:41:50 [INFO] CEREBRO: [UI] Scan started: 4b315166-db67-446f-b288-952033098183
+12:41:51 [INFO] CEREBRO: [UI] Navigated to review
+12:43:13 [INFO] CEREBRO: [UI] Navigated to scan
+12:43:17 [INFO] CEREBRO: [UI] Scan started: 6b334d7e-3142-45fb-8b8e-cd0296b9c8e6
+12:43:19 [INFO] CEREBRO: [UI] Navigated to review
+12:56:27 [INFO] CEREBRO: [UI] Theme changed: dark
+12:56:29 [INFO] CEREBRO: [UI] Navigated to mission
+12:56:29 [INFO] CEREBRO: [UI] MainWindow initialized
+12:56:32 [INFO] CEREBRO: [UI] Navigated to scan
+12:56:58 [INFO] CEREBRO: [UI] Scan started: 135152e1-7faa-412f-a5b8-dd713ec69719
+12:57:02 [INFO] CEREBRO: [UI] Navigated to review
+13:10:11 [INFO] CEREBRO: [UI] Theme changed: dark
+13:10:11 [INFO] CEREBRO: [UI] Navigated to mission
+13:10:11 [INFO] CEREBRO: [UI] MainWindow initialized
+13:10:15 [INFO] CEREBRO: [UI] Navigated to scan
+13:10:37 [INFO] CEREBRO: [UI] Scan started: a002c8db-5c2f-4274-8fb7-94d232e1813d
+13:10:38 [INFO] CEREBRO: [UI] Navigated to review
+13:10:46 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=57 files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+13:10:46 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=57 total_files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+15:48:41 [INFO] CEREBRO: [UI] Theme changed: dark
+15:48:42 [INFO] CEREBRO: [UI] Navigated to mission
+15:48:42 [INFO] CEREBRO: [UI] MainWindow initialized
+15:48:45 [INFO] CEREBRO: [UI] Navigated to scan
+15:49:26 [INFO] CEREBRO: [UI] Scan started: 9f245363-4065-46c3-9998-1e911bac8272
+15:49:28 [INFO] CEREBRO: [UI] Navigated to review
+15:49:59 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=57 files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+15:49:59 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=57 total_files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+16:23:56 [INFO] CEREBRO: [UI] Theme changed: dark
+16:23:58 [INFO] CEREBRO: [UI] Navigated to mission
+16:23:58 [INFO] CEREBRO: [UI] MainWindow initialized
+16:24:00 [INFO] CEREBRO: [UI] Navigated to scan
+16:24:20 [INFO] CEREBRO: [UI] Scan started: fd82da3e-d79b-4170-b72a-1b5f42e37aea
+16:24:21 [INFO] CEREBRO: [UI] Navigated to review
+16:24:44 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=29 files=29 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+16:24:44 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=29 total_files=29 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+16:24:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=29 total_files=29 stats_files=29
+16:24:45 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:24:45 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=29
+16:24:46 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=29 failed=0
+16:25:37 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=28 files=28 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:25:37 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=28 total_files=28 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:25:37 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=28 total_files=28 stats_files=28
+16:25:37 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:25:37 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=28
+16:25:39 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=24 failed=4
+16:26:32 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=1 files=1 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:26:32 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=1 total_files=1 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:26:32 [ERROR] CEREBRO: [UI] Cleanup start failed: Deletion plan validation failed: Group 3: delete missing: C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy.mp4
+16:35:42 [INFO] CEREBRO: [UI] Navigated to themes
+16:35:46 [INFO] CEREBRO: [UI] Navigated to settings
+16:35:48 [INFO] CEREBRO: [UI] Navigated to audit
+16:53:28 [INFO] CEREBRO: [UI] Theme changed: dark
+16:53:28 [INFO] CEREBRO: [UI] Navigated to mission
+16:53:28 [INFO] CEREBRO: [UI] MainWindow initialized
+16:53:31 [INFO] CEREBRO: [UI] Navigated to scan
+16:53:40 [INFO] CEREBRO: [UI] Navigated to scan
+16:54:01 [INFO] CEREBRO: [UI] Scan started: ab3184f7-7adc-4f03-8614-69e87130c9e5
+16:54:02 [INFO] CEREBRO: [UI] Navigated to review
+16:54:45 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=82 files=154 first_keep=C:\Users\S8633\Desktop\skyg\MY FINANCIAL DASHBOARD - Copy - Copy\001581963B7F82814B8342359DFE4334D84B31D5.torrent first_delete_count=3
+16:54:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=82 total_files=154 first_keep=C:\Users\S8633\Desktop\skyg\MY FINANCIAL DASHBOARD - Copy - Copy\001581963B7F82814B8342359DFE4334D84B31D5.torrent first_delete_count=3
+16:54:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=154 total_files=154 stats_files=154
+16:54:45 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:54:45 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=154
+16:54:50 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=154 failed=0
+16:54:56 [INFO] CEREBRO: [UI] Navigated to review
+16:55:01 [INFO] CEREBRO: [UI] Navigated to themes
+16:55:12 [INFO] CEREBRO: [UI] Theme changed: violet_vault
+16:55:54 [INFO] CEREBRO: [UI] Navigated to settings
+16:55:55 [INFO] CEREBRO: [UI] Navigated to audit
+17:35:57 [ERROR] CEREBRO: Invalid theme 'violet_vault'; falling back to 'dark'.
+17:37:51 [INFO] CEREBRO: [UI] Theme changed: dark
+17:37:51 [INFO] CEREBRO: [UI] Navigated to mission
+17:37:51 [INFO] CEREBRO: [UI] MainWindow initialized
+17:38:16 [INFO] CEREBRO: [UI] Navigated to hub
+17:38:40 [INFO] CEREBRO: [UI] Navigated to audit
+17:38:54 [INFO] CEREBRO: [UI] Navigated to settings
+17:39:12 [INFO] CEREBRO: [UI] Navigated to scan
+17:39:48 [INFO] CEREBRO: [UI] Scan started: 95bafe8c-21ef-43fe-8184-aa1954230fb9
+17:39:48 [INFO] CEREBRO: [UI] Navigated to review
+17:40:53 [INFO] CEREBRO: [UI] Navigated to scan
+17:41:32 [INFO] CEREBRO: [UI] Scan started: 5c879d5b-bea5-4652-bd5d-33c47f460b6b
+17:46:23 [INFO] CEREBRO: [UI] Navigated to mission
+17:46:26 [INFO] CEREBRO: [UI] Navigated to scan
+17:46:29 [INFO] CEREBRO: [UI] Navigated to review
+17:46:32 [INFO] CEREBRO: [UI] Navigated to history
+17:46:37 [INFO] CEREBRO: [UI] Navigated to themes
+17:46:46 [INFO] CEREBRO: [UI] Theme changed: blood_moon
+17:46:56 [INFO] CEREBRO: [UI] Navigated to audit
+17:47:15 [INFO] CEREBRO: [UI] Navigated to hub
+17:47:18 [INFO] CEREBRO: [UI] Navigated to scan
+17:50:55 [INFO] CEREBRO: [UI] Theme changed: dark
+17:50:55 [INFO] CEREBRO: [UI] Navigated to mission
+17:50:55 [INFO] CEREBRO: [UI] MainWindow initialized
+17:51:21 [INFO] CEREBRO: [UI] Navigated to scan
+01:30:49 [INFO] CEREBRO: [UI] Theme changed: dark
+01:30:50 [INFO] CEREBRO: [UI] Navigated to mission
+01:30:50 [INFO] CEREBRO: [UI] MainWindow initialized
+01:31:15 [INFO] CEREBRO: [UI] Navigated to scan
+01:31:17 [INFO] CEREBRO: [UI] Navigated to review
+01:31:18 [INFO] CEREBRO: [UI] Navigated to history
+01:31:20 [INFO] CEREBRO: [UI] Navigated to themes
+01:31:20 [INFO] CEREBRO: [UI] Navigated to themes
+01:31:29 [INFO] CEREBRO: [UI] Theme changed: laser_lilac
+01:31:33 [INFO] CEREBRO: [UI] Navigated to settings
+01:31:39 [INFO] CEREBRO: [UI] Navigated to audit
+01:40:00 [INFO] CEREBRO: [UI] Theme changed: dark
+01:40:02 [INFO] CEREBRO: [UI] Navigated to mission
+01:40:02 [INFO] CEREBRO: [UI] MainWindow initialized
+01:40:06 [INFO] CEREBRO: [UI] Navigated to settings
+01:40:08 [INFO] CEREBRO: [UI] Navigated to themes
+01:40:10 [INFO] CEREBRO: [UI] Navigated to history
+01:40:12 [INFO] CEREBRO: [UI] Navigated to review
+01:40:13 [INFO] CEREBRO: [UI] Navigated to scan
+01:40:50 [INFO] CEREBRO: [UI] Scan started: 2fb352aa-a872-43b9-acb1-8bf7d8c164d3
+01:40:51 [INFO] CEREBRO: [UI] Navigated to review
+01:40:55 [INFO] CEREBRO: [UI] Navigated to history
+01:40:59 [INFO] CEREBRO: [UI] Navigated to themes
+02:01:29 [INFO] CEREBRO: [UI] Theme changed: dark
+02:01:31 [INFO] CEREBRO: [UI] Navigated to mission
+02:01:31 [INFO] CEREBRO: [UI] MainWindow initialized
+03:20:32 [INFO] CEREBRO: [UI] Theme changed: dark
+03:20:33 [INFO] CEREBRO: [UI] Navigated to mission
+03:20:33 [INFO] CEREBRO: [UI] MainWindow initialized
+03:20:41 [INFO] CEREBRO: [UI] Navigated to scan
+03:20:44 [INFO] CEREBRO: [UI] Navigated to review
+03:20:45 [INFO] CEREBRO: [UI] Navigated to history
+03:20:47 [INFO] CEREBRO: [UI] Navigated to themes
+03:20:48 [INFO] CEREBRO: [UI] Navigated to settings
+03:20:49 [INFO] CEREBRO: [UI] Navigated to audit
+03:20:50 [INFO] CEREBRO: [UI] Navigated to hub
+03:20:53 [INFO] CEREBRO: [UI] Navigated to mission
+03:20:55 [INFO] CEREBRO: [UI] Navigated to scan
+03:21:37 [INFO] CEREBRO: [UI] Scan started: df1f6f17-48e9-4cc5-95a9-5060879f9436
+03:21:40 [INFO] CEREBRO: [UI] Navigated to review
+03:22:44 [INFO] CEREBRO: [UI] Navigated to review
+03:22:45 [INFO] CEREBRO: [UI] Navigated to history
+03:22:48 [INFO] CEREBRO: [UI] Navigated to themes
+03:22:58 [INFO] CEREBRO: [UI] Theme changed: desert_ui
+03:23:09 [INFO] CEREBRO: [UI] Theme changed: lime_lab
+03:23:13 [INFO] CEREBRO: [UI] Navigated to mission
+03:23:15 [INFO] CEREBRO: [UI] Navigated to review
+03:23:17 [INFO] CEREBRO: [UI] Navigated to audit
+03:33:35 [INFO] CEREBRO: [UI] Theme changed: dark
+03:33:35 [INFO] CEREBRO: [UI] Navigated to mission
+03:33:35 [INFO] CEREBRO: [UI] MainWindow initialized
+03:33:38 [INFO] CEREBRO: [UI] Navigated to scan
+03:33:42 [INFO] CEREBRO: [UI] Navigated to review
+03:33:43 [INFO] CEREBRO: [UI] Navigated to history
+03:33:45 [INFO] CEREBRO: [UI] Navigated to themes
+03:33:46 [INFO] CEREBRO: [UI] Navigated to settings
+03:33:47 [INFO] CEREBRO: [UI] Navigated to audit
+03:33:48 [INFO] CEREBRO: [UI] Navigated to hub
+03:33:50 [INFO] CEREBRO: [UI] Navigated to scan
+04:22:09 [INFO] CEREBRO: [UI] Theme changed: dark
+04:22:10 [INFO] CEREBRO: [UI] Navigated to mission
+04:22:10 [INFO] CEREBRO: [UI] MainWindow initialized
+04:22:14 [INFO] CEREBRO: [UI] Navigated to review
+04:22:15 [INFO] CEREBRO: [UI] Navigated to history
+04:22:16 [INFO] CEREBRO: [UI] Navigated to settings
+04:22:18 [INFO] CEREBRO: [UI] Navigated to settings
+04:22:18 [INFO] CEREBRO: [UI] Navigated to audit
+04:22:19 [INFO] CEREBRO: [UI] Navigated to hub
+04:22:21 [INFO] CEREBRO: [UI] Navigated to themes
+04:22:26 [INFO] CEREBRO: [UI] Theme changed: amber_archive
+04:22:30 [INFO] CEREBRO: [UI] Theme changed: amber_archive
+05:01:00 [INFO] CEREBRO: [UI] Navigated to review
+05:01:09 [INFO] CEREBRO: [UI] Navigated to hub
+05:01:13 [INFO] CEREBRO: [UI] Navigated to audit
+05:01:20 [INFO] CEREBRO: [UI] Navigated to hub
+05:01:22 [INFO] CEREBRO: [UI] Navigated to scan
+05:08:18 [INFO] CEREBRO: [UI] Theme changed: dark
+05:08:19 [INFO] CEREBRO: [UI] Navigated to mission
+05:08:19 [INFO] CEREBRO: [UI] MainWindow initialized
+05:08:55 [INFO] CEREBRO: [UI] Navigated to themes
+05:09:01 [INFO] CEREBRO: [UI] Theme changed: royal_ink
+05:09:07 [INFO] CEREBRO: [UI] Theme changed: ice_cream
+05:09:43 [INFO] CEREBRO: [UI] Navigated to audit
+05:09:44 [INFO] CEREBRO: [UI] Navigated to settings
+05:09:47 [INFO] CEREBRO: [UI] Navigated to themes
+05:09:49 [INFO] CEREBRO: [UI] Navigated to history
+05:09:51 [INFO] CEREBRO: [UI] Navigated to review
+05:09:52 [INFO] CEREBRO: [UI] Navigated to history
+05:10:02 [INFO] CEREBRO: [UI] Navigated to scan
+05:10:16 [INFO] CEREBRO: [UI] Navigated to scan
+05:10:19 [INFO] CEREBRO: [UI] Navigated to history
+05:12:17 [INFO] CEREBRO: [UI] Theme changed: dark
+05:12:18 [INFO] CEREBRO: [UI] Navigated to mission
+05:12:18 [INFO] CEREBRO: [UI] MainWindow initialized
+05:12:21 [INFO] CEREBRO: [UI] Navigated to scan
+05:22:26 [INFO] CEREBRO: [UI] Theme changed: dark
+05:22:27 [INFO] CEREBRO: [UI] Navigated to mission
+05:22:27 [INFO] CEREBRO: [UI] MainWindow initialized
+05:22:30 [INFO] CEREBRO: [UI] Navigated to scan
+05:22:51 [INFO] CEREBRO: [UI] Navigated to review
+05:23:01 [INFO] CEREBRO: [UI] Navigated to history
+05:23:03 [INFO] CEREBRO: [UI] Navigated to settings
+05:23:35 [INFO] CEREBRO: [UI] Navigated to review
+05:23:37 [INFO] CEREBRO: [UI] Navigated to scan
+05:23:41 [INFO] CEREBRO: [UI] Navigated to review
+05:23:47 [INFO] CEREBRO: [UI] Navigated to themes
+05:23:59 [INFO] CEREBRO: [UI] Theme changed: arctic_byte
+05:25:34 [INFO] CEREBRO: [UI] Navigated to mission
+05:25:41 [INFO] CEREBRO: [UI] Navigated to themes
+05:25:43 [INFO] CEREBRO: [UI] Navigated to mission
+05:34:04 [INFO] CEREBRO: [UI] Theme changed: dark
+05:34:05 [INFO] CEREBRO: [UI] Navigated to mission
+05:34:05 [INFO] CEREBRO: [UI] MainWindow initialized
+05:35:13 [INFO] CEREBRO: [UI] Navigated to scan
+05:35:17 [INFO] CEREBRO: [UI] Navigated to mission
+06:40:09 [INFO] CEREBRO: [UI] Theme changed: dark
+06:40:09 [INFO] CEREBRO: [UI] Navigated to mission
+06:40:09 [INFO] CEREBRO: [UI] MainWindow initialized
+06:44:20 [INFO] CEREBRO: [UI] Theme changed: dark
+06:44:21 [INFO] CEREBRO: [UI] Navigated to mission
+06:44:21 [INFO] CEREBRO: [UI] MainWindow initialized
+06:45:58 [INFO] CEREBRO: [UI] Theme changed: dark
+06:45:58 [INFO] CEREBRO: [UI] Navigated to mission
+06:45:58 [INFO] CEREBRO: [UI] MainWindow initialized
+05:21:34 [INFO] CEREBRO: [UI] Theme changed: dark
+05:21:35 [INFO] CEREBRO: [UI] Navigated to mission
+05:21:35 [INFO] CEREBRO: [UI] MainWindow initialized
+05:23:16 [INFO] CEREBRO: [UI] Navigated to scan
+05:23:20 [INFO] CEREBRO: [UI] Navigated to scan
+05:23:21 [INFO] CEREBRO: [UI] Navigated to review
+05:23:29 [INFO] CEREBRO: [UI] Navigated to scan
+05:23:35 [INFO] CEREBRO: [UI] Navigated to scan
+05:23:36 [INFO] CEREBRO: [UI] Navigated to review
+05:25:38 [INFO] CEREBRO: [UI] Navigated to mission
+05:25:40 [INFO] CEREBRO: [UI] Navigated to scan
+05:25:41 [INFO] CEREBRO: [UI] Navigated to review
+05:25:44 [INFO] CEREBRO: [UI] Navigated to hub
+05:26:15 [INFO] CEREBRO: [UI] Navigated to mission
+05:26:31 [INFO] CEREBRO: [UI] Navigated to scan
+05:40:01 [INFO] CEREBRO: [UI] Theme changed: dark
+05:40:01 [INFO] CEREBRO: [UI] Navigated to mission
+05:40:01 [INFO] CEREBRO: [UI] MainWindow initialized
+05:40:06 [INFO] CEREBRO: [UI] Navigated to scan
+05:46:08 [INFO] CEREBRO: [UI] Theme changed: dark
+05:46:09 [INFO] CEREBRO: [UI] Navigated to mission
+05:46:09 [INFO] CEREBRO: [UI] MainWindow initialized
+05:49:27 [INFO] CEREBRO: [UI] Navigated to scan
+05:49:42 [INFO] CEREBRO: [UI] Scan started: 627bae4b-9e6d-490a-a767-c90e40eb63a0
+05:49:43 [INFO] CEREBRO: [UI] Navigated to review
+05:50:14 [INFO] CEREBRO: [UI] Navigated to history
+05:50:20 [INFO] CEREBRO: [UI] Navigated to mission
+05:50:31 [INFO] CEREBRO: [UI] Navigated to hub
+05:52:27 [INFO] CEREBRO: [UI] Navigated to mission
+05:52:40 [INFO] CEREBRO: [UI] Navigated to settings
+05:52:50 [INFO] CEREBRO: [UI] Navigated to hub
+05:52:51 [INFO] CEREBRO: [UI] Navigated to audit
+05:52:51 [INFO] CEREBRO: [UI] Navigated to settings
+05:52:53 [INFO] CEREBRO: [UI] Navigated to themes
+05:52:59 [INFO] CEREBRO: [UI] Theme changed: arctic_byte
+05:53:05 [INFO] CEREBRO: [UI] Theme changed: ice_cream
+05:53:16 [INFO] CEREBRO: [UI] Theme changed: arctic_byte
+05:53:24 [INFO] CEREBRO: [UI] Theme changed: lime_lab
+05:53:33 [INFO] CEREBRO: [UI] Theme changed: lime_lab
+05:53:47 [INFO] CEREBRO: [UI] Theme changed: violet_vault
+06:04:55 [INFO] CEREBRO: [UI] Theme changed: dark
+06:04:56 [INFO] CEREBRO: [UI] Navigated to mission
+06:04:56 [INFO] CEREBRO: [UI] MainWindow initialized
+06:05:15 [INFO] CEREBRO: [UI] Navigated to scan
+06:05:30 [INFO] CEREBRO: [UI] Scan started: ec553e68-93c8-49f3-ad71-bfcf7be7341d
+06:05:30 [INFO] CEREBRO: [UI] Navigated to review
+06:17:43 [INFO] CEREBRO: [UI] Theme changed: dark
+06:17:44 [INFO] CEREBRO: [UI] Navigated to mission
+06:17:44 [INFO] CEREBRO: [UI] MainWindow initialized
+06:17:51 [INFO] CEREBRO: [UI] Navigated to scan
+06:17:53 [INFO] CEREBRO: [UI] Navigated to review
+06:18:11 [INFO] CEREBRO: [UI] Navigated to hub
+06:18:13 [INFO] CEREBRO: [UI] Navigated to audit
+06:18:20 [INFO] CEREBRO: [UI] Navigated to themes
+06:18:21 [INFO] CEREBRO: [UI] Navigated to history
+06:18:23 [INFO] CEREBRO: [UI] Navigated to review
+06:18:24 [INFO] CEREBRO: [UI] Navigated to scan
+06:18:27 [INFO] CEREBRO: [UI] Navigated to mission
+17:03:24 [INFO] CEREBRO: [UI] Theme changed: dark
+17:03:25 [INFO] CEREBRO: [UI] Navigated to mission
+17:03:25 [INFO] CEREBRO: [UI] MainWindow initialized
+17:08:31 [INFO] CEREBRO: [UI] Navigated to review
+17:08:36 [INFO] CEREBRO: [UI] Navigated to mission
+17:20:10 [INFO] CEREBRO: [UI] Theme changed: dark
+17:20:11 [INFO] CEREBRO: [UI] Navigated to mission
+17:20:11 [INFO] CEREBRO: [UI] MainWindow initialized
+17:20:15 [INFO] CEREBRO: [UI] Navigated to scan
+17:20:34 [INFO] CEREBRO: [UI] Scan started: 317e3539-72f7-4473-9731-d91ee27df279
+17:39:41 [INFO] CEREBRO: [UI] Navigated to mission
+17:39:43 [INFO] CEREBRO: [UI] Navigated to scan
+17:39:45 [INFO] CEREBRO: [UI] Navigated to review
+17:39:47 [INFO] CEREBRO: [UI] Navigated to scan
+18:03:30 [INFO] CEREBRO: [UI] Navigated to review
+17:23:11 [INFO] CEREBRO: [UI] Theme changed: dark
+17:23:11 [INFO] CEREBRO: [UI] Navigated to mission
+17:23:11 [INFO] CEREBRO: [UI] MainWindow initialized
+17:23:19 [INFO] CEREBRO: [UI] Navigated to themes
+17:33:47 [INFO] CEREBRO: [UI] Theme changed: dark
+17:33:48 [INFO] CEREBRO: [UI] Navigated to mission
+17:33:48 [INFO] CEREBRO: [UI] MainWindow initialized
+17:35:30 [INFO] CEREBRO: [UI] Navigated to scan
+17:45:48 [INFO] CEREBRO: [UI] Theme changed: dark
+17:45:49 [INFO] CEREBRO: [UI] Navigated to mission
+17:45:49 [INFO] CEREBRO: [UI] MainWindow initialized
+17:39:30 [INFO] CEREBRO: [UI] Theme changed: dark
+17:39:31 [INFO] CEREBRO: [UI] Navigated to mission
+17:39:31 [INFO] CEREBRO: [UI] MainWindow initialized
+17:39:34 [INFO] CEREBRO: [UI] Navigated to scan
+17:41:07 [INFO] CEREBRO: [UI] Navigated to themes
+17:41:28 [INFO] CEREBRO: [UI] Theme changed: hacker_sunrise
+17:41:38 [INFO] CEREBRO: [UI] Theme changed: ice_cream
+17:41:43 [INFO] CEREBRO: [UI] Theme changed: ice_cream
+17:41:48 [INFO] CEREBRO: [UI] Theme changed: ice_cream
+17:42:33 [INFO] CEREBRO: [UI] Navigated to scan
+18:10:07 [INFO] CEREBRO: [UI] Scan started: 16aa3777-a3b1-4551-ace3-9abc291db825
+18:14:01 [INFO] CEREBRO: [UI] Navigated to scan
+18:14:02 [INFO] CEREBRO: [UI] Navigated to review
+18:14:03 [INFO] CEREBRO: [UI] Navigated to history
+17:22:14 [INFO] CEREBRO: [UI] Theme changed: dark
+17:22:15 [INFO] CEREBRO: [UI] Navigated to mission
+17:22:15 [INFO] CEREBRO: [UI] MainWindow initialized
+17:32:53 [INFO] CEREBRO: [UI] Theme changed: dark
+17:32:54 [INFO] CEREBRO: [UI] Navigated to mission
+17:32:54 [INFO] CEREBRO: [UI] MainWindow initialized
+17:33:52 [INFO] CEREBRO: [UI] Navigated to settings
+17:34:00 [INFO] CEREBRO: [UI] Navigated to scan
+17:34:03 [INFO] CEREBRO: [UI] Navigated to review
+17:34:05 [INFO] CEREBRO: [UI] Navigated to history
+17:34:07 [INFO] CEREBRO: [UI] Navigated to themes
+17:34:10 [INFO] CEREBRO: [UI] Theme changed: coal_cinnamon
+17:34:14 [INFO] CEREBRO: [UI] Theme changed: noir_peach
+17:34:17 [INFO] CEREBRO: [UI] Theme changed: mint_terminal
+17:34:21 [INFO] CEREBRO: [UI] Theme changed: neon_void
+17:34:25 [INFO] CEREBRO: [UI] Theme changed: graphite_mint
+17:34:31 [INFO] CEREBRO: [UI] Theme changed: sakura_overdrive
+17:34:33 [INFO] CEREBRO: [UI] Theme changed: noir_peach
+17:34:36 [INFO] CEREBRO: [UI] Theme changed: sakura_overdrive
+17:34:37 [INFO] CEREBRO: [UI] Navigated to settings
+17:34:42 [INFO] CEREBRO: [UI] Navigated to review
+17:34:44 [INFO] CEREBRO: [UI] Navigated to history
+17:34:47 [INFO] CEREBRO: [UI] Navigated to themes
+17:34:48 [INFO] CEREBRO: [UI] Navigated to settings
+17:34:55 [INFO] CEREBRO: [UI] Navigated to audit
+17:35:24 [INFO] CEREBRO: [UI] Navigated to hub
+18:29:00 [INFO] CEREBRO: [UI] Theme changed: dark
+18:29:01 [INFO] CEREBRO: [UI] Navigated to mission
+18:29:01 [INFO] CEREBRO: [UI] MainWindow initialized
+18:29:05 [INFO] CEREBRO: [UI] Navigated to hub
+18:29:10 [INFO] CEREBRO: [UI] Navigated to audit
+18:31:18 [INFO] CEREBRO: [UI] Navigated to hub
+18:31:54 [INFO] CEREBRO: [UI] Theme changed: dark
+18:31:55 [INFO] CEREBRO: [UI] Navigated to mission
+18:31:55 [INFO] CEREBRO: [UI] MainWindow initialized
+18:32:29 [INFO] CEREBRO: [UI] Navigated to scan
+18:32:36 [INFO] CEREBRO: [UI] Navigated to scan
+18:32:54 [INFO] CEREBRO: [UI] Scan started: a55ea196-9f68-468e-9611-95f1a983fe71
+18:32:57 [INFO] CEREBRO: [UI] Navigated to review
+14:46:44 [INFO] CEREBRO: [UI] Theme changed: dark
+14:46:46 [INFO] CEREBRO: [UI] Navigated to mission
+14:46:46 [INFO] CEREBRO: [UI] MainWindow initialized
+19:25:16 [INFO] CEREBRO: [UI] Theme changed: dark
+19:25:16 [INFO] CEREBRO: [UI] Navigated to mission
+19:25:16 [INFO] CEREBRO: [UI] MainWindow initialized
+19:25:20 [INFO] CEREBRO: [UI] Navigated to scan
+19:26:02 [INFO] CEREBRO: [UI] Scan started: 5f437be5-9e28-4e5b-ba6b-7082e738de17
+19:26:04 [INFO] CEREBRO: [UI] Navigated to review
+19:26:08 [INFO] CEREBRO: [UI] Navigated to scan
+19:26:20 [INFO] CEREBRO: [UI] Navigated to review
+19:26:26 [INFO] CEREBRO: [UI] Navigated to history
+19:26:38 [ERROR] CEREBRO: [UI] Review load failed: 'int' object is not iterable
+19:26:38 [ERROR] CEREBRO: [UI] History ingest failed: object of type 'int' has no len()
+19:26:39 [INFO] CEREBRO: [UI] Navigated to review
+19:26:48 [INFO] CEREBRO: [UI] Navigated to scan
+19:27:04 [INFO] CEREBRO: [UI] Scan started: adaa68f4-d1a6-4ece-94fb-be89855613b7
+19:27:05 [INFO] CEREBRO: [UI] Navigated to review
+19:27:10 [INFO] CEREBRO: [UI] Navigated to review
+19:27:11 [INFO] CEREBRO: [UI] Navigated to mission
+19:27:12 [INFO] CEREBRO: [UI] Navigated to scan
+19:27:57 [INFO] CEREBRO: [UI] Scan started: 15e0ddd4-2465-4fde-864a-bdff4a3a073e
+19:27:58 [INFO] CEREBRO: [UI] Navigated to review
+19:28:14 [INFO] CEREBRO: [UI] Navigated to scan
+19:29:21 [INFO] CEREBRO: [UI] Scan started: 95f57c9d-9180-4513-94d8-9b9a7f8b2ab0
+19:29:22 [INFO] CEREBRO: [UI] Navigated to review
+19:30:09 [INFO] CEREBRO: [UI] Navigated to audit
+19:48:14 [INFO] CEREBRO: [UI] Navigated to themes
+19:48:16 [INFO] CEREBRO: [UI] Theme changed: amber_archive
+19:48:17 [INFO] CEREBRO: [UI] Theme changed: amber_archive
+19:48:19 [INFO] CEREBRO: [UI] Theme changed: amber_archive
+19:48:19 [INFO] CEREBRO: [UI] Navigated to mission
+19:48:20 [INFO] CEREBRO: [UI] Navigated to scan
+19:50:28 [INFO] CEREBRO: [UI] Navigated to hub
+19:52:40 [INFO] CEREBRO: [UI] Navigated to audit
+19:52:41 [INFO] CEREBRO: [UI] Navigated to settings
+19:54:31 [INFO] CEREBRO: [UI] Navigated to hub

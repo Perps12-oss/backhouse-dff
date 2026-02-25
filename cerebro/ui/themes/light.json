@@ -1,0 +1,40 @@
+{
+  "name": "light",
+  "colors": {
+    "background": "#f8fafc",
+    "surface": "#ffffff",
+    "surface_variant": "#f1f5f9",
+    "primary": "#3b82f6",
+    "primary_variant": "#1d4ed8",
+    "secondary": "#e2e8f0",
+    "secondary_variant": "#cbd5e1",
+    "accent": "#8b5cf6",
+    "accent_variant": "#7c3aed",
+    "error": "#dc2626",
+    "warning": "#d97706",
+    "success": "#059669",
+    "on_primary": "#ffffff",
+    "on_secondary": "#1e293b",
+    "on_background": "#1e293b",
+    "on_surface": "#1e293b",
+    "on_error": "#ffffff",
+    "text_primary": "#1e293b",
+    "text_secondary": "#475569",
+    "text_disabled": "#94a3b8",
+    "outline": "#cbd5e1",
+    "outline_variant": "#e2e8f0",
+    "primary_dark": "#2563eb",
+    "accent_dark": "#7c3aed",
+    "hover": "rgba(0, 0, 0, 0.05)",
+    "focus": "rgba(59, 130, 246, 0.1)",
+    "selected": "rgba(59, 130, 246, 0.1)",
+    "disabled": "rgba(0, 0, 0, 0.12)"
+  },
+  "orb": {
+    "outer_ring": "#3b82f6",
+    "inner_glow": "#8b5cf6",
+    "pulse_start": "#3b82f6",
+    "pulse_end": "#8b5cf6",
+    "scanning_glow": "#059669"
+  }
+}

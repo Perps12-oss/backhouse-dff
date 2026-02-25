@@ -1,0 +1,17 @@
+00:32:07 [INFO] CEREBRO: [UI] Theme changed: dark
+00:32:08 [INFO] CEREBRO: [UI] Navigated to mission
+00:32:08 [INFO] CEREBRO: [UI] MainWindow initialized
+00:32:13 [INFO] CEREBRO: [UI] Navigated to hub
+00:32:15 [INFO] CEREBRO: [UI] Navigated to audit
+00:32:19 [INFO] CEREBRO: [UI] Navigated to settings
+00:33:06 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:07 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:07 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:08 [INFO] CEREBRO: [UI] Navigated to themes
+00:33:14 [INFO] CEREBRO: [UI] Theme changed: hacker_sunrise
+00:33:19 [INFO] CEREBRO: [UI] Theme changed: hacker_sunrise
+00:33:20 [INFO] CEREBRO: [UI] Navigated to mission
+00:33:24 [INFO] CEREBRO: [UI] Navigated to scan
+00:34:24 [INFO] CEREBRO: [UI] Scan started: 72990b4a-8e07-450f-85ac-7395ad73fcc8
+00:34:26 [INFO] CEREBRO: [UI] Navigated to review
+00:36:42 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.

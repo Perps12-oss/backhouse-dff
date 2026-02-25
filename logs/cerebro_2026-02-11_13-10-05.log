@@ -1,0 +1,8 @@
+13:10:11 [INFO] CEREBRO: [UI] Theme changed: dark
+13:10:11 [INFO] CEREBRO: [UI] Navigated to mission
+13:10:11 [INFO] CEREBRO: [UI] MainWindow initialized
+13:10:15 [INFO] CEREBRO: [UI] Navigated to scan
+13:10:37 [INFO] CEREBRO: [UI] Scan started: a002c8db-5c2f-4274-8fb7-94d232e1813d
+13:10:38 [INFO] CEREBRO: [UI] Navigated to review
+13:10:46 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=57 files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+13:10:46 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=57 total_files=57 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1

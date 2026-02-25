@@ -1,0 +1,38 @@
+# CEREBRO - Duplicate File Manager
+# Requirements File
+# Python 3.8+ required
+
+# Core GUI Framework
+PySide6>=6.5.0
+
+# Image Processing (for visual similarity)
+Pillow>=9.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Hashing (built-in, but listed for reference)
+# hashlib - built-in
+
+# File operations (built-in)
+# pathlib - built-in
+# shutil - built-in
+
+# Database (if using SQLite for history)
+# sqlite3 - built-in
+
+# Optional: Better performance
+# numpy>=1.21.0  # Uncomment if using numpy for advanced features
+
+# Development Dependencies (optional)
+# pytest>=7.0.0          # Testing framework
+# pytest-cov>=3.0.0      # Coverage reporting
+# black>=22.0.0          # Code formatting
+# flake8>=4.0.0          # Linting
+# mypy>=0.950            # Type checking
+# pylint>=2.13.0         # Comprehensive linting
+
+# Packaging (optional)
+# pyinstaller>=5.0.0     # Create executables
+# setuptools>=60.0.0     # Package management
+# wheel>=0.37.0          # Package distribution

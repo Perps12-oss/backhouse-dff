@@ -1,0 +1,18 @@
+16:53:28 [INFO] CEREBRO: [UI] Theme changed: dark
+16:53:28 [INFO] CEREBRO: [UI] Navigated to mission
+16:53:28 [INFO] CEREBRO: [UI] MainWindow initialized
+16:53:31 [INFO] CEREBRO: [UI] Navigated to scan
+16:53:40 [INFO] CEREBRO: [UI] Navigated to scan
+16:54:01 [INFO] CEREBRO: [UI] Scan started: ab3184f7-7adc-4f03-8614-69e87130c9e5
+16:54:02 [INFO] CEREBRO: [UI] Navigated to review
+16:54:45 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=82 files=154 first_keep=C:\Users\S8633\Desktop\skyg\MY FINANCIAL DASHBOARD - Copy - Copy\001581963B7F82814B8342359DFE4334D84B31D5.torrent first_delete_count=3
+16:54:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=82 total_files=154 first_keep=C:\Users\S8633\Desktop\skyg\MY FINANCIAL DASHBOARD - Copy - Copy\001581963B7F82814B8342359DFE4334D84B31D5.torrent first_delete_count=3
+16:54:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=154 total_files=154 stats_files=154
+16:54:45 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:54:45 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=154
+16:54:50 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=154 failed=0
+16:54:56 [INFO] CEREBRO: [UI] Navigated to review
+16:55:01 [INFO] CEREBRO: [UI] Navigated to themes
+16:55:12 [INFO] CEREBRO: [UI] Theme changed: violet_vault
+16:55:54 [INFO] CEREBRO: [UI] Navigated to settings
+16:55:55 [INFO] CEREBRO: [UI] Navigated to audit

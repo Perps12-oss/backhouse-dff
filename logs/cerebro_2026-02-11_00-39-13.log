@@ -1,0 +1,9 @@
+00:39:17 [INFO] CEREBRO: [UI] Theme changed: dark
+00:39:18 [INFO] CEREBRO: [UI] Navigated to mission
+00:39:18 [INFO] CEREBRO: [UI] MainWindow initialized
+00:39:58 [INFO] CEREBRO: [UI] Navigated to scan
+00:40:02 [INFO] CEREBRO: [UI] Navigated to scan
+00:40:49 [INFO] CEREBRO: [UI] Scan started: d8f04299-e12e-4b52-b048-7c694019bfcf
+00:40:50 [INFO] CEREBRO: [UI] Navigated to review
+00:41:46 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.
+10:36:14 [ERROR] CEREBRO: [UI] Cleanup start failed: ReviewPage emitted an ambiguous cleanup payload (missing keep/delete). Please update ReviewPage to emit DeletionPlan groups with keys: keep + delete.

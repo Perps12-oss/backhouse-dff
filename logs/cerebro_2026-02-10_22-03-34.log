@@ -1,0 +1,16 @@
+22:03:40 [INFO] CEREBRO: [UI] Theme changed: dark
+22:03:40 [INFO] CEREBRO: [UI] Navigated to mission
+22:03:40 [INFO] CEREBRO: [UI] MainWindow initialized
+22:03:49 [INFO] CEREBRO: [UI] Navigated to scan
+22:04:18 [INFO] CEREBRO: [UI] Scan started: 16a3f5ec-5298-4d51-a43b-bce3282909c0
+22:04:18 [INFO] CEREBRO: [UI] Navigated to review
+22:05:32 [INFO] CEREBRO: [CLEANUP] Starting cleanup job
+22:05:32 [INFO] CEREBRO: [CLEANUP] Moved to trash: C:\Users\S8633\Desktop\DCIM\2025-04-28-17-58-21-534 - Copy.jpg
+22:05:32 [INFO] CEREBRO: [CLEANUP] Moved to trash: C:\Users\S8633\Desktop\DCIM\100D5300 - Copy\DSC_4950.JPG
+22:05:32 [INFO] CEREBRO: [CLEANUP] Finished - Deleted: 2, Failed: 0
+22:05:32 [ERROR] CEREBRO: [UI] Cleanup finished handler error: object of type 'int' has no len()
+22:08:03 [INFO] CEREBRO: [CLEANUP] Starting cleanup job
+22:08:03 [WARNING] CEREBRO: [CLEANUP] Skipping missing: C:\Users\S8633\Desktop\DCIM\2025-04-28-17-58-21-534 - Copy.jpg
+22:08:03 [WARNING] CEREBRO: [CLEANUP] Skipping missing: C:\Users\S8633\Desktop\DCIM\100D5300 - Copy\DSC_4950.JPG
+22:08:03 [INFO] CEREBRO: [CLEANUP] Finished - Deleted: 2, Failed: 0
+22:08:03 [ERROR] CEREBRO: [UI] Cleanup finished handler error: object of type 'int' has no len()

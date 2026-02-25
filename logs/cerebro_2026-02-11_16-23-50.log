@@ -1,0 +1,24 @@
+16:23:56 [INFO] CEREBRO: [UI] Theme changed: dark
+16:23:58 [INFO] CEREBRO: [UI] Navigated to mission
+16:23:58 [INFO] CEREBRO: [UI] MainWindow initialized
+16:24:00 [INFO] CEREBRO: [UI] Navigated to scan
+16:24:20 [INFO] CEREBRO: [UI] Scan started: fd82da3e-d79b-4170-b72a-1b5f42e37aea
+16:24:21 [INFO] CEREBRO: [UI] Navigated to review
+16:24:44 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=29 files=29 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+16:24:44 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=29 total_files=29 first_keep=C:\Users\S8633\Desktop\skyg\2025-04-28-18-04-19-250 - Copy.jpg first_delete_count=1
+16:24:45 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=29 total_files=29 stats_files=29
+16:24:45 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:24:45 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=29
+16:24:46 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=29 failed=0
+16:25:37 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=28 files=28 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:25:37 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=28 total_files=28 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:25:37 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed executable ops_len=28 total_files=28 stats_files=28
+16:25:37 [INFO] CEREBRO: [DEBUG] CleanupWorker.run start
+16:25:37 [INFO] CEREBRO: [DEBUG] CleanupWorker calling execute_delete_plan ops=28
+16:25:39 [INFO] CEREBRO: [DEBUG] CleanupWorker execute_delete_plan returned deleted=24 failed=4
+16:26:32 [INFO] CEREBRO: [DEBUG] ReviewPage._open_ceremony groups=1 files=1 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:26:32 [INFO] CEREBRO: [DEBUG] MainWindow._on_cleanup_confirmed normalized groups=1 total_files=1 first_keep=C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy - Copy.mp4 first_delete_count=1
+16:26:32 [ERROR] CEREBRO: [UI] Cleanup start failed: Deletion plan validation failed: Group 3: delete missing: C:\Users\S8633\Desktop\skyg\20250428_083948 - Copy.mp4
+16:35:42 [INFO] CEREBRO: [UI] Navigated to themes
+16:35:46 [INFO] CEREBRO: [UI] Navigated to settings
+16:35:48 [INFO] CEREBRO: [UI] Navigated to audit
