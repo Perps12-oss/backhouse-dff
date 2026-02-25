@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from cerebro.services.logger import log_info, log_error, log_debug
-from cerebro.util.ui_utils import restore_main_window_geometry, ensure_window_on_screen
+from cerebro.utils.ui_utils import restore_main_window_geometry, ensure_window_on_screen
 from cerebro.ui.pages.station_navigator import StationNavigator
 from cerebro.ui.state_bus import get_state_bus
 from cerebro.ui.theme_engine import get_theme_manager, current_colors
