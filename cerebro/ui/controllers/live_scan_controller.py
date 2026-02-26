@@ -214,7 +214,10 @@ class LiveScanController(QObject):
         # Legacy signals
         self.phase_changed.emit(phase or "")
         try:
-            self._bus.publish_scan_progress(0.0, phase=phase or "", is_pulsing=True)
+            self._bus.publish_scan_progress(
+                  float(getattr(self._snapshot, "progress_normalized", 0.0) or 0.0),
+                  phase=phase or "", is_pulsing=True
+              )
         except Exception:
             pass
 
@@ -306,6 +309,12 @@ class LiveScanController(QObject):
         self._logger.info("Scan completed")
 
         self._snapshot.complete_scan()
+          # --- FORCE FINAL PROGRESS (prevents UI stuck in discovery) ---
+          try:
+              self._bus.publish_scan_progress(1.0, phase="complete", is_pulsing=False)
+          except Exception:
+              pass
+
         self._pending_snapshot_updates.update({
             "duplicates_found": int(result.get("duplicate_count", 0) or 0),
             "groups_found": int(result.get("group_count", result.get("groups_found", 0)) or 0),

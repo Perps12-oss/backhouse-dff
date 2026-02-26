@@ -591,7 +591,34 @@ class ScanPage(BaseStation):
     # -------------------------------------------------------------------------
 
     @Slot(float)
-    def _on_progress_changed(self, progress: float) -> None:
+    def _on_progress_changed(self, progress) -> None:
+        # Normalize progress payload: float(0..1) OR ScanProgress(percent 0..100)
+        phase = \"\"
+        try:
+            if hasattr(progress, \"phase\") and progress.phase:
+                phase = str(progress.phase)
+            if isinstance(progress, (int, float)):
+                progress_norm = float(progress)
+            else:
+                if hasattr(progress, \"percent\") and progress.percent is not None:
+                    progress_norm = float(progress.percent) / 100.0
+                elif hasattr(progress, \"progress_weighted\") and progress.progress_weighted is not None:
+                    progress_norm = float(progress.progress_weighted)
+                elif hasattr(progress, \"progress_normalized\") and progress.progress_normalized is not None:
+                    progress_norm = float(progress.progress_normalized)
+                else:
+                    progress_norm = 0.0
+        except Exception:
+            progress_norm = 0.0
+
+        if progress_norm < 0.0:
+            progress_norm = 0.0
+        if progress_norm > 1.0:
+            progress_norm = 1.0
+
+        # If completed, force to 100%
+        if phase.lower() == \"complete\" or progress_norm >= 0.999:
+            progress_norm = 1.0
         """Legacy – handled by snapshot now."""
         return
 
