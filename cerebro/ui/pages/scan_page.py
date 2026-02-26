@@ -590,10 +590,36 @@ class ScanPage(BaseStation):
     # Legacy slot stubs (required for backward compatibility)
     # -------------------------------------------------------------------------
 
-    @Slot(float)
-    def _on_progress_changed(self, progress: float) -> None:
-        """Legacy – handled by snapshot now."""
-        return
+    @Slot(object)
+    def _on_progress_changed(self, progress: Any) -> None:
+        # Accept float (0..1) or ScanProgress; normalize to progress_norm (0..1)
+        phase = ""
+        try:
+            if hasattr(progress, "phase") and progress.phase:
+                phase = str(progress.phase)
+            if isinstance(progress, (int, float)):
+                progress_norm = float(progress)
+            else:
+                if hasattr(progress, "percent") and progress.percent is not None:
+                    progress_norm = float(progress.percent) / 100.0
+                elif hasattr(progress, "progress_weighted") and progress.progress_weighted is not None:
+                    progress_norm = float(progress.progress_weighted)
+                elif hasattr(progress, "progress_normalized") and progress.progress_normalized is not None:
+                    progress_norm = float(progress.progress_normalized)
+                else:
+                    progress_norm = 0.0
+        except Exception:
+            progress_norm = 0.0
+
+        progress_norm = max(0.0, min(1.0, progress_norm))
+
+        # If complete, force 100%, stop pulsing, show "Scan complete"
+        if (phase and phase.lower() == "complete") or progress_norm >= 0.999:
+            self._live.set_progress(1.0)
+            self._live.set_phase("completed")  # stops pulsing, sets "Scan complete"
+            return
+
+        self._live.set_progress(progress_norm)
 
     @Slot(str)
     def _on_status_changed(self, status: str) -> None:

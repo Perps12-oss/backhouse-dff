@@ -149,6 +149,39 @@ class FileMetadata:
             metadata=d.get("metadata", {}),
         )
 
+
+    @staticmethod
+    def from_path(path: "str | Path") -> Optional["FileMetadata"]:
+        """Create FileMetadata from a filesystem path.
+
+        Returns None only if the file does not exist or cannot be stat'ed.
+        """
+        try:
+            p = Path(path)
+            if not p.exists() or not p.is_file():
+                return None
+
+            st = p.stat()
+            is_symlink = p.is_symlink()
+            # Windows hidden detection is non-trivial; keep a simple heuristic
+            is_hidden = p.name.startswith(".") or p.name.lower() in {"desktop.ini", "thumbs.db"}
+
+            ext = p.suffix.lower() if p.suffix else None
+
+            return FileMetadata(
+                path=p,
+                size=int(st.st_size),
+                mtime=float(st.st_mtime),
+                is_symlink=bool(is_symlink),
+                is_hidden=bool(is_hidden),
+                extension=ext,
+                hash_partial=None,
+                hash_full=None,
+                tags=[],
+                metadata={}
+            )
+        except Exception:
+            return None
 @dataclass
 class DuplicateGroup:
     group_id: str

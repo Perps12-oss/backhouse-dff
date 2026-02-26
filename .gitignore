@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# logs / runtime
+logs/
+cerebro/logs/
+
+# venv
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Qt / build artifacts
+build/
+dist/
+*.spec

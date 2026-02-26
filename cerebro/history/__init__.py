@@ -1,20 +1,22 @@
-# cerebro/history/__init__.py
-from .models import (
-    ScanHistoryEntry, 
-    ScanStatus, 
-    ScanResultSummary, 
-    ScanWarningsSummary,
-    ScanHealthSnapshot  # <-- ADD THIS
-)
-from .store import HistoryStore
-from .history_page import HistoryPage
+"""
+cerebro.history package
+
+IMPORTANT:
+- Keep this module lightweight.
+- Do NOT import UI pages (HistoryPage) here.
+Reason: core/pipeline may import history.store; importing UI causes circular imports,
+especially under multiprocessing on Windows.
+"""
+
+from __future__ import annotations
+from typing import Any
 
 __all__ = [
-    'ScanHistoryEntry',
-    'ScanStatus', 
-    'ScanResultSummary',
-    'ScanWarningsSummary',
-    'ScanHealthSnapshot',  # <-- ADD THIS
-    'HistoryStore',
-    'HistoryPage'
+    "HistoryStore",
 ]
+
+def __getattr__(name: str) -> Any:
+    if name == "HistoryStore":
+        from .store import HistoryStore  # lazy import
+        return HistoryStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

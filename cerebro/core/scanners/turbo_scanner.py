@@ -477,32 +477,44 @@ class TurboScanner:
             final_groups = quick_hash_groups
         
         # Phase 5: Yield results
-        total_files = 0
+        discovered_count = len(discovered_files)
+        candidate_count = sum(len(v) for v in final_groups.values()) if final_groups else 0
+        emitted_count = 0
+        meta_errors = 0
+
         for group_paths in final_groups.values():
             for path, _ in group_paths:
                 try:
-                    meta = FileMetadata.from_path(path)
-                    if meta:
+                    # Be robust: FileMetadata may expect a string path
+                    meta = FileMetadata.from_path(str(path))
+                    if meta is not None:
                         yield meta
-                        total_files += 1
-                except:
+                        emitted_count += 1
+                except Exception:
+                    meta_errors += 1
                     continue
-        
+
         # Update statistics
         elapsed = time.time() - start_time
         self.stats['elapsed_time'] = elapsed
-        self.stats['files_scanned'] = total_files
-        
+        # 'files_scanned' should reflect what we actually scanned/discovered
+        self.stats['files_scanned'] = discovered_count
+        self.stats['files_discovered'] = discovered_count
+        self.stats['files_in_candidate_groups'] = candidate_count
+        self.stats['files_emitted'] = emitted_count
+        self.stats['metadata_errors'] = meta_errors
+
         print(f"\n[Turbo] Scan complete:")
-        print(f"  - Files: {total_files}")
+        print(f"  - Discovered: {discovered_count}")
+        print(f"  - Candidates: {candidate_count}")
+        print(f"  - Emitted: {emitted_count}")
         print(f"  - Time: {elapsed:.2f}s")
-        print(f"  - Speed: {total_files / elapsed:.0f} files/sec")
+        print(f"  - Speed: {discovered_count / elapsed:.0f} files/sec")
         print(f"  - Cache hits: {self.stats['hash_cache_hits']}")
         print(f"  - Cache misses: {self.stats['hash_cache_misses']}")
         if self.stats['hash_cache_hits'] + self.stats['hash_cache_misses'] > 0:
             hit_rate = self.stats['hash_cache_hits'] / (self.stats['hash_cache_hits'] + self.stats['hash_cache_misses']) * 100
             print(f"  - Hit rate: {hit_rate:.1f}%")
-    
     def _discover_files_parallel(self, roots: List[Path]) -> List[Tuple[Path, int, float]]:
         """
         Discover all files using parallel directory traversal.

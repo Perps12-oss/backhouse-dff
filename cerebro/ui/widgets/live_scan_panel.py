@@ -441,10 +441,15 @@ class LiveScanPanel(QFrame):
             self.reset()
             return
 
-        # Update phase and progress
-        self._phase_label.setText(snapshot.format_phase_display())
-        self._progress_ring.set_progress(snapshot.progress_weighted)
-        self._progress_ring.set_phase(snapshot.phase)
+        # Update phase and progress; never leave "Discovering…" after completion
+        if snapshot.phase == ScanPhase.COMPLETED or snapshot.progress_weighted >= 1.0:
+            self._phase_label.setText("Scan complete")
+            self._progress_ring.set_progress(1.0)
+            self._progress_ring.set_phase(ScanPhase.COMPLETED)
+        else:
+            self._phase_label.setText(snapshot.format_phase_display())
+            self._progress_ring.set_progress(snapshot.progress_weighted)
+            self._progress_ring.set_phase(snapshot.phase)
         # Live activity indicator (animated when active)
         if snapshot.is_active and not getattr(snapshot, "is_cancelling", False):
             if not self._live_blink_timer.isActive():
@@ -522,14 +527,22 @@ class LiveScanPanel(QFrame):
     
     def set_phase(self, phase: str) -> None:
         """Legacy method - updates phase directly."""
-        self._phase_label.setText(phase)
-        # Try to map string phase to enum for the ring
-        try:
-            phase_enum = ScanPhase(phase.upper())
-            self._progress_ring.set_phase(phase_enum)
-        except (ValueError, AttributeError):
-            # If mapping fails, just use a default
-            self._progress_ring.set_phase(ScanPhase.READY)
+        # Map "complete" -> COMPLETED for display and ring
+        phase_upper = (phase or "").strip().upper()
+        if phase_upper in ("COMPLETE", "COMPLETED"):
+            self._phase_label.setText("Scan complete")
+            self._progress_ring.set_phase(ScanPhase.COMPLETED)
+        else:
+            self._phase_label.setText(phase or "Ready")
+            try:
+                phase_enum = ScanPhase(phase_upper) if phase_upper else ScanPhase.READY
+                self._progress_ring.set_phase(phase_enum)
+            except (ValueError, AttributeError):
+                self._progress_ring.set_phase(ScanPhase.READY)
+
+    def set_phase_display(self, text: str) -> None:
+        """Set phase label text only (e.g. 'Scan complete')."""
+        self._phase_label.setText(text or "Ready")
 
     def set_current_path(self, path: str) -> None:
         """Legacy method - updates current file path directly."""

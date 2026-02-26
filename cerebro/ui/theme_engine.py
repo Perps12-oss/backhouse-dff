@@ -1150,3 +1150,12 @@ __all__ = [
     'get_theme_manager', 'reset_theme_manager', 'current_colors', 'apply_theme',
     '_interpolate_color', '_adjust_brightness', '_hex_to_rgb', '_rgb_to_hex'
 ]
+
+class ThemeMixin:
+    """Backward-compatible theme helper used by older pages.
+
+    New UI should prefer ThemeEngine directly, but this keeps legacy imports stable.
+    """
+
+    def theme_colors(self) -> Dict:
+        return GEMINI_PALETTE.get("dark" if getattr(self, "_theme_mode", "light") == "dark" else "light", GEMINI_PALETTE["light"])

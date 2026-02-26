@@ -79,6 +79,8 @@ class LiveScanController(QObject):
         self._last_file_emit = 0.0
         self._last_progress_emit = 0.0
         self._last_snapshot_emit = 0.0
+        # Track last published progress so _on_phase_changed never resets it
+        self._last_published_progress = 0.0
 
         # Buffered updates for snapshot
         self._pending_snapshot_updates: Dict[str, Any] = {}
@@ -213,8 +215,14 @@ class LiveScanController(QObject):
 
         # Legacy signals
         self.phase_changed.emit(phase or "")
+        # Publish progress without ever resetting: use max of snapshot and last published
         try:
-            self._bus.publish_scan_progress(0.0, phase=phase or "", is_pulsing=True)
+            current = float(getattr(self._snapshot, "progress_normalized", 0.0) or 0.0)
+            progress = max(current, self._last_published_progress)
+            self._last_published_progress = progress
+            self._bus.publish_scan_progress(
+                progress, phase=phase or "", is_pulsing=True
+            )
         except Exception:
             pass
 
@@ -267,6 +275,10 @@ class LiveScanController(QObject):
                 "elapsed_seconds": float(progress.elapsed_seconds or 0.0),
             })
 
+        if progress and getattr(progress, "percent", None) is not None:
+            self._last_published_progress = max(
+                self._last_published_progress, float(progress.percent) / 100.0
+            )
         self.progress_changed.emit(progress)
 
     # -------------------------
@@ -306,10 +318,17 @@ class LiveScanController(QObject):
         self._logger.info("Scan completed")
 
         self._snapshot.complete_scan()
-        self._pending_snapshot_updates.update({
+        self._last_published_progress = 1.0
+        try:
+            self._bus.publish_scan_progress(1.0, phase="complete", is_pulsing=False)
+        except Exception:
+            pass
+
+        # Apply only completion payload so stale progress_percent doesn't overwrite 100%
+        self._pending_snapshot_updates = {
             "duplicates_found": int(result.get("duplicate_count", 0) or 0),
             "groups_found": int(result.get("group_count", result.get("groups_found", 0)) or 0),
-        })
+        }
         self._emit_snapshot_update()
         self._finish_running()
 
