@@ -25,6 +25,7 @@ from typing import Any, Optional
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -199,9 +200,19 @@ class ScanPage(BaseStation):
             options_enabled=True,
         )
 
+        # Simple/Advanced mode (persisted via config)
+        self._scan_ui_mode = "simple"
+        try:
+            from cerebro.services.config import load_config
+            config = load_config()
+            self._scan_ui_mode = getattr(config.ui, "scan_ui_mode", "simple") or "simple"
+        except Exception:
+            pass
+
         # Build UI and wire signals
         self._build_ui()
         self._wire_signals()
+        self._set_scan_ui_mode(self._scan_ui_mode)
 
     # -------------------------------------------------------------------------
     # Initialization
@@ -231,12 +242,52 @@ class ScanPage(BaseStation):
         self._build_sticky_action_bar()
 
     def _build_header(self) -> None:
-        """Create and attach the page header."""
-        header = PageHeader(
+        """Create and attach the page header with Simple/Advanced mode switch."""
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(12)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode:"))
+        self._mode_simple_btn = QPushButton("Simple")
+        self._mode_simple_btn.setCheckable(True)
+        self._mode_simple_btn.setChecked(True)
+        self._mode_simple_btn.clicked.connect(lambda: self._set_scan_ui_mode("simple"))
+        self._mode_advanced_btn = QPushButton("Advanced")
+        self._mode_advanced_btn.setCheckable(True)
+        self._mode_advanced_btn.clicked.connect(lambda: self._set_scan_ui_mode("advanced"))
+        self._mode_btn_group = QButtonGroup()
+        self._mode_btn_group.addButton(self._mode_simple_btn)
+        self._mode_btn_group.addButton(self._mode_advanced_btn)
+        mode_row.addWidget(self._mode_simple_btn)
+        mode_row.addWidget(self._mode_advanced_btn)
+        mode_row.addStretch()
+        header_layout.addLayout(mode_row)
+
+        header_layout.addWidget(PageHeader(
             "Scan",
-            "Choose a folder and run. Presets and advanced options are in Settings → Scanning."
-        )
-        self._scaffold.set_header(header)
+            "Choose a folder and run. Simple mode uses recommended defaults."
+        ))
+        self._scaffold.set_header(header_widget)
+
+    def _set_scan_ui_mode(self, mode: str) -> None:
+        """Switch between Simple and Advanced. Persists via config."""
+        self._scan_ui_mode = mode
+        self._mode_simple_btn.setChecked(mode == "simple")
+        self._mode_advanced_btn.setChecked(mode == "advanced")
+        is_advanced = mode == "advanced"
+        if hasattr(self, "_advanced_container"):
+            self._advanced_container.setVisible(is_advanced)
+        if hasattr(self, "_advanced_hint"):
+            self._advanced_hint.setVisible(not is_advanced)
+        try:
+            from cerebro.services.config import load_config, save_config
+            config = load_config()
+            config.ui.scan_ui_mode = mode
+            save_config(config)
+        except Exception:
+            pass
 
     def _build_content(self) -> None:
         """Create content: scrollable top (folder, filters, button, stats) + fixed-min-height live panel."""
@@ -258,6 +309,9 @@ class ScanPage(BaseStation):
         self._build_folder_picker(top_layout)
         self._build_scan_filters(top_layout)
         self._build_prominent_scan_button(top_layout)
+        self._advanced_hint = QLabel("Advanced settings are in Advanced mode or Settings → Scanning.")
+        self._advanced_hint.setStyleSheet(f"font-size: 12px; color: {theme_token('muted')};")
+        top_layout.addWidget(self._advanced_hint)
         self._build_stat_row(top_layout)
 
         scroll = QScrollArea()
@@ -284,7 +338,12 @@ class ScanPage(BaseStation):
         parent_layout.addWidget(self._folder_picker)
 
     def _build_scan_filters(self, parent_layout: QVBoxLayout) -> None:
-        """Add media type, engine, and scanner tier selectors."""
+        """Add media type, engine, and scanner tier selectors. Wrapped for Simple/Advanced visibility."""
+        self._advanced_container = QWidget()
+        adv_layout = QVBoxLayout(self._advanced_container)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(LayoutMetrics.PAGE_SPACING)
+
         filter_row = QHBoxLayout()
         filter_row.setSpacing(LayoutMetrics.PAGE_SPACING)
 
@@ -306,12 +365,11 @@ class ScanPage(BaseStation):
         self._engine_combo.setToolTip("Simple: fast, balanced. Advanced: more workers, thorough.")
         filter_row.addWidget(self._engine_combo, 1)
 
-        parent_layout.addLayout(filter_row)
-        
-        # Scanner tier selector (new row)
+        adv_layout.addLayout(filter_row)
+
         scanner_row = QHBoxLayout()
         scanner_row.setSpacing(LayoutMetrics.PAGE_SPACING)
-        
+
         scanner_row.addWidget(QLabel("Scanner:"))
         self._scanner_tier_combo = QComboBox()
         self._scanner_tier_combo.setMinimumWidth(LayoutMetrics.COMBO_LONG_MIN_WIDTH)
@@ -321,15 +379,17 @@ class ScanPage(BaseStation):
             "Ultra (60x faster - Extreme)",
             "Quantum (180x+ faster - GPU/Experimental)"
         ])
-        self._scanner_tier_combo.setCurrentIndex(0)  # Default to Turbo
+        self._scanner_tier_combo.setCurrentIndex(0)
         self._scanner_tier_combo.setToolTip(
             "Turbo: Production-ready, 12x faster (no extra deps)\n"
             "Ultra: Extreme performance, 60x faster (requires: pip install xxhash mmh3 numpy)\n"
             "Quantum: Bleeding edge, 180x+ faster (requires GPU + pip install cupy-cuda12x torch)"
         )
         scanner_row.addWidget(self._scanner_tier_combo, 1)
-        
-        parent_layout.addLayout(scanner_row)
+
+        adv_layout.addLayout(scanner_row)
+
+        parent_layout.addWidget(self._advanced_container)
 
     def _build_prominent_scan_button(self, parent_layout: QVBoxLayout) -> None:
         """Add a large, prominent Start Scan CTA. Configure presets in Settings > Scanning."""
@@ -562,21 +622,22 @@ class ScanPage(BaseStation):
             return
 
         options = self._bus.get_scan_options() or {}
-        media_type = ("all", "photos", "videos", "audio")[self._media_type_combo.currentIndex()]
-        engine = ("simple", "advanced")[self._engine_combo.currentIndex()]
-        
-        # Get scanner tier selection
-        scanner_tier_idx = self._scanner_tier_combo.currentIndex()
-        scanner_tier = ("turbo", "ultra", "quantum")[scanner_tier_idx]
-        
+        if getattr(self, "_scan_ui_mode", "simple") == "simple":
+            media_type = "all"
+            engine = "simple"
+            scanner_tier = "turbo"
+        else:
+            media_type = ("all", "photos", "videos", "audio")[self._media_type_combo.currentIndex()]
+            engine = ("simple", "advanced")[self._engine_combo.currentIndex()]
+            scanner_tier_idx = self._scanner_tier_combo.currentIndex()
+            scanner_tier = ("turbo", "ultra", "quantum")[scanner_tier_idx]
+
         config = create_scan_config(
-            root_path, 
-            options, 
-            media_type=media_type, 
+            root_path,
+            options,
+            media_type=media_type,
             engine=engine
         )
-        
-        # Add scanner tier to config
         config["scanner_tier"] = scanner_tier
 
         # Immediate UI feedback

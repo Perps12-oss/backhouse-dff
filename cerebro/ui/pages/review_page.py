@@ -37,8 +37,10 @@ from PySide6.QtWidgets import (
 from cerebro.ui.components.modern import ContentCard, PageScaffold, StickyActionBar
 from cerebro.ui.components.modern._tokens import token as theme_token
 from cerebro.ui.pages.base_station import BaseStation
+from cerebro.ui.pages.delete_confirm_dialog import DeletionPolicyChooserDialog, DeletionPolicyChoice
 from cerebro.ui.state_bus import get_state_bus
 from cerebro.ui.theme_engine import get_theme_manager, current_colors
+from cerebro.services.logger import log_info, log_debug
 
 
 # ==============================================================================
@@ -910,6 +912,15 @@ class ReviewPage(BaseStation):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 1)
 
+        # Prominent large delete button (created early for status bar)
+        self._large_delete_btn = QPushButton("Delete (0)")
+        self._large_delete_btn.setObjectName("LargeDeleteButton")
+        self._large_delete_btn.setMinimumHeight(48)
+        self._large_delete_btn.setCursor(Qt.PointingHandCursor)
+        self._large_delete_btn.setToolTip("Delete selected files. Routes through confirmation.")
+        self._large_delete_btn.clicked.connect(self._open_ceremony)
+        self._large_delete_btn.setEnabled(False)
+
         content_wrapper = QWidget()
         wrap_layout = QVBoxLayout(content_wrapper)
         wrap_layout.setContentsMargins(0, 0, 0, 0)
@@ -1235,10 +1246,10 @@ class ReviewPage(BaseStation):
     def _build_status_bar(self):
         bar = QFrame()
         bar.setObjectName("StatusBar")
-        bar.setFixedHeight(36)
+        bar.setFixedHeight(52)
 
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(20, 6, 20, 6)
+        layout.setContentsMargins(20, 8, 20, 8)
 
         self.status_text = QLabel("Ready")
         layout.addWidget(self.status_text)
@@ -1248,6 +1259,10 @@ class ReviewPage(BaseStation):
         self.selection_stats = QLabel("0 files selected for deletion (0 B)")
         self.selection_stats.setStyleSheet("font-weight: bold; color: #ef4444;")
         layout.addWidget(self.selection_stats)
+
+        # Prominent large delete button (unified orchestration)
+        if hasattr(self, "_large_delete_btn") and self._large_delete_btn:
+            layout.addWidget(self._large_delete_btn)
 
         self.export_list_btn = QPushButton("Export List")
         self.export_list_btn.setToolTip("Export current duplicate list to CSV or JSON.")
@@ -1623,6 +1638,9 @@ class ReviewPage(BaseStation):
             self.floating_delete.setEnabled(delete_count > 0)
             self.floating_delete.update()
             self.floating_delete.repaint()
+        if hasattr(self, "_large_delete_btn") and self._large_delete_btn is not None:
+            self._large_delete_btn.setText(f"Delete ({delete_count})")
+            self._large_delete_btn.setEnabled(delete_count > 0)
         safe_count = total_files - delete_count
         if hasattr(self, "smart_select_fab"):
             self.smart_select_fab.setText(f"Smart Select\n{safe_count} safe")
@@ -1645,6 +1663,9 @@ class ReviewPage(BaseStation):
                 self.floating_delete.setEnabled(cnt > 0)
                 self.floating_delete.update()
                 self.floating_delete.repaint()
+            if hasattr(self, "_large_delete_btn") and self._large_delete_btn is not None:
+                self._large_delete_btn.setText(f"Delete ({cnt})")
+                self._large_delete_btn.setEnabled(cnt > 0)
             return
         QTimer.singleShot(0, self._chunked_size_next)
 
@@ -1874,6 +1895,8 @@ class ReviewPage(BaseStation):
         self._open_ceremony()
 
     def _open_ceremony(self):
+        """Unified deletion orchestration entrypoint. All delete triggers route here."""
+        log_debug("[Delete] _open_ceremony triggered")
         delete_groups = []
         total_delete_size = 0
 
@@ -1902,6 +1925,7 @@ class ReviewPage(BaseStation):
             })
 
         if not delete_groups:
+            log_debug("[Delete] No delete candidates")
             QMessageBox.information(
                 self,
                 "No Delete Candidates",
@@ -1911,18 +1935,25 @@ class ReviewPage(BaseStation):
             return
 
         total_files = sum(len(g["delete"]) for g in delete_groups)
+        log_info(f"[Delete] {total_files} files selected, {format_bytes(total_delete_size)}")
 
-        reply = QMessageBox.question(
-            self,
-            "Confirm Deletion",
-            f"Move {total_files} files to Trash?\n"
-            f"This will free {format_bytes(total_delete_size)} of space.\n\n"
-            f"You can restore from Trash if needed.",
-            QMessageBox.Yes | QMessageBox.No,
+        dlg = DeletionPolicyChooserDialog(
+            file_count=total_files,
+            size_bytes=total_delete_size,
+            excluded_count=0,
+            parent=self,
         )
-
-        if reply != QMessageBox.Yes:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            log_debug("[Delete] User cancelled")
             return
+
+        choice = dlg.result_choice()
+        if not choice.confirmed:
+            log_debug("[Delete] Dialog rejected")
+            return
+
+        mode = choice.mode or "trash"
+        log_info(f"[Delete] User confirmed mode={mode}")
 
         self._progress_dialog = CleanupProgressDialog(total_files, self)
         self._progress_dialog.cancelled.connect(self._on_cleanup_cancelled)
@@ -1934,16 +1965,52 @@ class ReviewPage(BaseStation):
             "recoverable_bytes": total_delete_size,
         }
 
+        scan_id = str(self._result.get("scan_id", "") or "unknown")
         cleanup_data = {
+            "scan_id": scan_id,
             "groups": delete_groups,
             "stats": stats,
-            "policy": {"mode": "trash"},
+            "policy": {"mode": mode},
             "source": "review_page",
         }
         self.cleanup_confirmed.emit(cleanup_data)
 
     def _on_cleanup_cancelled(self):
         self._bus.notify("Cleanup Cancelled", "File deletion was cancelled", 2000)
+
+    def refresh_after_deletion(self, deleted_paths: list) -> None:
+        """Remove deleted paths from UI models and refresh. Called by MainWindow after cleanup."""
+        if not deleted_paths:
+            return
+        deleted_set = {os.path.normpath(os.path.normcase(str(p))) for p in deleted_paths}
+        log_info(f"[Delete] refresh_after_deletion: {len(deleted_set)} paths removed from UI")
+
+        new_all_groups: List[GroupData] = []
+        for g in self._all_groups:
+            remaining = [p for p in g.paths if _norm_path(p) not in deleted_set]
+            if len(remaining) >= 2:
+                try:
+                    rec = sum(os.path.getsize(p) for p in remaining if os.path.exists(p))
+                except Exception:
+                    rec = 0
+                new_all_groups.append(GroupData(
+                    paths=remaining,
+                    hint=g.hint,
+                    recoverable_bytes=rec,
+                    similarity=g.similarity,
+                    group_id=len(new_all_groups),
+                ))
+        self._all_groups = new_all_groups
+        self._keep_states.clear()
+        for g in self._all_groups:
+            self._keep_states[g.group_id] = {_norm_path(p): True for p in g.paths}
+
+        self._apply_filter()
+        self._current_group_idx = 0 if self._filtered_groups else -1
+        self._populate_group_list()
+        self._update_display()
+        self._update_stats()
+        self._refresh_delete_button()
 
     def apply_theme(self):
         from cerebro.ui.theme_engine import current_colors
@@ -2041,6 +2108,28 @@ class ReviewPage(BaseStation):
             }}
         """)
 
+        if hasattr(self, '_large_delete_btn') and self._large_delete_btn:
+            self._large_delete_btn.setStyleSheet(f"""
+                QPushButton#LargeDeleteButton {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #ef4444, stop:1 #dc2626);
+                    color: white;
+                    border: 2px solid {accent};
+                    border-radius: 12px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                    font-size: 15px;
+                }}
+                QPushButton#LargeDeleteButton:hover {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #f87171, stop:1 #ef4444);
+                }}
+                QPushButton#LargeDeleteButton:disabled {{
+                    background: #4b5563;
+                    border-color: #6b7280;
+                    color: #9ca3af;
+                }}
+            """)
         if hasattr(self, '_step_labels'):
             acc = c.get('accent', '#00C4B4')
             muted = c.get('muted', '#888')

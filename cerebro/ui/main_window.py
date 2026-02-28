@@ -733,6 +733,7 @@ class MainWindow(QMainWindow):
             if payload is None or not isinstance(payload, dict):
                 payload = getattr(payload, "__dict__", None) or {}
             if not payload or not (payload.get("groups")):
+                log_debug("[Delete] MainWindow: payload empty or no groups")
                 self._toast.show_toast("Nothing to delete", "No files marked for deletion.", duration_ms=2200)
                 return
             # Normalize and validate payload shape (no guessing)
