@@ -355,10 +355,11 @@ class AppConfig:
             # Include all built-in themes defined in theme_engine.py
             valid_themes = {
                 "dark", "light", "custom", "system",
-                # Built-in themes from _get_builtin_themes()
+                "gemini", "gemini_light",
                 "cyberpunk", "neon_nights", "forest_canopy", "ocean_depths",
                 "sunset_desert", "arctic_frost", "violet_vault", "ember_glow",
-                "lavender_dream", "mint_fresh", "coral_reef", "ice_cream"
+                "lavender_dream", "mint_fresh", "coral_reef", "ice_cream",
+                "deep_ocean", "midnight_purple", "rose_gold", "slate_blue",
             }
             try:
                 themes_dir = Path(__file__).resolve().parents[1] / "ui" / "themes"
