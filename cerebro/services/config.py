@@ -4,7 +4,7 @@ import json
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from enum import Enum
 import sys
 import os
@@ -100,15 +100,18 @@ class UISettings:
     show_hidden_files: bool = False
     thumbnail_size: int = 64
     max_recent_scans: int = 10
-    
+    scan_ui_mode: str = "simple"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
-        
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'UISettings':
-        """Create from dictionary."""
-        return cls(**data)
+        """Create from dictionary, ignoring unknown keys."""
+        valid_keys = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
 
 
 @dataclass
@@ -883,3 +886,11 @@ def reload_config() -> AppConfig:
         
     _config_instance = _config_manager.load_config()
     return _config_instance
+
+
+def get_cache_dir() -> Path:
+    """Return the configured cache directory, creating it if needed."""
+    cfg = load_config()
+    p = Path(cfg.cache_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
