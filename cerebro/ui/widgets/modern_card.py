@@ -21,6 +21,6 @@ class ModernCard(QFrame):
             }
             QFrame#ModernCard:hover {
                 background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.15);
+                border: 1px solid rgba(0, 196, 180, 0.4);
             }
         """)

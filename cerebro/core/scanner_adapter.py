@@ -91,6 +91,7 @@ class OptimizedScannerAdapter:
         self.is_scanning = False
         self.is_stopping = False
         self.start_time = 0.0
+        self.last_groups = []  # Filled after scan() for Review page
     
     def _convert_config(self, legacy_config: Any) -> TurboScanConfig:
         """Convert legacy ScanConfig to TurboScanConfig."""
@@ -183,6 +184,8 @@ class OptimizedScannerAdapter:
             
             # Final progress update
             self._update_progress(file_count)
+            # Expose groups for worker/Review (TurboScanner sets last_groups)
+            self.last_groups = getattr(self.scanner, "last_groups", [])
             
         except Exception as e:
             for cb in self.error_callbacks:

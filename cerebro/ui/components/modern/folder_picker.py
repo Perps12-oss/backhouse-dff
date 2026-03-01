@@ -66,6 +66,10 @@ class ModernFolderPicker(QFrame):
             QLabel#FolderPickerHint {{ color: {muted}; font-size: 12px; }}
         """)
 
+    def refresh_theme(self) -> None:
+        self._apply_theme()
+        self.update()
+
     def _on_browse(self) -> None:
         from PySide6.QtWidgets import QFileDialog
         path = QFileDialog.getExistingDirectory(self, "Select folder to scan")

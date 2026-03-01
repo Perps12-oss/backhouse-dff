@@ -54,12 +54,12 @@ def clamp_window_to_screen(window: QMainWindow, cap_max_size: bool = False) -> N
 
 def ensure_window_on_screen(window: QMainWindow) -> None:
     """
-    Single helper: clamp window to current screen and cap its maximum size to
-    the available geometry so it cannot grow off-screen. Use after restore,
-    on first show, and after navigation (e.g. scan → review) to prevent the
-    window from resizing past the visible area.
+    Clamp window position and size so it fits within the current screen's
+    available geometry (title bar and controls stay visible). Does not set
+    maximum size so the window remains fully resizable and maximize works
+    normally. Use after restore, on first show, and after navigation.
     """
-    clamp_window_to_screen(window, cap_max_size=True)
+    clamp_window_to_screen(window, cap_max_size=False)
 
 
 def restore_main_window_geometry(

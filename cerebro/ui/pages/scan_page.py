@@ -18,17 +18,24 @@ REFACTORING ENHANCEMENTS (2026-02-12):
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -69,11 +76,13 @@ class NotifyDuration:
 
 
 class LayoutMetrics:
-    """UI layout constants (pixels)."""
-    PAGE_MARGIN = 18
+    """UI layout constants (pixels). Compact for small window; content expands when maximized."""
+    PAGE_MARGIN = 12
     PAGE_SPACING = 12
-    MIN_LIVE_WIDTH = 420
-    COMBO_MIN_WIDTH = 120
+    MIN_LIVE_WIDTH = 320
+    MIN_LIVE_PANEL_HEIGHT = 200
+    COMBO_MIN_WIDTH = 140
+    COMBO_LONG_MIN_WIDTH = 220
     BUTTON_MIN_HEIGHT = 32
 
 
@@ -131,6 +140,36 @@ def validate_folder_path(path: str) -> bool:
         return False
 
 
+def format_duration_short(seconds: float) -> str:
+    """Format seconds as '2m 14s' or '45s'."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    if s:
+        return f"{m}m {s}s"
+    return f"{m}m"
+
+
+def space_freeable_from_result(result: dict) -> int:
+    """Sum recoverable_bytes from result groups (bytes)."""
+    total = 0
+    for g in (result or {}).get("groups") or []:
+        total += int(g.get("recoverable_bytes", g.get("recoverable", 0)) or 0)
+    return total
+
+
+def format_bytes_short(num_bytes: int) -> str:
+    """Format as XX.X GB or MB."""
+    if num_bytes >= 1024 ** 3:
+        return f"{num_bytes / (1024 ** 3):.1f} GB"
+    if num_bytes >= 1024 ** 2:
+        return f"{num_bytes / (1024 ** 2):.1f} MB"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    return f"{num_bytes} B"
+
+
 def create_scan_config(
     root_path: str,
     options_dict: dict[str, Any],
@@ -164,13 +203,12 @@ def create_scan_config(
 class ScanPage(BaseStation):
     """
     Minimalistic scan page; snapshot-driven; modern scaffold + theme tokens only.
-
-    Signals (inherited from BaseStation):
-        - station_id, station_title: used by navigation system.
+    Shows Gemini 2 "Scan Complete" state when scan finishes (hero + 4 cards + Review CTA).
     """
 
     station_id = "scan"
     station_title = "Scan"
+    navigate_requested = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -186,6 +224,9 @@ class ScanPage(BaseStation):
         self._current_snapshot: Optional[LiveScanSnapshot] = None
         self._scan_in_progress = False
         self._current_scan_id: Optional[str] = None
+        self._scan_start_time: Optional[float] = None
+        self._last_scan_result: Optional[dict] = None
+        self._last_scan_duration_sec: float = 0.0
 
         # UI state (immutable)
         self._current_state = ScanUIState(
@@ -196,9 +237,19 @@ class ScanPage(BaseStation):
             options_enabled=True,
         )
 
+        # Simple/Advanced mode (persisted via config)
+        self._scan_ui_mode = "simple"
+        try:
+            from cerebro.services.config import load_config
+            config = load_config()
+            self._scan_ui_mode = getattr(config.ui, "scan_ui_mode", "simple") or "simple"
+        except Exception:
+            pass
+
         # Build UI and wire signals
         self._build_ui()
         self._wire_signals()
+        self._set_scan_ui_mode(self._scan_ui_mode)
 
     # -------------------------------------------------------------------------
     # Initialization
@@ -228,15 +279,57 @@ class ScanPage(BaseStation):
         self._build_sticky_action_bar()
 
     def _build_header(self) -> None:
-        """Create and attach the page header."""
-        header = PageHeader(
+        """Create and attach the page header with Simple/Advanced mode switch."""
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(12)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode:"))
+        self._mode_simple_btn = QPushButton("Simple")
+        self._mode_simple_btn.setCheckable(True)
+        self._mode_simple_btn.setChecked(True)
+        self._mode_simple_btn.clicked.connect(lambda: self._set_scan_ui_mode("simple"))
+        self._mode_advanced_btn = QPushButton("Advanced")
+        self._mode_advanced_btn.setCheckable(True)
+        self._mode_advanced_btn.clicked.connect(lambda: self._set_scan_ui_mode("advanced"))
+        self._mode_btn_group = QButtonGroup()
+        self._mode_btn_group.addButton(self._mode_simple_btn)
+        self._mode_btn_group.addButton(self._mode_advanced_btn)
+        mode_row.addWidget(self._mode_simple_btn)
+        mode_row.addWidget(self._mode_advanced_btn)
+        mode_row.addStretch()
+        header_layout.addLayout(mode_row)
+
+        header_layout.addWidget(PageHeader(
             "Scan",
-            "Choose a folder and run. Presets and advanced options are in Settings → Scanning."
-        )
-        self._scaffold.set_header(header)
+            "Choose a folder and run. Simple mode uses recommended defaults."
+        ))
+        self._scaffold.set_header(header_widget)
+
+    def _set_scan_ui_mode(self, mode: str) -> None:
+        """Switch between Simple and Advanced. Persists via config."""
+        self._scan_ui_mode = mode
+        self._mode_simple_btn.setChecked(mode == "simple")
+        self._mode_advanced_btn.setChecked(mode == "advanced")
+        is_advanced = mode == "advanced"
+        if hasattr(self, "_advanced_container"):
+            self._advanced_container.setVisible(is_advanced)
+        if hasattr(self, "_advanced_hint"):
+            self._advanced_hint.setVisible(False)
+        if hasattr(self, "_live") and self._live is not None:
+            self._live.set_show_advanced_details(is_advanced)
+        try:
+            from cerebro.services.config import load_config, save_config
+            config = load_config()
+            config.ui.scan_ui_mode = mode
+            save_config(config)
+        except Exception:
+            pass
 
     def _build_content(self) -> None:
-        """Create the scrollable content area and its child widgets."""
+        """Create content: scrollable top (folder, filters, button, stats) + fixed-min-height live panel."""
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(
@@ -247,13 +340,210 @@ class ScanPage(BaseStation):
         )
         content_layout.setSpacing(LayoutMetrics.PAGE_SPACING)
 
-        self._build_folder_picker(content_layout)
-        self._build_scan_filters(content_layout)
-        self._build_prominent_scan_button(content_layout)
-        self._build_stat_row(content_layout)
-        self._build_main_panels(content_layout)
+        # Top section (scrollable) so it can shrink without squashing the live panel
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(LayoutMetrics.PAGE_SPACING)
+        self._build_folder_picker(top_layout)
+        self._build_scan_filters(top_layout)
+        self._build_prominent_scan_button(top_layout)
+        self._advanced_hint = QLabel("Advanced settings are in Settings → Scanning.")
+        self._advanced_hint.setStyleSheet(f"font-size: 12px; color: {theme_token('muted')};")
+        self._advanced_hint.setVisible(False)
+        top_layout.addWidget(self._advanced_hint)
+        self._build_stat_row(top_layout)
 
-        self._scaffold.set_content(content)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(top)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(80)
+        content_layout.addWidget(scroll, 1)
+
+        # Bottom: live scan panel (hidden when complete state is shown)
+        self._live = LiveScanPanel()
+        self._live.setMinimumWidth(LayoutMetrics.MIN_LIVE_WIDTH)
+        self._live.setMinimumHeight(LayoutMetrics.MIN_LIVE_PANEL_HEIGHT)
+        live_card = ContentCard()
+        live_card.set_content(self._live)
+        content_layout.addWidget(live_card, 0)
+        self._live.set_show_advanced_details(self._scan_ui_mode == "advanced")
+
+        self._idle_content = content
+
+        # Stack: 0 = idle/scanning, 1 = Scan Complete (Gemini 2 minimal)
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(self._idle_content)
+        self._complete_content = self._build_complete_view()
+        self._content_stack.addWidget(self._complete_content)
+        self._content_stack.setCurrentIndex(0)
+
+        self._scaffold.set_content(self._content_stack)
+
+    def _build_complete_view(self) -> QWidget:
+        """Gemini 2 Scan Complete: slim banner, 4 compact cards in one row, huge CTA, tiny links."""
+        accent = theme_token("accent")
+        muted = theme_token("muted")
+        panel = theme_token("panel")
+        text = theme_token("text")
+        line = theme_token("line")
+
+        wrap = QWidget()
+        layout = QVBoxLayout(wrap)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(10)
+
+        # Slim horizontal success banner: "Scan Complete ✓   •   Xm Ys"
+        banner = QFrame()
+        banner.setObjectName("ScanCompleteBanner")
+        banner.setFixedHeight(36)
+        banner_layout = QVBoxLayout(banner)
+        banner_layout.setContentsMargins(12, 4, 12, 4)
+        banner_layout.setSpacing(4)
+        row1 = QHBoxLayout()
+        self._complete_title = QLabel("Scan Complete ✓   •   —")
+        self._complete_title.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {text};")
+        row1.addWidget(self._complete_title)
+        row1.addStretch()
+        banner_layout.addLayout(row1)
+        self._complete_progress = QProgressBar()
+        self._complete_progress.setMaximum(100)
+        self._complete_progress.setValue(100)
+        self._complete_progress.setTextVisible(False)
+        self._complete_progress.setFixedHeight(3)
+        self._complete_progress.setStyleSheet(f"""
+            QProgressBar {{ background: {panel}; border-radius: 2px; }}
+            QProgressBar::chunk {{ background: #22c55e; border-radius: 2px; }}
+        """)
+        banner_layout.addWidget(self._complete_progress)
+        banner.setStyleSheet(f"""
+            QFrame#ScanCompleteBanner {{
+                background: rgba(34, 197, 94, 0.12);
+                border: 1px solid rgba(34, 197, 94, 0.35);
+                border-radius: 12px;
+            }}
+        """)
+        layout.addWidget(banner)
+
+        # 4 stat cards in one row — enough height so numbers (e.g. "2.6 GB", "0s") are never clipped
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(8)
+        _card_style = " QLabel#statCardValue { font-size: 18px; font-weight: bold; padding: 2px 0; min-height: 22px; } "
+        self._complete_card_groups = StatCard("Groups", "0", icon=None)
+        self._complete_card_groups.setMinimumHeight(72)
+        self._complete_card_groups.setStyleSheet(self._complete_card_groups.styleSheet() + _card_style)
+        cards_row.addWidget(self._complete_card_groups)
+        self._complete_card_duplicates = StatCard("Duplicates", "0", icon=None)
+        self._complete_card_duplicates.setMinimumHeight(72)
+        self._complete_card_duplicates.setStyleSheet(self._complete_card_duplicates.styleSheet() + _card_style)
+        cards_row.addWidget(self._complete_card_duplicates)
+        self._complete_card_space = StatCard("Space saved", "0 B", icon=None)
+        self._complete_card_space.setMinimumHeight(72)
+        self._complete_card_space.setStyleSheet(self._complete_card_space.styleSheet() + _card_style)
+        cards_row.addWidget(self._complete_card_space)
+        self._complete_card_time = StatCard("Time taken", "—", icon=None)
+        self._complete_card_time.setMinimumHeight(72)
+        self._complete_card_time.setStyleSheet(self._complete_card_time.styleSheet() + _card_style)
+        cards_row.addWidget(self._complete_card_time)
+        layout.addLayout(cards_row)
+
+        # One huge centered teal CTA
+        self._review_duplicates_btn = QPushButton("Review Duplicates")
+        self._review_duplicates_btn.setObjectName("ReviewDuplicatesCTA")
+        self._review_duplicates_btn.setMinimumHeight(40)
+        self._review_duplicates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._review_duplicates_btn.setStyleSheet(f"""
+            QPushButton#ReviewDuplicatesCTA {{
+                background: {accent};
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-size: 17px;
+                font-weight: bold;
+                padding: 12px 28px;
+            }}
+            QPushButton#ReviewDuplicatesCTA:hover {{ opacity: 0.95; }}
+        """)
+        self._review_duplicates_btn.clicked.connect(self._on_review_duplicates_clicked)
+        layout.addWidget(self._review_duplicates_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # Bottom action buttons: slightly bigger, clear affordance (not flat text)
+        _btn_style = (
+            f"font-size: 13px; color: {muted}; min-height: 40px; min-width: 120px; "
+            f"background: transparent; border: 1px solid {line}; border-radius: 8px; padding: 8px 16px;"
+        )
+        _btn_hover = f" QPushButton:hover {{ background: rgba(255,255,255,0.06); border-color: {accent}; }} "
+        links_row = QHBoxLayout()
+        links_row.setSpacing(16)
+        links_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._new_scan_link = QPushButton("New Scan")
+        self._new_scan_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_scan_link.setStyleSheet("QPushButton { " + _btn_style + " }" + _btn_hover)
+        self._new_scan_link.clicked.connect(self._on_new_scan_clicked)
+        self._advanced_details_link = QPushButton("Advanced Details")
+        self._advanced_details_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._advanced_details_link.setStyleSheet("QPushButton { " + _btn_style + " }" + _btn_hover)
+        self._advanced_details_link.clicked.connect(self._on_advanced_details_clicked)
+        self._export_log_link = QPushButton("Export Log")
+        self._export_log_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._export_log_link.setStyleSheet("QPushButton { " + _btn_style + " }" + _btn_hover)
+        self._export_log_link.clicked.connect(self._on_export_log_clicked)
+        links_row.addWidget(self._new_scan_link)
+        links_row.addWidget(self._advanced_details_link)
+        links_row.addWidget(self._export_log_link)
+        layout.addLayout(links_row)
+
+        return wrap
+
+    def _on_review_duplicates_clicked(self) -> None:
+        """Navigate to Review (results already loaded by MainWindow)."""
+        self.navigate_requested.emit("review")
+
+    def _on_new_scan_clicked(self) -> None:
+        """Return to idle/scanning view."""
+        self._content_stack.setCurrentIndex(0)
+        self._last_scan_result = None
+        if hasattr(self, "_sticky") and self._sticky:
+            self._sticky.setVisible(True)
+
+    def _show_complete_state(self) -> None:
+        """Populate and show compact Scan Complete view; fade progress bar after 1s."""
+        r = self._last_scan_result or {}
+        groups_raw = r.get("groups") or []
+        group_count = len(groups_raw)
+        file_count = sum(len(g.get("paths") or g.get("files") or g.get("items") or []) for g in groups_raw)
+        space_bytes = space_freeable_from_result(r)
+        time_str = format_duration_short(self._last_scan_duration_sec) if self._last_scan_duration_sec else "—"
+
+        self._complete_title.setText(f"Scan Complete ✓   •   {time_str}")
+        self._complete_card_groups.set_value(str(group_count))
+        self._complete_card_duplicates.set_value(str(file_count))
+        self._complete_card_space.set_value(format_bytes_short(space_bytes))
+        self._complete_card_time.set_value(time_str)
+
+        self._complete_progress.setVisible(True)
+        self._complete_progress.setValue(100)
+        QTimer.singleShot(1000, self._fade_complete_progress)
+
+        if hasattr(self, "_sticky") and self._sticky:
+            self._sticky.setVisible(False)
+        self._content_stack.setCurrentIndex(1)
+
+    def _on_advanced_details_clicked(self) -> None:
+        """Show advanced details (e.g. full stats). Placeholder: switch to Advanced mode or no-op."""
+        self._set_scan_ui_mode("advanced")
+        self._on_new_scan_clicked()
+
+    def _on_export_log_clicked(self) -> None:
+        """Export scan log. Placeholder for future implementation."""
+        self._bus.notify("Export Log", "Scan log export can be added in Settings or Report.", 2000)
+
+    def _fade_complete_progress(self) -> None:
+        """Hide the 100% progress bar after 1s (Gemini minimal)."""
+        if hasattr(self, "_complete_progress") and self._complete_progress:
+            self._complete_progress.setVisible(False)
 
     def _build_folder_picker(self, parent_layout: QVBoxLayout) -> None:
         """Add the modern folder picker widget."""
@@ -261,67 +551,42 @@ class ScanPage(BaseStation):
         parent_layout.addWidget(self._folder_picker)
 
     def _build_scan_filters(self, parent_layout: QVBoxLayout) -> None:
-        """Add Simple/Advanced mode toggle + scan options."""
-        from PySide6.QtWidgets import QButtonGroup
+        """Add media type, engine, and scanner tier selectors. Wrapped for Simple/Advanced visibility."""
+        self._advanced_container = QWidget()
+        adv_layout = QVBoxLayout(self._advanced_container)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(LayoutMetrics.PAGE_SPACING)
 
-        # --- Simple / Advanced mode toggle ---
-        toggle_row = QHBoxLayout()
-        toggle_row.setSpacing(0)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(LayoutMetrics.PAGE_SPACING)
 
-        accent = theme_token("accent")
-        panel = theme_token("panel")
-        line = theme_token("line")
-        text = theme_token("text")
+        filter_row.addWidget(QLabel("Scan type:"))
+        self._media_type_combo = QComboBox()
+        self._media_type_combo.setMinimumWidth(LayoutMetrics.COMBO_MIN_WIDTH)
+        self._media_type_combo.setMinimumHeight(LayoutMetrics.BUTTON_MIN_HEIGHT)
+        self._media_type_combo.addItems(["All", "Photos only", "Videos only", "Audio only"])
+        self._media_type_combo.setCurrentIndex(0)
+        self._media_type_combo.setToolTip("Limit scan to specific media types")
+        filter_row.addWidget(self._media_type_combo, 1)
 
-        toggle_style_active = (
-            f"QPushButton {{ background: {accent}; color: white; border-radius: 8px; "
-            f"padding: 6px 20px; font-weight: bold; border: none; }}"
-        )
-        toggle_style_inactive = (
-            f"QPushButton {{ background: {panel}; color: {text}; border-radius: 8px; "
-            f"padding: 6px 20px; font-weight: normal; border: 1px solid {line}; }}"
-        )
+        filter_row.addWidget(QLabel("Engine:"))
+        self._engine_combo = QComboBox()
+        self._engine_combo.setMinimumWidth(LayoutMetrics.COMBO_MIN_WIDTH)
+        self._engine_combo.setMinimumHeight(LayoutMetrics.BUTTON_MIN_HEIGHT)
+        self._engine_combo.addItems(["Simple", "Advanced"])
+        self._engine_combo.setCurrentIndex(0)
+        self._engine_combo.setToolTip("Simple: fast, balanced. Advanced: more workers, thorough.")
+        filter_row.addWidget(self._engine_combo, 1)
 
-        self._simple_btn = QPushButton("Simple")
-        self._simple_btn.setCheckable(True)
-        self._simple_btn.setChecked(True)
-        self._simple_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._simple_btn.setToolTip("Simple mode: pick a folder and scan. Best defaults applied automatically.")
+        adv_layout.addLayout(filter_row)
 
-        self._advanced_btn = QPushButton("Advanced")
-        self._advanced_btn.setCheckable(True)
-        self._advanced_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._advanced_btn.setToolTip("Advanced mode: expose all scan options (media type, engine, scanner tier).")
-
-        self._toggle_group = QButtonGroup(self)
-        self._toggle_group.setExclusive(True)
-        self._toggle_group.addButton(self._simple_btn, 0)
-        self._toggle_group.addButton(self._advanced_btn, 1)
-
-        def _refresh_toggle_styles():
-            self._simple_btn.setStyleSheet(toggle_style_active if self._simple_btn.isChecked() else toggle_style_inactive)
-            self._advanced_btn.setStyleSheet(toggle_style_active if self._advanced_btn.isChecked() else toggle_style_inactive)
-
-        self._simple_btn.toggled.connect(lambda checked: (self._on_ui_mode_changed("simple") if checked else None) or _refresh_toggle_styles())
-        self._advanced_btn.toggled.connect(lambda checked: (self._on_ui_mode_changed("advanced") if checked else None) or _refresh_toggle_styles())
-
-        _refresh_toggle_styles()
-
-        mode_label = QLabel("Mode:")
-        mode_label.setStyleSheet(f"color: {text}; font-weight: bold;")
-        toggle_row.addWidget(mode_label)
-        toggle_row.addSpacing(8)
-        toggle_row.addWidget(self._simple_btn)
-        toggle_row.addSpacing(4)
-        toggle_row.addWidget(self._advanced_btn)
-        toggle_row.addStretch()
-        parent_layout.addLayout(toggle_row)
-
-        # --- Scanner tier (always visible) ---
         scanner_row = QHBoxLayout()
         scanner_row.setSpacing(LayoutMetrics.PAGE_SPACING)
+
         scanner_row.addWidget(QLabel("Scanner:"))
         self._scanner_tier_combo = QComboBox()
+        self._scanner_tier_combo.setMinimumWidth(LayoutMetrics.COMBO_LONG_MIN_WIDTH)
+        self._scanner_tier_combo.setMinimumHeight(LayoutMetrics.BUTTON_MIN_HEIGHT)
         self._scanner_tier_combo.addItems([
             "Turbo (12x faster - Production)",
             "Ultra (60x faster - Extreme)",
@@ -334,57 +599,19 @@ class ScanPage(BaseStation):
             "Quantum: Bleeding edge, 180x+ faster (requires GPU + pip install cupy-cuda12x torch)"
         )
         scanner_row.addWidget(self._scanner_tier_combo, 1)
-        parent_layout.addLayout(scanner_row)
 
-        # --- Advanced options container (hidden in Simple mode) ---
-        self._advanced_options = QWidget()
-        adv_layout = QVBoxLayout(self._advanced_options)
-        adv_layout.setContentsMargins(0, 0, 0, 0)
-        adv_layout.setSpacing(LayoutMetrics.PAGE_SPACING)
+        adv_layout.addLayout(scanner_row)
 
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(LayoutMetrics.PAGE_SPACING)
-        filter_row.addWidget(QLabel("Scan type:"))
-        self._media_type_combo = QComboBox()
-        self._media_type_combo.setMinimumWidth(LayoutMetrics.COMBO_MIN_WIDTH)
-        self._media_type_combo.setMinimumHeight(LayoutMetrics.BUTTON_MIN_HEIGHT)
-        self._media_type_combo.addItems(["All", "Photos only", "Videos only", "Audio only"])
-        self._media_type_combo.setCurrentIndex(0)
-        self._media_type_combo.setToolTip("Limit scan to specific media types")
-        filter_row.addWidget(self._media_type_combo, 1)
-        filter_row.addWidget(QLabel("Engine:"))
-        self._engine_combo = QComboBox()
-        self._engine_combo.setMinimumWidth(LayoutMetrics.COMBO_MIN_WIDTH)
-        self._engine_combo.setMinimumHeight(LayoutMetrics.BUTTON_MIN_HEIGHT)
-        self._engine_combo.addItems(["Simple", "Advanced"])
-        self._engine_combo.setCurrentIndex(0)
-        self._engine_combo.setToolTip("Simple: fast, balanced. Advanced: more workers, thorough.")
-        filter_row.addWidget(self._engine_combo, 1)
-        adv_layout.addLayout(filter_row)
-
-        self._advanced_options.setVisible(False)
-        parent_layout.addWidget(self._advanced_options)
-
-    def _on_ui_mode_changed(self, mode: str) -> None:
-        """Toggle visibility of advanced options and persist the choice."""
-        is_adv = (mode == "advanced")
-        if hasattr(self, "_advanced_options"):
-            self._advanced_options.setVisible(is_adv)
-        # Persist to bus so choice survives page re-entry
-        try:
-            opts = self._bus.get_scan_options() or {}
-            opts["scan_ui_mode"] = mode
-            self._bus.set_scan_options(opts)
-        except Exception:
-            pass
+        parent_layout.addWidget(self._advanced_container)
 
     def _build_prominent_scan_button(self, parent_layout: QVBoxLayout) -> None:
         """Add a large, prominent Start Scan CTA. Configure presets in Settings > Scanning."""
         accent = theme_token("accent")
         self._start_scan_btn = QPushButton("  ▶  Start Scan")
         self._start_scan_btn.setObjectName("ProminentScanButton")
+        self._start_scan_btn.setToolTip("Start duplicate scan with selected folder and scanner mode. Live progress and stats appear below.")
         self._start_scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._start_scan_btn.setMinimumHeight(64)
+        self._start_scan_btn.setMinimumHeight(44)
         self._start_scan_btn.setStyleSheet(f"""
             QPushButton#ProminentScanButton {{
                 background: {accent};
@@ -427,14 +654,6 @@ class ScanPage(BaseStation):
 
         parent_layout.addLayout(stat_row)
 
-    def _build_main_panels(self, parent_layout: QVBoxLayout) -> None:
-        """Add the live scan panel (full width). Scan presets and advanced options are in Settings > Scanning."""
-        self._live = LiveScanPanel()
-        self._live.setMinimumWidth(LayoutMetrics.MIN_LIVE_WIDTH)
-        live_card = ContentCard()
-        live_card.set_content(self._live)
-        parent_layout.addWidget(live_card, 1)
-
     def _build_sticky_action_bar(self) -> None:
         """Create and configure the bottom sticky action bar."""
         self._sticky = StickyActionBar()
@@ -475,21 +694,13 @@ class ScanPage(BaseStation):
         if hasattr(self._bus, "resume_scan_requested"):
             self._bus.resume_scan_requested.connect(self._on_resume_requested)
 
+        # Programmatic scan start (e.g. ReviewPage Rescan)
         if hasattr(self._bus, "scan_requested"):
-            self._bus.scan_requested.connect(self._on_scan_requested)
-        
+            self._bus.scan_requested.connect(self._on_scan_requested_from_bus)
+
         # Scanner tier selection change
         if hasattr(self, "_scanner_tier_combo"):
             self._scanner_tier_combo.currentIndexChanged.connect(self._on_scanner_tier_changed)
-        # Restore persisted Simple/Advanced toggle state
-        if hasattr(self, "_advanced_options"):
-            opts = self._bus.get_scan_options() or {}
-            is_adv = (opts.get("scan_ui_mode", "simple") == "advanced")
-            self._advanced_options.setVisible(is_adv)
-            if is_adv and hasattr(self, "_advanced_btn"):
-                self._advanced_btn.setChecked(True)
-            elif hasattr(self, "_simple_btn"):
-                self._simple_btn.setChecked(True)
 
     # -------------------------------------------------------------------------
     # Snapshot handling (single source of truth)
@@ -560,11 +771,6 @@ class ScanPage(BaseStation):
             self._engine_combo.setEnabled(state.options_enabled)
         if getattr(self, "_scanner_tier_combo", None) is not None:
             self._scanner_tier_combo.setEnabled(state.options_enabled)
-        # Disable mode toggle while scanning
-        if getattr(self, "_simple_btn", None) is not None:
-            self._simple_btn.setEnabled(state.options_enabled)
-        if getattr(self, "_advanced_btn", None) is not None:
-            self._advanced_btn.setEnabled(state.options_enabled)
 
     def _publish_to_bus(self, snapshot: LiveScanSnapshot) -> None:
         """Push snapshot data to the global state bus (backward compatible)."""
@@ -617,21 +823,6 @@ class ScanPage(BaseStation):
     # Scan actions
     # -------------------------------------------------------------------------
 
-    @Slot(dict)
-    def _on_scan_requested(self, config: dict) -> None:
-        """Handle scan_requested from StateBus (e.g. Rescan from ReviewPage)."""
-        if self._controller.is_running():
-            return
-        root = config.get("root", "")
-        if root and validate_folder_path(root):
-            self._folder_picker.set_path(root)
-            self._set_ui_state(ScanUIState(
-                is_scanning=True, status_text=StatusText.SCANNING,
-                start_enabled=False, cancel_enabled=True, options_enabled=False,
-            ))
-            self._live.reset()
-            self._controller.start_scan(config)
-
     @Slot()
     def _start_scan(self) -> None:
         """Initiate a scan with current folder and options."""
@@ -648,21 +839,22 @@ class ScanPage(BaseStation):
             return
 
         options = self._bus.get_scan_options() or {}
-        media_type = ("all", "photos", "videos", "audio")[self._media_type_combo.currentIndex()]
-        engine = ("simple", "advanced")[self._engine_combo.currentIndex()]
-        
-        # Get scanner tier selection
-        scanner_tier_idx = self._scanner_tier_combo.currentIndex()
-        scanner_tier = ("turbo", "ultra", "quantum")[scanner_tier_idx]
-        
+        if getattr(self, "_scan_ui_mode", "simple") == "simple":
+            media_type = "all"
+            engine = "simple"
+            scanner_tier = "turbo"
+        else:
+            media_type = ("all", "photos", "videos", "audio")[self._media_type_combo.currentIndex()]
+            engine = ("simple", "advanced")[self._engine_combo.currentIndex()]
+            scanner_tier_idx = self._scanner_tier_combo.currentIndex()
+            scanner_tier = ("turbo", "ultra", "quantum")[scanner_tier_idx]
+
         config = create_scan_config(
-            root_path, 
-            options, 
-            media_type=media_type, 
+            root_path,
+            options,
+            media_type=media_type,
             engine=engine
         )
-        
-        # Add scanner tier to config
         config["scanner_tier"] = scanner_tier
 
         # Immediate UI feedback
@@ -695,6 +887,29 @@ class ScanPage(BaseStation):
         except Exception:
             # Malformed payload – ignore and let user pick folder manually
             pass
+
+    @Slot(dict)
+    def _on_scan_requested_from_bus(self, config: dict[str, Any]) -> None:
+        """Start scan with given config (e.g. from ReviewPage Rescan). Async; no UI freeze."""
+        if self._controller.is_running():
+            return
+        config = dict(config or {})
+        root = str(config.get("root") or config.get("scan_root") or "")
+        if not root or not Path(root).is_dir():
+            return
+        try:
+            self._folder_picker.set_path(root)
+        except Exception:
+            pass
+        self._set_ui_state(ScanUIState(
+            is_scanning=True,
+            status_text=StatusText.SCANNING,
+            start_enabled=False,
+            cancel_enabled=True,
+            options_enabled=False,
+        ))
+        self._live.reset()
+        self._controller.start_scan(config)
 
     # -------------------------------------------------------------------------
     # Legacy slot stubs (required for backward compatibility)
@@ -771,12 +986,16 @@ class ScanPage(BaseStation):
         }
         
         info = tier_info.get(index, tier_info[0])
-        
-        # Show notification with scanner info
+        try:
+            opts = self._bus.get_scan_options() or {}
+            opts["scanner_tier"] = ("turbo", "ultra", "quantum")[min(index, 2)]
+            self._bus.set_scan_options(opts)
+        except Exception:
+            pass
         self._bus.notify(
             f"{info['icon']} {info['name']} selected",
             f"{info['speedup']} - {info['desc']}",
-            3000  # 3 seconds
+            3000
         )
 
     # -------------------------------------------------------------------------
@@ -785,9 +1004,10 @@ class ScanPage(BaseStation):
 
     @Slot(str)
     def _on_scan_started(self, scan_id: str) -> None:
-        """Store scan ID and notify user."""
+        """Store scan ID and start time; notify user."""
         self._current_scan_id = scan_id
         self._scan_in_progress = True
+        self._scan_start_time = time.time()
         self._bus.notify(
             "Scan started",
             f"Scan ID: {scan_id}",
@@ -816,15 +1036,21 @@ class ScanPage(BaseStation):
 
     @Slot(dict)
     def _on_scan_completed(self, result: dict[str, Any]) -> None:
-        """Attach scan_id if missing and notify user."""
+        """Store result, show Gemini 2 Scan Complete state; user clicks Review to open."""
         self._scan_in_progress = False
         if "scan_id" not in result and self._current_scan_id:
             result["scan_id"] = self._current_scan_id
+        self._last_scan_result = result
+        self._last_scan_duration_sec = (time.time() - self._scan_start_time) if self._scan_start_time else 0.0
+        self._scan_start_time = None
+
         self._bus.notify(
             "Results ready",
-            "Opening Review…",
+            "Review duplicates when ready.",
             NotifyDuration.RESULTS_READY,
         )
+
+        self._show_complete_state()
 
     # -------------------------------------------------------------------------
     # Lifecycle management (BaseStation interface)
@@ -843,34 +1069,47 @@ class ScanPage(BaseStation):
         """Called when page is hidden – no action needed."""
         return
 
+    def refresh_theme(self) -> None:
+        """Apply theme and refresh Scan Complete view styles (banner, CTA, bottom buttons)."""
+        super().refresh_theme()
+        accent = theme_token("accent")
+        muted = theme_token("muted")
+        line = theme_token("line")
+        if hasattr(self, "_review_duplicates_btn") and self._review_duplicates_btn:
+            self._review_duplicates_btn.setStyleSheet(f"""
+                QPushButton#ReviewDuplicatesCTA {{
+                    background: {accent};
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 17px;
+                    font-weight: bold;
+                    padding: 12px 28px;
+                }}
+                QPushButton#ReviewDuplicatesCTA:hover {{ opacity: 0.95; }}
+            """)
+        _btn_style = (
+            f"font-size: 13px; color: {muted}; min-height: 40px; min-width: 120px; "
+            f"background: transparent; border: 1px solid {line}; border-radius: 8px; padding: 8px 16px;"
+        )
+        _btn_hover = f" QPushButton:hover {{ background: rgba(255,255,255,0.06); border-color: {accent}; }} "
+        for link in (getattr(self, "_new_scan_link", None), getattr(self, "_advanced_details_link", None), getattr(self, "_export_log_link", None)):
+            if link:
+                link.setStyleSheet("QPushButton { " + _btn_style + " }" + _btn_hover)
+        if hasattr(self, "_complete_title") and self._complete_title:
+            text = theme_token("text")
+            self._complete_title.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {text};")
+
     def on_enter(self) -> None:
-        """Sync scanner tier and UI mode from global toolbar/bus when page is shown."""
+        """Sync scanner tier from global toolbar/bus when page is shown."""
         try:
             opts = self._bus.get_scan_options() or {}
-            # Restore scanner tier
             tier = (opts.get("scanner_tier") or "turbo").lower()
             idx = {"turbo": 0, "ultra": 1, "quantum": 2}.get(tier, 0)
             if getattr(self, "_scanner_tier_combo", None) is not None:
                 self._scanner_tier_combo.blockSignals(True)
                 self._scanner_tier_combo.setCurrentIndex(idx)
                 self._scanner_tier_combo.blockSignals(False)
-            # Restore Simple/Advanced mode
-            scan_ui_mode = (opts.get("scan_ui_mode") or "simple").lower()
-            if hasattr(self, "_simple_btn") and hasattr(self, "_advanced_btn"):
-                self._simple_btn.blockSignals(True)
-                self._advanced_btn.blockSignals(True)
-                if scan_ui_mode == "advanced":
-                    self._advanced_btn.setChecked(True)
-                    self._simple_btn.setChecked(False)
-                    if hasattr(self, "_advanced_options"):
-                        self._advanced_options.setVisible(True)
-                else:
-                    self._simple_btn.setChecked(True)
-                    self._advanced_btn.setChecked(False)
-                    if hasattr(self, "_advanced_options"):
-                        self._advanced_options.setVisible(False)
-                self._simple_btn.blockSignals(False)
-                self._advanced_btn.blockSignals(False)
         except Exception:
             pass
 
@@ -883,7 +1122,7 @@ class ScanPage(BaseStation):
     def reset(self) -> None:
         """
         Full reset to idle state.
-        Keeps folder path, clears snapshot and scan ID.
+        Keeps folder path, clears snapshot and scan ID; shows idle/scanning view.
         """
         if self._scan_in_progress:
             try:
@@ -893,6 +1132,11 @@ class ScanPage(BaseStation):
         self._scan_in_progress = False
         self._current_scan_id = ""
         self._current_snapshot = None
+        self._last_scan_result = None
+        if hasattr(self, "_content_stack") and self._content_stack.currentIndex() != 0:
+            self._content_stack.setCurrentIndex(0)
+        if hasattr(self, "_sticky") and self._sticky:
+            self._sticky.setVisible(True)
         self._set_ui_state(ScanUIState(
             is_scanning=False,
             status_text=StatusText.IDLE,

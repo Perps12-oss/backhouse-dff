@@ -104,6 +104,9 @@ class StateBus(QObject):
     scan_failed = Signal(str)               # error
     resume_scan_requested = Signal(dict)    # resume payload (history → scan)
 
+    # Deletion (success only; payload: deleted_paths, scan_id, deleted_count)
+    deletion_completed = Signal(dict)
+
     # Station status (for Intelligent Spine)
     station_status_updated = Signal(StationStatusData)
 
@@ -124,9 +127,11 @@ class StateBus(QObject):
         return ScanOptions.from_dict(self._scan_options)
 
     def set_scan_options(self, options: Dict[str, Any]) -> None:
-        """Update scan options (called by Settings when user changes Scanning)."""
+        """Update scan options (called by Settings when user changes Scanning). Preserves extra keys e.g. scanner_tier."""
         if options:
-            self._scan_options = ScanOptions.from_dict(options).to_dict()
+            base = ScanOptions.from_dict(options).to_dict()
+            extra = {k: v for k, v in options.items() if k not in base}
+            self._scan_options = {**base, **extra}
 
     @staticmethod
     def allowed_extensions_for_media_type(media_type: str) -> Optional[List[str]]:

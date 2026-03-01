@@ -30,6 +30,11 @@ class ContentCard(QFrame):
             }}
         """)
 
+    def refresh_theme(self) -> None:
+        """Re-apply theme so card colors update."""
+        self._apply_theme()
+        self.update()
+
     def set_content(self, widget: QWidget) -> None:
         while self._layout.count():
             item = self._layout.takeAt(0)

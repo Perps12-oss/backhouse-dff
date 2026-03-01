@@ -1,10 +1,21 @@
 # path: main.py
+"""
+CEREBRO — Windows-only duplicate finder (Gemini 2 style).
+Entry point: platform guard, ThemeEngine applied via MainWindow.
+"""
 from __future__ import annotations
 
 import sys
 import os
 import traceback
 from pathlib import Path
+
+# ============================================================================
+# WINDOWS-ONLY PLATFORM GUARD
+# ============================================================================
+if sys.platform != "win32":
+    print("CEREBRO is Windows-only. This application does not run on macOS or Linux.")
+    sys.exit(1)
 
 # ============================================================================
 # FORCE DEBUG MODE
@@ -24,18 +35,18 @@ APP_ORG = "CEREBRO Labs"
 # DEBUG UTILITIES
 # ============================================================================
 def pause(reason: str = "Press ENTER to exit...") -> None:
-    """Force pause - ALWAYS works."""
+    """Force pause - ALWAYS works. ASCII-only for Windows console."""
     try:
-        print(f"\n⏸ {reason}")
+        print(f"\n[PAUSE] {reason}")
         input()
     except (EOFError, KeyboardInterrupt):
-        print("\n⏸ Pause interrupted")
+        print("\n[PAUSE] Interrupted")
     except Exception:
-        print("\n⚠️  Could not pause (maybe running in non-interactive console)")
+        print("\n[!] Could not pause (maybe running in non-interactive console)")
 
 def print_step(step: str, success: bool = True) -> None:
-    """Print a step with status."""
-    status = "✓" if success else "✗"
+    """Print a step with status. ASCII-only for Windows console."""
+    status = "[OK]" if success else "[FAIL]"
     print(f"{status} {step}")
 
 # ============================================================================
@@ -58,7 +69,7 @@ def install_crash_handlers() -> None:
                 f.write(f"CEREBRO Crash Report\n")
                 f.write(f"Time: {__import__('datetime').datetime.now()}\n\n")
                 traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
-            print(f"\n📄 Crash log saved to: {crash_file}")
+            print(f"\n[LOG] Crash log saved to: {crash_file}")
         except Exception:
             pass
         
@@ -134,14 +145,14 @@ def main() -> int:
         def check_window():
             if window.isVisible():
                 print_step("Window is visible", True)
-                print("\n✅ Application is running!")
-                print("✅ Window should be visible on screen")
-                print("✅ Close the window to exit")
+                print("\n[OK] Application is running!")
+                print("[OK] Window should be visible on screen")
+                print("[OK] Close the window to exit")
             else:
                 print_step("Window is NOT visible!", False)
-                print("\n⚠️  WARNING: Window is not visible")
-                print("⚠️  This usually means it closed immediately")
-                print("⚠️  Check for errors in the console above")
+                print("\n[!] WARNING: Window is not visible")
+                print("[!] This usually means it closed immediately")
+                print("[!] Check for errors in the console above")
         
         QTimer.singleShot(500, check_window)
         
@@ -152,13 +163,13 @@ def main() -> int:
         
         result = app.exec()
         
-        print(f"\n📤 Application exited with code: {result}")
+        print(f"\n[EXIT] Application exited with code: {result}")
         pause("Application closed. Press ENTER to exit console...")
         
         return result
         
     except Exception as e:
-        print(f"\n❌ UNEXPECTED ERROR: {e}")
+        print(f"\n[ERROR] UNEXPECTED: {e}")
         traceback.print_exc()
         pause("Unexpected error. Press ENTER to exit...")
         return 1

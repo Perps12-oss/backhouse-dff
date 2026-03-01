@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -43,13 +44,13 @@ from cerebro.ui.widgets.scan_options_panel import ScanOptionsPanel
 # Constants
 # ============================================================================
 
-# Page layout
-PAGE_MARGIN = 18
-PAGE_SPACING = 12
-CARD_PADDING = 14
-CARD_SPACING = 10
-GROUP_SPACING = 8
-GRID_SPACING = 12
+# Page layout (generous for readability)
+PAGE_MARGIN = 12
+PAGE_SPACING = 10
+CARD_PADDING = 10
+CARD_SPACING = 12
+GROUP_SPACING = 10
+GRID_SPACING = 16
 
 # Border radius
 CARD_BORDER_RADIUS = 16
@@ -230,6 +231,8 @@ class ScanSettingsGroup(QGroupBox):
         # Scan mode
         layout.addWidget(QLabel("Scan Mode:"), row, 0)
         self._mode = QComboBox()
+        self._mode.setMinimumWidth(180)
+        self._mode.setMinimumHeight(36)
         for mode in ScanMode:
             self._mode.addItem(mode.display_name, mode.value)
         layout.addWidget(self._mode, row, 1)
@@ -238,6 +241,8 @@ class ScanSettingsGroup(QGroupBox):
         # Hash algorithm
         layout.addWidget(QLabel("Hash Algorithm:"), row, 0)
         self._hash = QComboBox()
+        self._hash.setMinimumWidth(180)
+        self._hash.setMinimumHeight(36)
         for algo in HashAlgorithm:
             self._hash.addItem(algo.display_name, algo.value)
         layout.addWidget(self._hash, row, 1)
@@ -510,17 +515,39 @@ class SettingsPage(BaseStation):
     def __init__(self, parent: Optional[QWidget] = None):
         """
         Initialize settings page.
-        
+
         Args:
             parent: Parent widget
         """
         super().__init__(parent)
-        
+        self.setAcceptDrops(True)
         self._bus = get_state_bus()
         self._config = AppConfig()
-        
+        self._drag_highlight = False
         self._build_ui()
         self._load_settings()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData() and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_highlight = True
+            self.setStyleSheet("border: 2px solid #00C4B4; border-radius: 12px;")
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
+        if event.mimeData() and event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            path = url.toLocalFile()
+            if path and Path(path).is_dir() and hasattr(self._bus, "resume_scan_requested"):
+                self._bus.resume_scan_requested.emit({"root": path})
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
     
     # ========================================================================
     # UI Construction
@@ -585,14 +612,40 @@ class SettingsPage(BaseStation):
         self._stack.addWidget(performance_card)
         self._stack.addWidget(advanced_card)
 
-        content_wrap = QWidget()
-        content_layout = QVBoxLayout(content_wrap)
+        self._content_wrap = QWidget()
+        self._content_wrap.setObjectName("SettingsContentWrap")
+        content_layout = QVBoxLayout(self._content_wrap)
         content_layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        content_layout.setSpacing(PAGE_SPACING)
         content_layout.addWidget(self._stack, 1)
         content_layout.addLayout(self._create_actions())
-        self._scaffold.set_content(content_wrap)
+        self._scaffold.set_content(self._content_wrap)
 
         self._nav_to_index = {"general": 0, "scanning": 1, "cleanup": 2, "performance": 3, "advanced": 4}
+        self._apply_content_theme()
+
+    def _apply_content_theme(self) -> None:
+        """Apply theme to main body and stack so light/dark persists."""
+        bg = theme_token("bg")
+        text = theme_token("text")
+        if hasattr(self, "_stack") and self._stack:
+            self._stack.setStyleSheet(f"QStackedWidget {{ background: {bg}; color: {text}; }}")
+        if hasattr(self, "_scaffold") and self._scaffold:
+            self._scaffold.refresh_theme()
+        if hasattr(self, "_content_wrap") and self._content_wrap:
+            self._content_wrap.setStyleSheet(f"QWidget#SettingsContentWrap {{ background: {bg}; color: {text}; }}")
+        self._style_groups()
+        if hasattr(self, "_save_btn") and self._save_btn:
+            self._style_button(self._save_btn, primary=True)
+        if hasattr(self, "_reset_btn") and self._reset_btn:
+            self._style_button(self._reset_btn, primary=False)
+
+    def refresh_theme(self) -> None:
+        """Apply theme to page and main body so light theme persists."""
+        super().refresh_theme()
+        self._apply_content_theme()
+        self.update()
+        self.repaint()
 
     def _on_nav_clicked(self, item_id: str) -> None:
         idx = self._nav_to_index.get(item_id, 0)

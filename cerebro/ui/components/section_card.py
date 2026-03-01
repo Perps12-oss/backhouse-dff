@@ -39,8 +39,8 @@ class SectionCard(QFrame, ThemeMixin):
         )
         
         self.content_layout = QVBoxLayout(self.content_container)
-        self.content_layout.setContentsMargins(16, 16, 16, 16)
-        self.content_layout.setSpacing(8)
+        self.content_layout.setContentsMargins(12, 12, 12, 12)
+        self.content_layout.setSpacing(6)
         
         layout.addWidget(self.content_container)
         
@@ -51,11 +51,11 @@ class SectionCard(QFrame, ThemeMixin):
         """Create the card header with title."""
         widget = QWidget()
         widget.setObjectName("CardHeader")
-        widget.setFixedHeight(48)
+        widget.setFixedHeight(40)
         
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(8)
         
         # Title label
         self.title_label = QLabel(self.title)

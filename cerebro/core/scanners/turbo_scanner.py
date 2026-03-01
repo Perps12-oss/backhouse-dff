@@ -420,6 +420,9 @@ class TurboScanner:
             if self.config.incremental:
                 self.dir_cache = DirectoryCache(cache_dir / "dir_cache.sqlite")
         
+        # Groups from last scan (for Review page; worker reads this)
+        self.last_groups = []
+        
         # Statistics
         self.stats = {
             'files_scanned': 0,
@@ -475,6 +478,26 @@ class TurboScanner:
             print(f"[Turbo] Found {len(final_groups)} duplicate groups")
         else:
             final_groups = quick_hash_groups
+        
+        # Expose groups for Review page (worker reads scanner.last_groups)
+        def _group_recoverable(paths_list):
+            total = 0
+            for p, _ in paths_list:
+                try:
+                    total += os.path.getsize(str(p))
+                except Exception:
+                    pass
+            return total
+
+        self.last_groups = [
+            {
+                "paths": [str(p) for p, _ in paths],
+                "hash": str(h),
+                "count": len(paths),
+                "recoverable_bytes": _group_recoverable(paths),
+            }
+            for h, paths in (final_groups.items() if final_groups else [])
+        ]
         
         # Phase 5: Yield results
         discovered_count = len(discovered_files)

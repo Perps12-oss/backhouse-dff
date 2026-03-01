@@ -65,6 +65,10 @@ class HistoryCard(QFrame):
 
         self._apply_theme()
 
+    def refresh_theme(self) -> None:
+        self._apply_theme()
+        self.update()
+
     def _apply_theme(self) -> None:
         panel = token("panel")
         line = token("line")

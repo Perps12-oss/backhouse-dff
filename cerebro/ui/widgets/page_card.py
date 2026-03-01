@@ -22,8 +22,8 @@ class PageCard(ModernCard):
         self.setCursor(Qt.ArrowCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(4)
 
         self.title_label = QLabel(self._title_text)
         self.title_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)

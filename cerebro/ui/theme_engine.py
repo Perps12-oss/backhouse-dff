@@ -29,7 +29,9 @@ class ThemeSpec:
     palette: Dict[str, str]  # hex colors
     qss: str                 # optional QSS string
     is_dark: bool = True
-    glass_morphism: bool = True  # Enable glass effects
+    glass_morphism: bool = True
+    category: str = "Studio"
+    tags: tuple = ()  # frozen-safe immutable sequence of tag strings
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -40,7 +42,9 @@ class ThemeSpec:
             "palette": self.palette,
             "qss": self.qss,
             "is_dark": self.is_dark,
-            "glass_morphism": self.glass_morphism
+            "glass_morphism": self.glass_morphism,
+            "category": self.category,
+            "tags": list(self.tags),
         }
 
 
@@ -208,7 +212,21 @@ def _base_qss(theme: ThemeSpec) -> str:
     }}
 
     QWidget {{
+        color: {text};
+    }}
+
+    QStackedWidget, QWidget#pageStack {{
+        background: {bg};
+        color: {text};
+    }}
+
+    QFrame {{
+        color: {text};
+    }}
+
+    QLabel {{
         background: transparent;
+        color: {text};
     }}
 
     QToolTip {{
@@ -501,6 +519,7 @@ def _base_qss(theme: ThemeSpec) -> str:
         margin-top: 12px;
         padding-top: 12px;
         font-weight: 600;
+        color: {text};
     }}
     
     QGroupBox::title {{
@@ -508,6 +527,16 @@ def _base_qss(theme: ThemeSpec) -> str:
         left: 12px;
         padding: 0 8px;
         color: {accent};
+    }}
+
+    /* Splitter */
+    QSplitter::handle {{
+        background: {line};
+        width: 4px;
+        height: 4px;
+    }}
+    QSplitter::handle:hover {{
+        background: {accent};
     }}
 
     /* Checkboxes and Radio buttons */
@@ -589,88 +618,197 @@ def _base_qss(theme: ThemeSpec) -> str:
 # =============================================================================
 
 def _builtin_themes() -> Dict[str, ThemeSpec]:
-    """Generate all built-in themes."""
-    def t(key: str, name: str, tagline: str, bg: str, panel: str, 
-          accent: str, accent2: str, is_dark: bool, glass: bool = True) -> ThemeSpec:
+    """Generate all built-in themes with curated palettes."""
+
+    def t(
+        key: str, name: str, tagline: str,
+        bg: str, panel: str, panel2: str, line: str,
+        accent: str, accent2: str,
+        is_dark: bool,
+        category: str = "Studio",
+        tags: tuple = (),
+        text: str = "", muted: str = "",
+    ) -> ThemeSpec:
         pal = {
             "bg": bg,
             "panel": panel,
-            "panel2": "#0b0e13" if is_dark else "#eef2f7",
-            "text": "#e7ecf2" if is_dark else "#0d1320",
-            "muted": "#aab3c0" if is_dark else "#455067",
+            "panel2": panel2,
+            "text": text or ("#e4e9f1" if is_dark else "#101828"),
+            "muted": muted or ("#8b95a8" if is_dark else "#526280"),
             "accent": accent,
             "accent2": accent2,
-            "line": "#262c3a" if is_dark else "#c8d2e0",
+            "line": line,
             "danger": "#ff5c7c",
             "ok": "#4ade80",
         }
         return ThemeSpec(
-            key=key, name=name, tagline=tagline, 
-            palette=pal, qss="", is_dark=is_dark, glass_morphism=glass
+            key=key, name=name, tagline=tagline,
+            palette=pal, qss="", is_dark=is_dark, glass_morphism=True,
+            category=category, tags=tags,
         )
 
     themes = {
-        # Core themes
-        "dark": t("dark", "Midnight Operator", "for late-night deletions 🌙", 
-                  "#0f1115", "#151922", "#7aa2ff", "#a78bfa", True),
-        "light": t("light", "Cloud Bureaucrat", "bright, polite, harmless ☁️", 
-                   "#f6f8fb", "#ffffff", "#2563eb", "#7c3aed", False),
-        
-        # Neon/Cyber themes
-        "neon_void": t("neon_void", "Neon Void", "glow in the abyss ✨", 
-                       "#07070b", "#0f111a", "#22d3ee", "#a78bfa", True),
-        "laser_lilac": t("laser_lilac", "Laser Lilac", "sweet, sharp, slightly illegal 💜", 
-                         "#0c0b10", "#151222", "#c084fc", "#60a5fa", True),
-        "blood_moon": t("blood_moon", "Blood Moon Cleanup", "dramatic. effective. 🌘", 
-                        "#12090c", "#1d1015", "#fb7185", "#f97316", True),
-        
-        # Nature themes
-        "emerald_ritual": t("emerald_ritual", "Emerald Ritual", "green means go (to trash) 🌿", 
-                            "#0b1211", "#0f1b18", "#34d399", "#22d3ee", True),
-        "forest_law": t("forest_law", "Forest Law", "nature approves ✅", 
-                        "#07110b", "#0d1a12", "#22c55e", "#38bdf8", True),
-        "mint_terminal": t("mint_terminal", "Mint Terminal", "retro-fresh 🧪", 
-                           "#0b1210", "#0f1a14", "#4ade80", "#a7f3d0", True),
-        
-        # Warm themes
-        "coal_cinnamon": t("coal_cinnamon", "Coal & Cinnamon", "dark warmth, zero guilt 🍂", 
-                           "#101012", "#19181c", "#fb923c", "#f472b6", True),
-        "amber_archive": t("amber_archive", "Amber Archive", "warm, organized, suspicious 📜", 
-                           "#120f0a", "#1d1912", "#fbbf24", "#fb923c", True),
-        "hacker_sunrise": t("hacker_sunrise", "Hacker Sunrise", "optimistic chaos 🌅", 
-                            "#0c0e0b", "#151a12", "#f97316", "#22d3ee", True),
-        "desert_ui": t("desert_ui", "Desert UI", "dry humor, sharp edges 🏜️", 
-                       "#14110b", "#1e1a10", "#fbbf24", "#60a5fa", True),
-        
-        # Cool themes
-        "arctic_byte": t("arctic_byte", "Arctic Byte", "cold speed, warm UI ❄️", 
-                         "#0b1016", "#101a24", "#60a5fa", "#22d3ee", True),
-        "deep_ocean": t("deep_ocean", "Deep Ocean Auditor", "calm, serious, precise 🌊", 
-                        "#071018", "#0c1b28", "#38bdf8", "#34d399", True),
-        "cobalt_suit": t("cobalt_suit", "Cobalt Suit", "corporate, but with taste 🧊", 
-                         "#0b1020", "#101a30", "#3b82f6", "#a78bfa", True),
-        
-        # Elegant themes
-        "royal_ink": t("royal_ink", "Royal Ink", "fancy but fast 👑", 
-                       "#0d0f18", "#14182a", "#818cf8", "#22d3ee", True),
-        "violet_vault": t("violet_vault", "Violet Vault", "keepers only 🔒", 
-                          "#0d0a14", "#171027", "#a78bfa", "#fb7185", True),
-        "graphite_mint": t("graphite_mint", "Graphite Mint", "business casual 🕴️", 
-                           "#0f1115", "#171b22", "#2dd4bf", "#a7f3d0", True),
-        
-        # Playful themes
-        "sakura_overdrive": t("sakura_overdrive", "Sakura Overdrive", "cute… but ruthless 🌸", 
-                              "#100a0d", "#1b1016", "#fb7185", "#c084fc", True),
-        "noir_peach": t("noir_peach", "Noir Peach", "soft. dark. dangerous 🍑", 
-                        "#101014", "#191922", "#fb7185", "#fbbf24", True),
-        "lime_lab": t("lime_lab", "Lime Lab", "high-energy scanning 🧫", 
-                      "#0a120b", "#0f1a10", "#a3e635", "#22c55e", True),
-        
-        # Light themes
-        "paperwork": t("paperwork", "Serious Paperwork", "for adults who delete responsibly 📎", 
-                       "#f7f5f2", "#ffffff", "#0ea5e9", "#7c3aed", False),
-        "ice_cream": t("ice_cream", "Ice Cream Spreadsheet", "light, sweet, logical 🍦", 
-                       "#f4f8ff", "#ffffff", "#60a5fa", "#fb7185", False),
+        # ── Studio ────────────────────────────────────────────────
+        "gemini": t(
+            "gemini", "Gemini", "The default Cerebro experience",
+            bg="#0f1115", panel="#161b24", panel2="#0b0e13", line="#232a38",
+            accent="#00c4b4", accent2="#5eead4",
+            is_dark=True, category="Studio", tags=("Dark", "Studio"),
+        ),
+        "gemini_light": t(
+            "gemini_light", "Gemini Light", "Clean, bright, production-ready",
+            bg="#f1f5f4", panel="#ffffff", panel2="#e8edec", line="#c8d5d2",
+            accent="#00a99d", accent2="#5eead4",
+            is_dark=False, category="Studio", tags=("Light", "Studio"),
+        ),
+        "dark": t(
+            "dark", "Midnight", "Late-night clarity",
+            bg="#0f1115", panel="#161b24", panel2="#0b0e13", line="#232a38",
+            accent="#7aa2ff", accent2="#a78bfa",
+            is_dark=True, category="Studio", tags=("Dark", "Studio"),
+        ),
+        "light": t(
+            "light", "Daylight", "Bright and focused",
+            bg="#f5f7fa", panel="#ffffff", panel2="#eaf0f6", line="#cdd5e0",
+            accent="#2563eb", accent2="#7c3aed",
+            is_dark=False, category="Studio", tags=("Light", "Studio"),
+        ),
+        "cobalt_suit": t(
+            "cobalt_suit", "Cobalt", "Refined corporate edge",
+            bg="#0c1022", panel="#111832", panel2="#090d1a", line="#1e2845",
+            accent="#3b82f6", accent2="#a78bfa",
+            is_dark=True, category="Studio", tags=("Dark", "Studio", "Cool"),
+        ),
+        "graphite_mint": t(
+            "graphite_mint", "Graphite Mint", "Business casual elegance",
+            bg="#0f1115", panel="#171c24", panel2="#0b0e13", line="#232a38",
+            accent="#2dd4bf", accent2="#99f6e4",
+            is_dark=True, category="Studio", tags=("Dark", "Studio"),
+        ),
+        "royal_ink": t(
+            "royal_ink", "Royal Ink", "Indigo meets electric cyan",
+            bg="#0d1018", panel="#14192c", panel2="#0a0d14", line="#1e2540",
+            accent="#818cf8", accent2="#22d3ee",
+            is_dark=True, category="Studio", tags=("Dark", "Studio"),
+        ),
+
+        # ── Neon ──────────────────────────────────────────────────
+        "neon_void": t(
+            "neon_void", "Neon Void", "Pure glow on black",
+            bg="#08080e", panel="#0e1018", panel2="#060608", line="#181c2a",
+            accent="#22d3ee", accent2="#a78bfa",
+            is_dark=True, category="Neon", tags=("Dark", "Neon"),
+        ),
+        "laser_lilac": t(
+            "laser_lilac", "Laser Lilac", "Violet beams, soft landing",
+            bg="#0c0b12", panel="#141220", panel2="#0a0910", line="#1e1a32",
+            accent="#c084fc", accent2="#60a5fa",
+            is_dark=True, category="Neon", tags=("Dark", "Neon"),
+        ),
+        "sakura_overdrive": t(
+            "sakura_overdrive", "Sakura Drive", "Pink neon, purple echoes",
+            bg="#10090e", panel="#1a1018", panel2="#0c080a", line="#2a1828",
+            accent="#fb7185", accent2="#c084fc",
+            is_dark=True, category="Neon", tags=("Dark", "Neon"),
+        ),
+        "lime_lab": t(
+            "lime_lab", "Lime Lab", "High-energy phosphor green",
+            bg="#0a100c", panel="#101a12", panel2="#080c08", line="#1a2a18",
+            accent="#a3e635", accent2="#22c55e",
+            is_dark=True, category="Neon", tags=("Dark", "Neon", "Nature"),
+        ),
+
+        # ── Warm ──────────────────────────────────────────────────
+        "coal_cinnamon": t(
+            "coal_cinnamon", "Coal & Cinnamon", "Dark warmth, amber glow",
+            bg="#111012", panel="#1a181c", panel2="#0c0b0d", line="#2a262e",
+            accent="#fb923c", accent2="#f472b6",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+        "amber_archive": t(
+            "amber_archive", "Amber Archive", "Golden tones, warm focus",
+            bg="#12100c", panel="#1c1810", panel2="#0d0b08", line="#2a2418",
+            accent="#fbbf24", accent2="#fb923c",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+        "blood_moon": t(
+            "blood_moon", "Blood Moon", "Dramatic red-orange dusk",
+            bg="#110a0c", panel="#1c1014", panel2="#0c0808", line="#2c1820",
+            accent="#fb7185", accent2="#f97316",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+        "hacker_sunrise": t(
+            "hacker_sunrise", "Hacker Sunrise", "Orange dawn meets cyan sky",
+            bg="#0d0e0c", panel="#161a12", panel2="#0a0c08", line="#222818",
+            accent="#f97316", accent2="#22d3ee",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+        "desert_ui": t(
+            "desert_ui", "Desert UI", "Sand-gold with sky-blue accents",
+            bg="#13110c", panel="#1e1a12", panel2="#0e0c08", line="#2a2418",
+            accent="#fbbf24", accent2="#60a5fa",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+        "noir_peach": t(
+            "noir_peach", "Noir Peach", "Rose softness on dark canvas",
+            bg="#100e12", panel="#1a1820", panel2="#0c0a0e", line="#26222c",
+            accent="#fb7185", accent2="#fbbf24",
+            is_dark=True, category="Warm", tags=("Dark", "Warm"),
+        ),
+
+        # ── Cool ──────────────────────────────────────────────────
+        "arctic_byte": t(
+            "arctic_byte", "Arctic Byte", "Frost-blue precision",
+            bg="#0c1018", panel="#111a26", panel2="#080c12", line="#1a2438",
+            accent="#60a5fa", accent2="#22d3ee",
+            is_dark=True, category="Cool", tags=("Dark", "Cool"),
+        ),
+        "deep_ocean": t(
+            "deep_ocean", "Deep Ocean", "Calm navy, sea-green highlights",
+            bg="#081018", panel="#0e1a28", panel2="#060c12", line="#162438",
+            accent="#38bdf8", accent2="#34d399",
+            is_dark=True, category="Cool", tags=("Dark", "Cool"),
+        ),
+        "violet_vault": t(
+            "violet_vault", "Violet Vault", "Deep plum with rose sparks",
+            bg="#0e0a14", panel="#161028", panel2="#0a0810", line="#201838",
+            accent="#a78bfa", accent2="#fb7185",
+            is_dark=True, category="Cool", tags=("Dark", "Cool"),
+        ),
+
+        # ── Nature ────────────────────────────────────────────────
+        "emerald_ritual": t(
+            "emerald_ritual", "Emerald Ritual", "Lush green, cyan shimmer",
+            bg="#0c1210", panel="#101c18", panel2="#080e0c", line="#182a22",
+            accent="#34d399", accent2="#22d3ee",
+            is_dark=True, category="Nature", tags=("Dark", "Nature"),
+        ),
+        "forest_law": t(
+            "forest_law", "Forest Law", "Deep evergreen, sky accent",
+            bg="#081210", panel="#0e1c14", panel2="#060e0a", line="#142a1c",
+            accent="#22c55e", accent2="#38bdf8",
+            is_dark=True, category="Nature", tags=("Dark", "Nature"),
+        ),
+        "mint_terminal": t(
+            "mint_terminal", "Mint Terminal", "Retro-fresh CRT vibes",
+            bg="#0c1210", panel="#101c16", panel2="#080e0c", line="#182a20",
+            accent="#4ade80", accent2="#a7f3d0",
+            is_dark=True, category="Nature", tags=("Dark", "Nature"),
+        ),
+
+        # ── Light ─────────────────────────────────────────────────
+        "paperwork": t(
+            "paperwork", "Paperwork", "Clean daylight with blue ink",
+            bg="#f5f3f0", panel="#ffffff", panel2="#ebe7e2", line="#d2ccc4",
+            accent="#0ea5e9", accent2="#7c3aed",
+            is_dark=False, category="Studio", tags=("Light", "Studio"),
+        ),
+        "ice_cream": t(
+            "ice_cream", "Ice Cream", "Soft pastels, sweet contrast",
+            bg="#f2f6ff", panel="#ffffff", panel2="#e6ecf8", line="#c8d2e4",
+            accent="#60a5fa", accent2="#fb7185",
+            is_dark=False, category="Studio", tags=("Light", "Studio"),
+        ),
     }
     return themes
 
@@ -701,9 +839,14 @@ def _load_theme_json(path: Path) -> Optional[ThemeSpec]:
             if k in pal:
                 pal_norm[k] = _safe_hex(str(pal[k]), "#0f1115" if k == "bg" else "#7aa2ff")
         
+        category = str(data.get("category") or "Studio").strip()
+        raw_tags = data.get("tags") or []
+        tags = tuple(str(t) for t in raw_tags) if isinstance(raw_tags, list) else ()
+
         return ThemeSpec(
             key=key, name=name, tagline=tagline, 
-            palette=pal_norm, qss=qss, is_dark=is_dark, glass_morphism=glass
+            palette=pal_norm, qss=qss, is_dark=is_dark, glass_morphism=glass,
+            category=category, tags=tags,
         )
     except Exception as e:
         print(f"[ThemeEngine] Failed to load theme from {path}: {e}")
@@ -735,7 +878,7 @@ class ThemeEngine(QObject):
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._themes: Dict[str, ThemeSpec] = {}
-        self._current: str = "dark"
+        self._current: str = "gemini"
         self._preview: Optional[str] = None
         self._animation_enabled: bool = True
         
@@ -771,13 +914,13 @@ class ThemeEngine(QObject):
 
         self._themes = themes
         
-        # Restore saved theme or default to dark
+        # Restore saved theme or default to Gemini
         restored = self._load_theme_from_config()
         if restored and restored in self._themes:
             self._current = restored
         else:
             if self._current not in self._themes:
-                self._current = "dark"
+                self._current = "gemini"
 
         self._apply_to_app(self._themes[self._current])
 
@@ -1150,12 +1293,3 @@ __all__ = [
     'get_theme_manager', 'reset_theme_manager', 'current_colors', 'apply_theme',
     '_interpolate_color', '_adjust_brightness', '_hex_to_rgb', '_rgb_to_hex'
 ]
-
-class ThemeMixin:
-    """Backward-compatible theme helper used by older pages.
-
-    New UI should prefer ThemeEngine directly, but this keeps legacy imports stable.
-    """
-
-    def theme_colors(self) -> Dict:
-        return GEMINI_PALETTE.get("dark" if getattr(self, "_theme_mode", "light") == "dark" else "light", GEMINI_PALETTE["light"])
