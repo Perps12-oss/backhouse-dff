@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 from functools import partial
 from pathlib import Path
-from PySide6.QtCore import QItemSelectionModel
 from typing import Any, Dict, List, Optional, Set, Tuple
 from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtCore import (
@@ -363,7 +362,6 @@ class CleanupProgressDialog(QDialog):
                 border-radius: 13px;
             }
         """)
-        QApplication.processEvents()
 
     def set_complete(self, success_count: int, fail_count: int):
         self.title.setText("✅ Cleanup Complete!")
