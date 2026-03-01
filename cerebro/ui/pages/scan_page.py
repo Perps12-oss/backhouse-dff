@@ -474,15 +474,22 @@ class ScanPage(BaseStation):
         # Resume from history
         if hasattr(self._bus, "resume_scan_requested"):
             self._bus.resume_scan_requested.connect(self._on_resume_requested)
+
+        if hasattr(self._bus, "scan_requested"):
+            self._bus.scan_requested.connect(self._on_scan_requested)
         
         # Scanner tier selection change
         if hasattr(self, "_scanner_tier_combo"):
             self._scanner_tier_combo.currentIndexChanged.connect(self._on_scanner_tier_changed)
-        # Advanced options toggle (in case toggled before signal was connected)
+        # Restore persisted Simple/Advanced toggle state
         if hasattr(self, "_advanced_options"):
             opts = self._bus.get_scan_options() or {}
             is_adv = (opts.get("scan_ui_mode", "simple") == "advanced")
             self._advanced_options.setVisible(is_adv)
+            if is_adv and hasattr(self, "_advanced_btn"):
+                self._advanced_btn.setChecked(True)
+            elif hasattr(self, "_simple_btn"):
+                self._simple_btn.setChecked(True)
 
     # -------------------------------------------------------------------------
     # Snapshot handling (single source of truth)
@@ -609,6 +616,21 @@ class ScanPage(BaseStation):
     # -------------------------------------------------------------------------
     # Scan actions
     # -------------------------------------------------------------------------
+
+    @Slot(dict)
+    def _on_scan_requested(self, config: dict) -> None:
+        """Handle scan_requested from StateBus (e.g. Rescan from ReviewPage)."""
+        if self._controller.is_running():
+            return
+        root = config.get("root", "")
+        if root and validate_folder_path(root):
+            self._folder_picker.set_path(root)
+            self._set_ui_state(ScanUIState(
+                is_scanning=True, status_text=StatusText.SCANNING,
+                start_enabled=False, cancel_enabled=True, options_enabled=False,
+            ))
+            self._live.reset()
+            self._controller.start_scan(config)
 
     @Slot()
     def _start_scan(self) -> None:
