@@ -20,9 +20,7 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 from functools import partial
 from pathlib import Path
-from PySide6.QtCore import QItemSelectionModel
 from typing import Any, Dict, List, Optional, Set, Tuple
-from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtCore import (
     Qt, QSize, QRect, QPoint, QEvent, QTimer, Signal, Slot,
     QRunnable, QThreadPool, QObject, QMutex, QMutexLocker,
@@ -120,6 +118,22 @@ def file_emoji(path: str) -> str:
     if ext in {".py", ".js", ".html", ".css", ".cpp", ".c", ".h", ".java", ".rs", ".go", ".php", ".rb"}:
         return "💻"
     return "📎"
+
+
+def _norm_path(p) -> str:
+    """Normalize a path for case-insensitive comparison (Windows-safe)."""
+    return os.path.normcase(os.path.normpath(str(p)))
+
+
+def _compute_group_size(paths) -> int:
+    """Sum file sizes for a list of paths, ignoring missing files."""
+    total = 0
+    for p in paths:
+        try:
+            total += os.path.getsize(p)
+        except OSError:
+            pass
+    return total
 
 
 # ==============================================================================
@@ -950,19 +964,6 @@ class ReviewPage(BaseStation):
         self.status_bar = self._build_status_bar()
         root.addWidget(self.status_bar)
 
-        self._scaffold.set_content(content_wrapper)
-
-        self._sticky = StickyActionBar()
-        self._sticky.set_summary("Select files to delete, then press Delete", "")
-        self._sticky.set_primary_text("🗑️ Delete Selected (0)")
-        self._sticky.set_primary_enabled(False)
-        self._sticky.set_secondary_text("Export List")
-        self._sticky.primary_clicked.connect(self._open_ceremony)
-        self._sticky.secondary_clicked.connect(self._on_export_list)
-        self._scaffold.set_sticky_action(self._sticky)
-
-        root.addWidget(self._scaffold, 1)
-
         # Floating delete button (Gemini teal accent style)
         self.floating_delete = FloatingDeleteButton(self)
         self.floating_delete.clicked_with_count.connect(self._on_floating_delete_clicked)
@@ -1725,7 +1726,7 @@ class ReviewPage(BaseStation):
         self._populate_group_list()
         self._update_display()
         self._update_stats()
-        self._refresh_delete_button()
+        self._update_stats()
 
     def apply_theme(self):
         c = ThemeHelper.colors()

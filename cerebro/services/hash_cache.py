@@ -183,6 +183,31 @@ class HashCache:
         self._upsert(Path(path), sig, full_hash=full_hash, full_algo=algo)
 
     # ------------------------------------------------------------------
+    # Statistics
+    # ------------------------------------------------------------------
+
+    def get_stats(self) -> dict:
+        """Return basic cache statistics (total entries, db size on disk)."""
+        stats: dict = {"total_entries": 0, "cache_size_mb": 0.0, "hit_rate": 0.0}
+        try:
+            conn = self.get_connection()
+            cur = conn.execute("SELECT COUNT(*) FROM file_hashes")
+            stats["total_entries"] = int(cur.fetchone()[0] or 0)
+        except Exception:
+            pass
+        try:
+            if self.db_path.exists():
+                stats["cache_size_mb"] = round(self.db_path.stat().st_size / (1024 * 1024), 2)
+        except Exception:
+            pass
+        return stats
+
+    def vacuum(self) -> None:
+        """Run VACUUM on the database to reclaim space."""
+        conn = self.get_connection()
+        conn.execute("VACUUM")
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 

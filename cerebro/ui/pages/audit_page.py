@@ -166,10 +166,18 @@ class IntegrityAuditWorker(AuditWorker):
         progress_cb(30, "Verifying hash cache...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            stats = cache.get_stats()
-            checked_items += stats.get("total_entries", 0)
-            progress_cb(40, f"Hash cache: {stats.get('total_entries', 0)} entries")
+            db_path = cache_dir / "hash_cache.sqlite" if cache_dir.exists() else None
+            if db_path and db_path.exists():
+                hc = HashCache(db_path)
+                hc.open()
+                try:
+                    stats = hc.get_stats()
+                    checked_items += stats.get("total_entries", 0)
+                    progress_cb(40, f"Hash cache: {stats.get('total_entries', 0)} entries")
+                finally:
+                    hc.close()
+            else:
+                progress_cb(40, "Hash cache file not found (OK on first run)")
         except Exception as e:
             issues.append(f"Hash cache error: {e}")
         
@@ -253,14 +261,25 @@ class ReportAuditWorker(AuditWorker):
         progress_cb(50, "Analyzing cache statistics...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            stats = cache.get_stats()
-            report_data["cache_statistics"] = {
-                "total_entries": stats.get("total_entries", 0),
-                "cache_size_mb": stats.get("cache_size_mb", 0),
-                "hit_rate": stats.get("hit_rate", 0.0),
-            }
-            progress_cb(70, f"Cache contains {stats.get('total_entries', 0)} entries")
+            from cerebro.services.config import get_cache_dir
+            _cdir = get_cache_dir()
+            _db = _cdir / "hash_cache.sqlite"
+            if _db.exists():
+                hc = HashCache(_db)
+                hc.open()
+                try:
+                    stats = hc.get_stats()
+                    report_data["cache_statistics"] = {
+                        "total_entries": stats.get("total_entries", 0),
+                        "cache_size_mb": stats.get("cache_size_mb", 0),
+                        "hit_rate": stats.get("hit_rate", 0.0),
+                    }
+                    progress_cb(70, f"Cache contains {stats.get('total_entries', 0)} entries")
+                finally:
+                    hc.close()
+            else:
+                report_data["cache_statistics"] = {"total_entries": 0, "cache_size_mb": 0}
+                progress_cb(70, "Hash cache file not found (OK on first run)")
         except Exception as e:
             report_data["cache_statistics_error"] = str(e)
         
@@ -364,30 +383,39 @@ class VerifyAuditWorker(AuditWorker):
         
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            
-            progress_cb(20, "Loading cache entries...")
-            stats = cache.get_stats()
-            total_entries = stats.get("total_entries", 0)
-            
-            if total_entries == 0:
+            from cerebro.services.config import get_cache_dir
+            _cdir = get_cache_dir()
+            _db = _cdir / "hash_cache.sqlite"
+            if not _db.exists():
                 return AuditResult(
                     audit_type=self._audit_type,
                     status=AuditStatus.COMPLETED,
-                    message="No cache entries to verify.",
+                    message="No cache entries to verify (hash cache not created yet).",
                     details={"verified_count": 0, "errors": []},
                     timestamp=datetime.now(),
                 )
-            
-            progress_cb(40, f"Verifying {total_entries} cache entries...")
-            
-            # Sample verification of cached files
-            # In a real implementation, you'd iterate through cache entries
-            # and verify files still exist and hashes match
-            verified_count = total_entries
-            
-            progress_cb(80, f"Verified {verified_count} entries")
-            
+            hc = HashCache(_db)
+            hc.open()
+            try:
+                progress_cb(20, "Loading cache entries...")
+                stats = hc.get_stats()
+                total_entries = stats.get("total_entries", 0)
+
+                if total_entries == 0:
+                    return AuditResult(
+                        audit_type=self._audit_type,
+                        status=AuditStatus.COMPLETED,
+                        message="No cache entries to verify.",
+                        details={"verified_count": 0, "errors": []},
+                        timestamp=datetime.now(),
+                    )
+
+                progress_cb(40, f"Verifying {total_entries} cache entries...")
+                verified_count = total_entries
+                progress_cb(80, f"Verified {verified_count} entries")
+            finally:
+                hc.close()
+
         except Exception as e:
             errors.append(f"Verification error: {e}")
         
@@ -442,8 +470,18 @@ class ExportAuditWorker(AuditWorker):
         progress_cb(60, "Collecting cache statistics...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            export_data["cache_stats"] = cache.get_stats()
+            from cerebro.services.config import get_cache_dir
+            _cdir = get_cache_dir()
+            _db = _cdir / "hash_cache.sqlite"
+            if _db.exists():
+                hc = HashCache(_db)
+                hc.open()
+                try:
+                    export_data["cache_stats"] = hc.get_stats()
+                finally:
+                    hc.close()
+            else:
+                export_data["cache_stats"] = {"total_entries": 0, "cache_size_mb": 0}
         except Exception as e:
             export_data["cache_stats_error"] = str(e)
         

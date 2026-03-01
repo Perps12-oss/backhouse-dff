@@ -373,15 +373,22 @@ class PerformanceMonitor(QGroupBox):
             # Update cache stats
             try:
                 from cerebro.services.hash_cache import HashCache
-                cache = HashCache()
-                cache_stats = cache.get_stats()
-                
-                cache_size_mb = cache_stats.get("cache_size_mb", 0)
-                cache_entries = cache_stats.get("total_entries", 0)
-                
-                self._cache_size_label.setText(f"{cache_size_mb:.1f} MB")
-                self._cache_entries_label.setText(f"{cache_entries:,}")
-            except:
+                from cerebro.services.config import get_cache_dir
+                _cdir = get_cache_dir()
+                _db = _cdir / "hash_cache.sqlite"
+                if _db.exists():
+                    hc = HashCache(_db)
+                    hc.open()
+                    try:
+                        cache_stats = hc.get_stats()
+                        self._cache_size_label.setText(f"{cache_stats.get('cache_size_mb', 0):.1f} MB")
+                        self._cache_entries_label.setText(f"{cache_stats.get('total_entries', 0):,}")
+                    finally:
+                        hc.close()
+                else:
+                    self._cache_size_label.setText("0 MB")
+                    self._cache_entries_label.setText("0")
+            except Exception:
                 self._cache_size_label.setText("—")
                 self._cache_entries_label.setText("—")
             
@@ -931,10 +938,17 @@ class HubPage(BaseStation):
         """Optimize cache databases"""
         try:
             from cerebro.services.hash_cache import HashCache
-            
-            cache = HashCache()
-            cache.vacuum()
-            
+            from cerebro.services.config import get_cache_dir
+            _cdir = get_cache_dir()
+            _db = _cdir / "hash_cache.sqlite"
+            if _db.exists():
+                hc = HashCache(_db)
+                hc.open()
+                try:
+                    hc.vacuum()
+                finally:
+                    hc.close()
+
             self._bus.notify(
                 "Optimization complete",
                 "Cache database optimized successfully",
