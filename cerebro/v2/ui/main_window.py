@@ -8,7 +8,7 @@ Handles window lifecycle, panel organization, and keyboard shortcuts.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 from pathlib import Path
 
 try:
@@ -35,6 +35,8 @@ from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings
 from cerebro.v2.ui.folder_panel import FolderPanel
 from cerebro.v2.ui.results_panel import ResultsPanel
 from cerebro.v2.ui.preview_panel import PreviewPanel
+from cerebro.engines.orchestrator import ScanOrchestrator
+from cerebro.engines.base_engine import ScanProgress, ScanState, DuplicateFile
 
 
 class MainWindow(CTk):
@@ -70,6 +72,13 @@ class MainWindow(CTk):
         self._current_scan_mode: str = "files"
         self._scanning: bool = False
         self._preview_collapsed: bool = False
+
+        # Scan engine
+        self._orchestrator = ScanOrchestrator()
+        self._orchestrator.set_mode("files")
+
+        # Preview state: track last clicked file for side-by-side loading
+        self._last_preview_file: Optional[DuplicateFile] = None
 
         # Initialize components
         self._setup_window()
@@ -222,6 +231,7 @@ class MainWindow(CTk):
 
         # Wire results panel callbacks
         self._results_panel.on_selection_changed(self._on_selection_changed)
+        self._results_panel.on_file_selected(self._on_file_selected_in_results)
 
     def _build_selection_bar(self) -> None:
         """Build and install selection bar."""
@@ -319,28 +329,97 @@ class MainWindow(CTk):
             print("No folders to remove")
 
     def _on_start_search(self) -> None:
-        """Handle start search button."""
+        """Handle start search button — wire to orchestrator."""
         folders = self._folder_panel.get_scan_folders()
         if not folders:
-            print("No folders selected for scanning")
+            from tkinter import messagebox
+            messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
             return
 
-        print("Starting search...")
+        if self._orchestrator.is_scanning():
+            return
+
+        # Clear previous results
+        self._results_panel.clear()
+        self._preview_panel.load_file_a({})
+        self._preview_panel.load_file_b({})
+        self._last_preview_file = None
+        self._status_bar.reset()
+
         self._scanning = True
         self._toolbar.set_scanning(True)
         self._status_bar.set_scanning(True)
-        # TODO: Trigger scan with engine orchestrator when implemented
-        # Scan mode: self.get_scan_mode()
-        # Folders: folders
-        # Options: self._folder_panel.get_options()
 
-    def _on_stop_search(self) -> None:
-        """Handle stop search button."""
-        print("Stopping search...")
+        # Switch orchestrator to current mode (fallback to "files" if not yet implemented)
+        mode = self._current_scan_mode
+        available = self._orchestrator.get_available_modes()
+        if mode not in available:
+            mode = "files"
+        self._orchestrator.set_mode(mode)
+
+        protected = self._folder_panel.get_protected_folders()
+        options = self._folder_panel.get_options()
+
+        self._orchestrator.start_scan(
+            folders=folders,
+            protected=protected,
+            options=options,
+            progress_callback=self._on_scan_progress,
+        )
+
+    def _on_scan_progress(self, progress: ScanProgress) -> None:
+        """Receive progress from engine thread — schedule UI update on main thread."""
+        self.after(0, self._apply_scan_progress, progress)
+
+    def _apply_scan_progress(self, progress: ScanProgress) -> None:
+        """Apply a ScanProgress snapshot to the UI (always called on main thread)."""
+        self._status_bar.update_scanned(progress.files_scanned)
+        self._status_bar.update_duplicates(progress.duplicates_found)
+        self._status_bar.update_groups(progress.groups_found)
+        self._status_bar.update_reclaimable(progress.bytes_reclaimable)
+        self._status_bar.update_elapsed(progress.elapsed_seconds)
+
+        if progress.state in (ScanState.COMPLETED,):
+            self._status_bar.update_progress(100.0)
+            self._on_scan_complete()
+        elif progress.state == ScanState.ERROR:
+            self._on_scan_error(progress.current_file)
+        else:
+            # Approximate progress: files_scanned has no total; use indeterminate pulse
+            self._status_bar.update_progress(0.0)
+
+    def _on_scan_complete(self) -> None:
+        """Scan finished — populate results panel."""
         self._scanning = False
         self._toolbar.set_scanning(False)
         self._status_bar.set_scanning(False)
-        # TODO: Cancel scan with engine orchestrator when implemented
+
+        groups = self._orchestrator.get_results()
+        self._results_panel.load_results(groups)
+
+        # Update status bar totals from results
+        total_reclaimable = sum(g.reclaimable for g in groups)
+        self._status_bar.update_reclaimable(total_reclaimable)
+        self._status_bar.update_groups(len(groups))
+        total_dupes = sum(g.file_count for g in groups)
+        self._status_bar.update_duplicates(total_dupes)
+
+    def _on_scan_error(self, error_msg: str) -> None:
+        """Scan encountered an error."""
+        self._scanning = False
+        self._toolbar.set_scanning(False)
+        self._status_bar.set_scanning(False)
+        from tkinter import messagebox
+        messagebox.showerror("Scan Error", f"Scan failed:\n{error_msg}")
+
+    def _on_stop_search(self) -> None:
+        """Handle stop search button — cancel orchestrator."""
+        if not self._scanning:
+            return
+        self._orchestrator.cancel()
+        self._scanning = False
+        self._toolbar.set_scanning(False)
+        self._status_bar.set_scanning(False)
 
     def _on_settings(self) -> None:
         """Handle settings button."""
@@ -388,15 +467,33 @@ github.com/Perps12-oss/dedup"""
         """Handle scan options changes."""
         print(f"Options changed for mode {mode}: {options}")
 
+    def _on_file_selected_in_results(self, file_data: DuplicateFile) -> None:
+        """Wire result-panel single-click to preview panel (A/B side-by-side)."""
+        preview_dict = {
+            "path": str(file_data.path),
+            "size": file_data.size,
+            "modified": file_data.modified,
+            "extension": file_data.extension,
+        }
+        if self._last_preview_file is None:
+            self._preview_panel.load_file_a(preview_dict)
+        else:
+            self._preview_panel.load_file_b(preview_dict)
+        self._last_preview_file = file_data
+
     def _on_keep_a(self) -> None:
-        """Handle keep file A button in preview."""
-        print("Keep A clicked")
-        # TODO: Mark file A as keeper in results
+        """Mark file A as keeper — uncheck it in results panel."""
+        file_a = self._preview_panel._file_a
+        if file_a and file_a.get("path"):
+            self._results_panel.uncheck_path(file_a["path"])
+        self._last_preview_file = None
 
     def _on_keep_b(self) -> None:
-        """Handle keep file B button in preview."""
-        print("Keep B clicked")
-        # TODO: Mark file B as keeper in results
+        """Mark file B as keeper — uncheck it in results panel."""
+        file_b = self._preview_panel._file_b
+        if file_b and file_b.get("path"):
+            self._results_panel.uncheck_path(file_b["path"])
+        self._last_preview_file = None
 
     def _on_mode_changed(self, new_mode: str) -> None:
         """Handle mode tab change."""
@@ -462,14 +559,38 @@ github.com/Perps12-oss/dedup"""
         )
 
         if confirm:
-            # TODO: Actually delete files
-            print(f"Deleting {len(selected_files)} files...")
-            messagebox.showinfo(
-                "Delete",
-                f"Deleted {len(selected_files)} files."
-            )
-            # Clear selection
-            self._on_deselect_all()
+            deleted = []
+            failed = []
+            try:
+                import send2trash
+                use_trash = True
+            except ImportError:
+                use_trash = False
+
+            for f in selected_files:
+                path = Path(f.path)
+                try:
+                    if use_trash:
+                        send2trash.send2trash(str(path))
+                    else:
+                        path.unlink(missing_ok=True)
+                    deleted.append(path)
+                except Exception as exc:
+                    failed.append((path, str(exc)))
+
+            # Remove deleted files from results and update counters
+            if deleted:
+                self._results_panel.remove_paths([str(p) for p in deleted])
+                reclaimed = sum(f.size for f in selected_files if Path(f.path) in deleted)
+                self._status_bar.update_reclaimable(
+                    max(0, self._results_panel.get_reclaimable_space())
+                )
+                self._selection_bar.set_selected_count(0)
+
+            summary = f"Deleted {len(deleted)} file(s)."
+            if failed:
+                summary += f"\n{len(failed)} file(s) could not be deleted."
+            messagebox.showinfo("Delete Complete", summary)
 
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""
@@ -517,9 +638,9 @@ github.com/Perps12-oss/dedup"""
             self._preview_collapsed = not self._preview_collapsed
 
     def _on_refresh(self) -> None:
-        """Handle F5 refresh."""
-        print("Refresh / re-scan")
-        # TODO: Re-scan current folders
+        """Handle F5 refresh — re-run scan with current folders."""
+        if not self._scanning:
+            self._on_start_search()
 
     def _on_escape(self) -> None:
         """Handle Escape key."""

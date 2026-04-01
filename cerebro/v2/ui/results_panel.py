@@ -25,6 +25,7 @@ from cerebro.v2.core.design_tokens import (
     Colors, Spacing, Typography, Dimensions
 )
 from cerebro.v2.ui.widgets.check_treeview import CheckTreeview
+from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
 
 
 class FilterType:
@@ -92,36 +93,6 @@ class FilterType:
             cls.OTHER: []
         }
         return extensions.get(filter_type, [])
-
-
-class DuplicateGroup:
-    """Represents a duplicate group in results."""
-
-    def __init__(
-        self,
-        group_id: int,
-        files: List[Dict[str, Any]],
-        total_size: int = 0,
-        reclaimable: int = 0
-    ):
-        self.group_id = group_id
-        self.files = files
-        self.total_size = total_size
-        self.reclaimable = reclaimable
-
-    @property
-    def file_count(self) -> int:
-        """Get number of files in group."""
-        return len(self.files)
-
-    def get_keeper_index(self) -> int:
-        """Get index of the keeper file (largest by default)."""
-        if not self.files:
-            return 0
-        return max(
-            range(len(self.files)),
-            key=lambda i: self.files[i].get("size", 0)
-        )
 
 
 class ResultsPanel(CTkFrame):
@@ -193,6 +164,7 @@ class ResultsPanel(CTkFrame):
 
         # Bind events
         self._treeview.on_check_changed(self._on_check_changed)
+        self._treeview.bind("<<TreeviewSelect>>", self._on_single_click)
         self._treeview.bind("<Double-Button-1>", self._on_double_click)
         self._treeview.bind("<Button-3>", self._on_right_click)  # Right-click
 
@@ -414,13 +386,40 @@ class ResultsPanel(CTkFrame):
             checked_items = self._treeview.get_checked()
             self._on_selection_changed(checked_items)
 
-    def _on_double_click(self, event) -> None:
-        """Handle double-click on file."""
+    def _get_file_data_for_item(self, item_id: str) -> Optional[DuplicateFile]:
+        """Return the DuplicateFile for a treeview item_id, or None if it's a group row."""
+        parts = item_id.split("_")
+        if len(parts) != 2:
+            return None
+        try:
+            group_id = int(parts[0])
+            file_index = int(parts[1])
+        except ValueError:
+            return None
+        group = next((g for g in self._filtered_groups if g.group_id == group_id), None)
+        if group and file_index < len(group.files):
+            return group.files[file_index]
+        return None
+
+    def _on_single_click(self, event) -> None:
+        """Handle single click — fire file-selected callback for the clicked file row."""
         selection = self._treeview.selection()
-        if selection:
-            item_id = selection[0]
-            # TODO: Get file data and notify callback
-            print(f"Double-clicked: {item_id}")
+        if not selection:
+            return
+        item_id = selection[0]
+        file_data = self._get_file_data_for_item(item_id)
+        if file_data and self._on_file_selected:
+            self._on_file_selected(file_data)
+
+    def _on_double_click(self, event) -> None:
+        """Handle double-click — fire file-double-clicked callback."""
+        selection = self._treeview.selection()
+        if not selection:
+            return
+        item_id = selection[0]
+        file_data = self._get_file_data_for_item(item_id)
+        if file_data and self._on_file_double_clicked:
+            self._on_file_double_clicked(file_data)
 
     def _on_right_click(self, event) -> None:
         """Handle right-click context menu."""
@@ -466,15 +465,14 @@ class ResultsPanel(CTkFrame):
                 # Check if any file in group matches filter
                 filtered_files = [
                     f for f in group.files
-                    if Path(f.get("path", "")).suffix.lower() in filter_extensions
+                    if Path(f.path).suffix.lower() in filter_extensions
                 ]
                 if filtered_files:
-                    # Create new group with filtered files
-                    filtered_group = DuplicateGroup(
+                    # Build a lightweight filtered DuplicateGroup view
+                    from cerebro.engines.base_engine import DuplicateGroup as _DG
+                    filtered_group = _DG(
                         group_id=group.group_id,
                         files=filtered_files,
-                        total_size=sum(f.get("size", 0) for f in filtered_files),
-                        reclaimable=sum(f.get("size", 0) for f in filtered_files[1:])  # Exclude keeper
                     )
                     self._filtered_groups.append(filtered_group)
 
@@ -507,20 +505,20 @@ class ResultsPanel(CTkFrame):
             # Add file items
             for i, file_data in enumerate(group.files):
                 item_id = f"{group.group_id}_{i}"
-                checked = file_data.get("checked", False)
+                # Non-keepers are pre-checked (marked for deletion)
+                is_keeper = (i == group.get_keeper_index()) or file_data.is_keeper
+                checked = not is_keeper
 
                 # Format values
-                path = Path(file_data.get("path", ""))
+                path = Path(file_data.path)
                 values = (
                     path.name,
                     path.suffix,
-                    self._format_bytes(file_data.get("size", 0)),
-                    self._format_date(file_data.get("modified", 0)),
-                    f"{int(file_data.get('similarity', 1.0) * 100)}%"
+                    self._format_bytes(file_data.size),
+                    self._format_date(file_data.modified),
+                    f"{int(file_data.similarity * 100)}%"
                 )
 
-                # Determine keeper
-                is_keeper = (i == group.get_keeper_index())
                 tags = []
                 if is_keeper:
                     tags.append("keeper")
@@ -592,6 +590,60 @@ class ResultsPanel(CTkFrame):
         self._show_empty_state()
         self._update_status()
 
+    def remove_paths(self, paths: List[str]) -> None:
+        """
+        Remove deleted files from in-memory groups and treeview.
+
+        Args:
+            paths: List of file path strings to remove.
+        """
+        path_set = set(paths)
+
+        for group in list(self._groups):
+            # Remove matching files from group
+            removed_indices = [
+                i for i, f in enumerate(group.files)
+                if str(f.path) in path_set
+            ]
+            for i in sorted(removed_indices, reverse=True):
+                item_id = f"{group.group_id}_{i}"
+                try:
+                    self._treeview.delete(item_id)
+                except Exception:
+                    pass
+                group.files.pop(i)
+
+            # Recalculate group derived fields
+            if group.files:
+                group.total_size = sum(f.size for f in group.files)
+                keeper_size = max(f.size for f in group.files)
+                group.reclaimable = group.total_size - keeper_size
+            else:
+                # Remove empty group row and data
+                group_row_id = f"group_{group.group_id}"
+                try:
+                    self._treeview.delete(group_row_id)
+                except Exception:
+                    pass
+                self._groups.remove(group)
+
+        self._filtered_groups = list(self._groups)
+        self._total_items = sum(g.file_count for g in self._groups)
+        self._selected_count = max(0, self._selected_count - len(paths))
+        self._update_status()
+
+        if not self._groups:
+            self._show_empty_state()
+
+    def uncheck_path(self, path: str) -> None:
+        """Uncheck the file row matching path (mark as keeper / keep)."""
+        for group in self._filtered_groups:
+            for i, f in enumerate(group.files):
+                if str(f.path) == path:
+                    item_id = f"{group.group_id}_{i}"
+                    self._treeview.set_check(item_id, False)
+                    return
+
     def get_selected_files(self) -> List[Dict[str, Any]]:
         """
         Get list of selected (checked) files.
@@ -624,7 +676,7 @@ class ResultsPanel(CTkFrame):
             Total bytes reclaimable.
         """
         files = self.get_selected_files()
-        return sum(f.get("size", 0) for f in files)
+        return sum(f.size for f in files)
 
     def get_selected_count(self) -> int:
         """Get count of selected files."""
@@ -664,9 +716,9 @@ class ResultsPanel(CTkFrame):
             for group in self._filtered_groups:
                 keeper_idx = min(
                     range(len(group.files)),
-                    key=lambda i: group.files[i].get("size", float('inf'))
+                    key=lambda i: group.files[i].size
                 )
-                for i, file_data in enumerate(group.files):
+                for i in range(len(group.files)):
                     if i != keeper_idx:
                         item_id = f"{group.group_id}_{i}"
                         self._treeview.set_check(item_id, True)
@@ -677,9 +729,9 @@ class ResultsPanel(CTkFrame):
             for group in self._filtered_groups:
                 keeper_idx = max(
                     range(len(group.files)),
-                    key=lambda i: group.files[i].get("modified", 0)
+                    key=lambda i: group.files[i].modified
                 )
-                for i, file_data in enumerate(group.files):
+                for i in range(len(group.files)):
                     if i != keeper_idx:
                         item_id = f"{group.group_id}_{i}"
                         self._treeview.set_check(item_id, True)
@@ -690,9 +742,9 @@ class ResultsPanel(CTkFrame):
             for group in self._filtered_groups:
                 keeper_idx = min(
                     range(len(group.files)),
-                    key=lambda i: group.files[i].get("modified", float('inf'))
+                    key=lambda i: group.files[i].modified
                 )
-                for i, file_data in enumerate(group.files):
+                for i in range(len(group.files)):
                     if i != keeper_idx:
                         item_id = f"{group.group_id}_{i}"
                         self._treeview.set_check(item_id, True)
