@@ -90,9 +90,22 @@ class PreviewSidePanel(CTkFrame):
                 text_color=theme_color("base.foregroundSecondary")
             ).pack(anchor="w", padx=Spacing.SM, pady=(Spacing.SM, 0))
 
-        # Canvas frame
+        # Canvas frame (with resolution badge overlay)
         canvas_frame = CTkFrame(self)
         canvas_frame.pack(fill="both", expand=True, padx=Spacing.XS)
+
+        # Resolution badge overlay (small label on canvas)
+        self._resolution_badge = CTkLabel(
+            self._canvas,
+            text="-- x --",
+            font=Typography.FONT_XS,
+            text_color="white",
+            background=Colors.ACCENT.hex,
+            corner_radius=4,
+            padx=4,
+            pady=4
+        )
+        # Initially hidden, will show when image loaded
 
         # ZoomCanvas
         self._canvas = ZoomCanvas(
@@ -100,6 +113,19 @@ class PreviewSidePanel(CTkFrame):
             bg_color=theme_color("preview.background")
         )
         self._canvas.pack(fill="both", expand=True)
+
+        # Resolution badge overlay (small label on canvas)
+        self._resolution_badge = CTkLabel(
+            self._canvas,
+            text="-- x --",
+            font=Typography.FONT_XS,
+            text_color="white",
+            background=Colors.ACCENT.hex,
+            corner_radius=4,
+            padx=4,
+            pady=4
+        )
+        # Initially hidden, will show when image loaded
 
         # Metadata frame
         metadata_frame = CTkFrame(
@@ -207,11 +233,40 @@ class PreviewSidePanel(CTkFrame):
         # Load image into canvas
         self._canvas.load_image(path, fit=True)
 
+        # Show resolution badge if image is loaded and has resolution
+        if self._resolution_badge and path.exists():
+            if file_data.get("width") and file_data.get("height"):
+                width = file_data.get("width")
+                height = file_data.get("height")
+                # Place badge at top-right of canvas
+                self._resolution_badge.place(relx=-90, rely=-4)
+                self._current_resolution = (width, height)
+            else:
+                if self._resolution_badge:
+                    self._resolution_badge.place_forget()
+
         # Update metadata
         self._update_metadata(file_data, path)
 
         # Enable keep button
         self._keep_btn.configure(state="normal")
+
+    def _update_metadata(self, file_data: Dict[str, Any], path: Path) -> None:
+        """Update metadata labels from file data."""
+        # Resolution (if available)
+        width = file_data.get("width")
+        height = file_data.get("height")
+
+        if width and height:
+            self._current_resolution = (width, height)
+            self._metadata_labels["resolution"].configure(
+                text=f"{width} × {height}"
+            )
+        else:
+            self._current_resolution = None
+            self._metadata_labels["resolution"].configure(
+                text="-- x -- px"
+            )
 
     def _clear_display(self) -> None:
         """Clear the preview display."""
@@ -221,8 +276,16 @@ class PreviewSidePanel(CTkFrame):
         # TODO: Add clear method to ZoomCanvas or just reset
         self._canvas.reset_view()
 
+        # Hide resolution badge
+        if self._resolution_badge:
+            self._resolution_badge.place_forget()
+
         # Reset metadata labels
         self._metadata_labels["resolution"].configure(text="-- x -- px")
+
+        # Hide resolution badge
+        if self._resolution_badge:
+            self._resolution_badge.place_forget()
         self._metadata_labels["size"].configure(text="0 B")
         self._metadata_labels["format"].configure(text="--")
         self._metadata_labels["date"].configure(text="----/--/--")

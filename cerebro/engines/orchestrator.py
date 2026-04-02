@@ -47,12 +47,12 @@ class ScanOrchestrator:
     def _register_engines(self) -> None:
         """Register all available scan engines."""
         # Engines will be registered here once implemented
-        # For now, we'll create stub entries
         from cerebro.engines.file_dedup_engine import FileDedupEngine
+        from cerebro.engines.image_dedup_engine import ImageDedupEngine
         self._engines["files"] = FileDedupEngine()
+        self._engines["photos"] = ImageDedupEngine()
 
         # Placeholder engines for future implementation
-        # self._engines["photos"] = ImageDedupEngine()
         # self._engines["videos"] = VideoDedupEngine()
         # self._engines["music"] = MusicDedupEngine()
         # self._engines["empty_folders"] = EmptyFolderEngine()
