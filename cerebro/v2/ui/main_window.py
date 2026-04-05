@@ -7,6 +7,7 @@ Handles window lifecycle, panel organization, and keyboard shortcuts.
 
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from typing import Optional, Callable, List, Dict, Any
 from pathlib import Path
@@ -149,6 +150,10 @@ class MainWindow(CTk):
         self._build_preview_panel()
         self._build_status_bar()
 
+        # Post-build setup
+        self.after(100, self._restore_window_state)  # restore after layout settles
+        self.after(200, self._setup_drag_drop)        # DnD after window is mapped
+
     def _build_toolbar(self) -> None:
         """Build and install toolbar."""
         self._toolbar = Toolbar(
@@ -162,6 +167,9 @@ class MainWindow(CTk):
         self._toolbar.on_remove_selected(self._on_remove_path)
         self._toolbar.on_start_search(self._on_start_search)
         self._toolbar.on_stop_search(self._on_stop_search)
+        self._toolbar.on_auto_mark(self._on_auto_mark)
+        self._toolbar.on_delete_selected(self._on_delete_selected)
+        self._toolbar.on_move_to(self._on_move_to)
         self._toolbar.on_settings(self._on_settings)
         self._toolbar.on_help(self._on_help)
 
@@ -238,9 +246,12 @@ class MainWindow(CTk):
         self._folder_panel.on_folders_changed(self._on_folders_changed)
         self._folder_panel.on_protected_changed(self._on_protected_changed)
         self._folder_panel.on_options_changed(self._on_options_changed)
+        self._folder_panel.on_collapse_toggled(self._on_folder_panel_collapse)
 
         # Wire results panel callbacks
         self._results_panel.on_selection_changed(self._on_selection_changed)
+        self._results_panel.on_request_add_folder(self._on_add_path)
+        self._results_panel.on_request_start_search(self._on_start_search)
 
     def _build_selection_bar(self) -> None:
         """Build and install selection bar."""
@@ -294,6 +305,8 @@ class MainWindow(CTk):
         self.bind("<Control-p>", lambda e: self._toggle_preview_panel())
         self.bind("<Control-P>", lambda e: self._toggle_preview_panel())
         self.bind("<Escape>", lambda e: self._on_escape())
+        # Space = toggle checkbox on focused treeview row
+        self.bind("<space>", self._on_space_toggle)
 
         # Mode shortcuts (1-6)
         self.bind("<Key-1>", lambda e: self._set_mode(1))
@@ -366,6 +379,9 @@ class MainWindow(CTk):
         print(f"Protected: {[str(f) for f in protected_folders]}")
         print(f"Options: {scan_options}")
 
+        # Collapse left panel so results get full width
+        self._folder_panel.set_collapsed(True)
+
         # Set mode and start scan
         self._orchestrator.set_mode(scan_mode)
 
@@ -395,33 +411,49 @@ class MainWindow(CTk):
         SettingsDialog.show_dialog(parent=self, settings=None)
 
     def _on_help(self) -> None:
-        """Handle help button."""
-        # Create a simple help dialog
+        """Handle help button — show a small popup menu."""
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Keyboard Shortcuts…", command=self._show_keyboard_help)
+        menu.add_command(label="Scan History…",        command=self._show_scan_history)
+        try:
+            btn = self._toolbar._help_btn
+            x = btn.winfo_rootx()
+            y = btn.winfo_rooty() + btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _show_keyboard_help(self) -> None:
         from tkinter import messagebox
-        help_text = """Cerebro v2 — Help
+        messagebox.showinfo("Keyboard Shortcuts", (
+            "Ctrl+O          Add folder\n"
+            "Ctrl+Enter      Start scan\n"
+            "Escape          Stop scan / close dialog\n"
+            "Delete          Delete selected\n"
+            "Space           Toggle checkbox\n"
+            "Ctrl+A          Select all\n"
+            "Ctrl+D          Deselect all\n"
+            "Ctrl+I          Invert selection\n"
+            "F5              Refresh\n"
+            "Ctrl+P          Toggle preview panel\n"
+            "1–6             Switch scan mode\n"
+        ))
 
-Keyboard Shortcuts:
-Ctrl+O — Add folder
-Ctrl+Enter — Start scan
-Escape — Stop scan
-Ctrl+A — Select all
-Ctrl+D — Deselect all
-Ctrl+I — Invert selection
-F5 — Refresh
-Ctrl+P — Toggle preview panel
-1-6 — Switch scan mode
+    def _show_scan_history(self) -> None:
+        from cerebro.v2.ui.scan_history_dialog import ScanHistoryDialog
+        ScanHistoryDialog.show(parent=self)
 
-Scan Modes:
-1. Files — Duplicate files by hash
-2. Photos — Similar images
-3. Videos — Duplicate videos
-4. Music — Duplicate music files
-5. Empty Folders — Find empty dirs
-6. Large Files — Find large files
-
-For more information, visit:
-github.com/Perps12-oss/dedup"""
-        messagebox.showinfo("Help", help_text)
+    def _on_folder_panel_collapse(self, collapsed: bool) -> None:
+        """Resize paned window sash when left panel collapses/expands."""
+        try:
+            if collapsed:
+                self._horizontal_paned.sash_place(
+                    0, self._folder_panel.COLLAPSED_WIDTH, 0)
+            else:
+                self._horizontal_paned.sash_place(
+                    0, Dimensions.LEFT_PANEL_DEFAULT_WIDTH, 0)
+        except Exception:
+            pass  # PanedWindow variant may not support sash_place
 
     def _on_folders_changed(self, folders: List[Path]) -> None:
         """Handle folder list changes."""
@@ -441,15 +473,18 @@ github.com/Perps12-oss/dedup"""
 
     def _on_scan_progress(self, progress: ScanProgress) -> None:
         """
-        Handle progress updates from scan engine.
+        Handle progress updates from scan engine (called from background thread).
 
         Args:
             progress: ScanProgress object with current scan state.
         """
-        # Update status bar with scan metrics
+        # Marshal all UI updates onto the main thread
+        self.after(0, lambda p=progress: self._handle_progress_on_main(p))
+
+    def _handle_progress_on_main(self, progress: ScanProgress) -> None:
+        """Process a progress update on the main thread."""
         self._update_status_bar(progress)
 
-        # Check if scan finished
         if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
             self._on_scan_finished(progress.state)
 
@@ -519,6 +554,9 @@ github.com/Perps12-oss/dedup"""
         self._toolbar.set_scanning(False)
         self._status_bar.set_scanning(False)
 
+        # Re-expand left panel so user can adjust folders before next scan
+        self._folder_panel.set_collapsed(False)
+
         # Get results from orchestrator
         self._scan_results = self._orchestrator.get_results()
         print(f"Scan finished with state: {final_state}")
@@ -528,22 +566,35 @@ github.com/Perps12-oss/dedup"""
         if self._scan_results:
             self._load_results_to_panel()
 
-        # Show completion message
-        from tkinter import messagebox
+        # Show completion summary in status bar (non-blocking)
         if final_state == ScanState.COMPLETED:
             total_files = sum(len(g.files) for g in self._scan_results)
             reclaimable = sum(g.reclaimable for g in self._scan_results)
-            reclaimable_str = self._format_bytes(reclaimable)
-            messagebox.showinfo(
-                "Scan Complete",
-                f"Found {len(self._scan_results)} duplicate groups\n"
-                f"Total files: {total_files}\n"
-                f"Space reclaimable: {reclaimable_str}"
-            )
-        elif final_state == ScanState.CANCELLED:
-            messagebox.showinfo("Scan Cancelled", "Scan was cancelled by user.")
-        elif final_state == ScanState.ERROR:
-            messagebox.showerror("Scan Error", "An error occurred during scanning.")
+            elapsed = time.time() - self._scan_start_time if self._scan_start_time > 0 else 0.0
+
+            # Record this scan in history
+            try:
+                from cerebro.v2.ui.scan_history_dialog import record_scan
+                record_scan(
+                    mode=self._current_scan_mode,
+                    folders=[str(f) for f in self._folder_panel.get_scan_folders()],
+                    groups_found=len(self._scan_results),
+                    files_found=total_files,
+                    bytes_reclaimable=reclaimable,
+                    duration_seconds=elapsed,
+                )
+            except Exception:
+                pass
+
+            self._status_bar.update_metrics(StatusBarMetrics(
+                files_scanned=total_files,
+                duplicates_found=total_files - len(self._scan_results),
+                groups_found=len(self._scan_results),
+                bytes_reclaimable=reclaimable,
+                elapsed_seconds=elapsed,
+                is_scanning=False,
+                progress_percent=100.0,
+            ))
 
     def _load_results_to_panel(self) -> None:
         """Load scan results into the results panel."""
@@ -693,17 +744,66 @@ github.com/Perps12-oss/dedup"""
                 break
 
     def _on_mode_changed(self, new_mode: str) -> None:
-        """Handle mode tab change."""
+        """Handle mode tab change — full page-swap: clear results, update UI, reconfigure engine."""
+        if self._scanning:
+            return  # don't switch mid-scan
         self._current_scan_mode = new_mode
-        print(f"Mode changed to: {new_mode}")
 
-        # Update folder panel options
+        # Clear stale results from previous mode
+        self._scan_results.clear()
+        if hasattr(self, '_results_panel') and self._results_panel:
+            self._results_panel.clear()
+
+        # Update left panel scan options for this mode
         if hasattr(self, '_folder_panel') and self._folder_panel:
             self._folder_panel.set_scan_mode(new_mode)
 
-        # Update results panel columns
+        # Update results treeview columns for this mode
         if hasattr(self, '_results_panel') and self._results_panel:
             self._results_panel.set_mode(new_mode)
+
+        # Switch orchestrator to the new engine (if available for this mode)
+        try:
+            self._orchestrator.set_mode(new_mode)
+        except ValueError:
+            pass  # engine not available yet (e.g. videos without FFmpeg)
+
+    def _on_auto_mark(self, rule: str) -> None:
+        """Handle Auto Mark dropdown selection from toolbar."""
+        self._results_panel.apply_selection_rule(rule)
+        count = self._results_panel.get_selected_count()
+        self._selection_bar.set_selected_count(count)
+        self._toolbar.set_has_selection(count > 0)
+
+    def _on_move_to(self) -> None:
+        """Handle Move To toolbar button — ask for destination, move checked files."""
+        from tkinter import filedialog
+        selected_files = self._results_panel.get_selected_files()
+        if not selected_files:
+            return
+        dest = filedialog.askdirectory(title="Move files to…")
+        if not dest:
+            return
+        import shutil
+        dest_path = Path(dest)
+        moved, errors = 0, []
+        for f in selected_files:
+            src = Path(f.get("path", ""))
+            if src.exists():
+                try:
+                    shutil.move(str(src), str(dest_path / src.name))
+                    moved += 1
+                except Exception as exc:
+                    errors.append(str(exc))
+        msg = f"Moved {moved} file(s) to {dest_path}"
+        if errors:
+            msg += f"\n{len(errors)} error(s) — check console."
+            for e in errors:
+                print(f"Move error: {e}")
+        from tkinter import messagebox
+        messagebox.showinfo("Move Complete", msg)
+        # Refresh results
+        self._on_refresh()
 
     def _on_apply_rule(self, rule: str) -> None:
         """Handle apply selection rule."""
@@ -749,10 +849,11 @@ github.com/Perps12-oss/dedup"""
         reclaimable_str = self._format_bytes(reclaimable_space)
 
         confirm = messagebox.askyesno(
-            "Confirm Delete",
-            f"Are you sure you want to delete {len(selected_files)} files?\n\n"
-            f"Reclaimable space: {reclaimable_str}\n\n"
-            f"This action cannot be undone."
+            "Send to Recycle Bin",
+            f"Send {len(selected_files)} files to the Recycle Bin?\n\n"
+            f"Space freed: {reclaimable_str}\n\n"
+            f"You can restore them from the Recycle Bin if needed.",
+            icon="warning"
         )
 
         if confirm:
@@ -772,17 +873,18 @@ github.com/Perps12-oss/dedup"""
                 return
 
             # Delete each selected file
+            deleted_paths: List[str] = []
             for file_data in selected_files:
                 file_path = Path(file_data.get("path", ""))
                 try:
                     send2trash(str(file_path))
                     success_count += 1
+                    deleted_paths.append(str(file_path))
                 except Exception as e:
                     failed_files.append((str(file_path), str(e)))
 
-            # Show result
-            from tkinter import messagebox
             if failed_files:
+                from tkinter import messagebox
                 failed_list = "\n".join(f"{f}: {e}" for f, e in failed_files[:5])
                 more = f"\n... and {len(failed_files) - 5} more" if len(failed_files) > 5 else ""
                 messagebox.showwarning(
@@ -790,12 +892,9 @@ github.com/Perps12-oss/dedup"""
                     f"Deleted {success_count}/{len(selected_files)} files.\n\n"
                     f"Failed:\n{failed_list}{more}"
                 )
-            else:
-                messagebox.showinfo(
-                    "Delete Complete",
-                    f"Successfully deleted {success_count} files.\n\n"
-                    f"Reclaimed: {reclaimable_str}"
-                )
+            elif success_count > 0:
+                # Non-blocking undo toast instead of messagebox
+                _UndoToast(self, success_count, reclaimable_str, deleted_paths)
 
             # Remove deleted files from results
             self._remove_deleted_files(selected_files)
@@ -847,10 +946,12 @@ github.com/Perps12-oss/dedup"""
 
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""
+        has_sel = len(checked_items) > 0
         # Update selection bar counter
         self._selection_bar.set_selected_count(len(checked_items))
-        # Enable/disable delete button based on selection
-        self._selection_bar.set_delete_enabled(len(checked_items) > 0)
+        self._selection_bar.set_delete_enabled(has_sel)
+        # Keep toolbar Delete / Move To in sync
+        self._toolbar.set_has_selection(has_sel)
 
         # Update preview panel
         self._update_preview_panel(checked_items)
@@ -919,8 +1020,93 @@ github.com/Perps12-oss/dedup"""
 
     def _on_configure(self, event) -> None:
         """Handle window resize."""
-        # Can be used for responsive layout adjustments
         pass
+
+    def _on_space_toggle(self, event) -> None:
+        """Space bar: toggle the checkbox on the currently focused treeview row."""
+        try:
+            tv = self._results_panel._treeview
+            focused = tv.focus()
+            if focused and focused not in tv._group_rows:
+                tv.toggle_check(focused)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop support (tkinterdnd2 optional)
+    # ------------------------------------------------------------------
+
+    def _setup_drag_drop(self) -> None:
+        """Register this window as a folder drop target (tkinterdnd2 optional)."""
+        try:
+            # tkinterdnd2 patches Tk/CTk with DnD support
+            self.drop_target_register("DND_Files")
+            self.dnd_bind("<<Drop>>", self._on_dnd_drop)
+        except Exception:
+            pass  # library not installed — silent fallback
+
+    def _on_dnd_drop(self, event) -> None:
+        """Handle files/folders dropped onto the window."""
+        raw = event.data
+        # tkinterdnd2 delivers paths space-separated or {braced}
+        import re
+        paths = re.findall(r'\{([^}]+)\}|(\S+)', raw)
+        for braced, plain in paths:
+            p = Path(braced or plain)
+            if p.is_dir():
+                self._on_add_path_explicit(p)
+
+    def _on_add_path_explicit(self, path: Path) -> None:
+        """Add a specific folder path (used by drag-drop and getting-started)."""
+        try:
+            self._folder_panel.set_scan_folders(
+                list(dict.fromkeys(self._folder_panel.get_scan_folders() + [path]))
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Window state persistence
+    # ------------------------------------------------------------------
+
+    _STATE_FILE = Path.home() / ".cerebro" / "window_state.json"
+
+    def _save_window_state(self) -> None:
+        """Persist window geometry and last-used folders."""
+        import json
+        state = {
+            "geometry": self.geometry(),
+            "folders": [str(f) for f in self._folder_panel.get_scan_folders()],
+            "mode": self._current_scan_mode,
+        }
+        try:
+            self._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._STATE_FILE.write_text(json.dumps(state, indent=2))
+        except Exception:
+            pass
+
+    def _restore_window_state(self) -> None:
+        """Restore last window geometry and folders if state file exists."""
+        import json
+        try:
+            if not self._STATE_FILE.exists():
+                return
+            state = json.loads(self._STATE_FILE.read_text())
+            geo = state.get("geometry")
+            if geo:
+                self.geometry(geo)
+            folders = [Path(f) for f in state.get("folders", []) if Path(f).is_dir()]
+            if folders:
+                self._folder_panel.set_scan_folders(folders)
+            mode = state.get("mode")
+            if mode:
+                try:
+                    self._mode_tabs.set_mode(mode)
+                    self._current_scan_mode = mode
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _apply_theme(self) -> None:
         """Apply current theme colors to all themed widgets."""
@@ -933,9 +1119,10 @@ github.com/Perps12-oss/dedup"""
             pass
 
     def _on_close(self) -> None:
-        """Handle window close event."""
-        print("Closing application...")
-        # TODO: Save window state, clean up resources
+        """Handle window close — save state then quit."""
+        self._save_window_state()
+        if self._scanning:
+            self._orchestrator.cancel()
         self.quit()
 
     # ===================
@@ -999,6 +1186,116 @@ def run_app() -> None:
 
 if __name__ == "__main__":
     run_app()
+
+
+# =============================================================================
+# Undo Toast — non-blocking notification after send2trash
+# =============================================================================
+
+class _UndoToast:
+    """
+    Floating toast that appears at the bottom-right of the parent window
+    after files are moved to the Recycle Bin.
+
+    Dismisses automatically after TIMEOUT_S seconds or when the user
+    clicks Undo (which attempts OS-level restore from Trash).
+    """
+
+    TIMEOUT_S = 30
+    BG = "#1e2430"
+    FG = "#e0e0e0"
+    ACCENT = "#4fc3f7"
+
+    def __init__(self, parent: tk.Wm, count: int, size_str: str,
+                 deleted_paths: List[str]) -> None:
+        self._parent = parent
+        self._deleted = deleted_paths
+        self._after_id = None
+
+        self._win = tk.Toplevel(parent)
+        self._win.overrideredirect(True)
+        self._win.attributes("-topmost", True)
+        try:
+            self._win.attributes("-alpha", 0.95)
+        except Exception:
+            pass
+
+        # Content
+        frame = tk.Frame(self._win, bg=self.BG, padx=14, pady=10)
+        frame.pack(fill="both")
+
+        tk.Label(
+            frame,
+            text=f"🗑  {count} file{'s' if count != 1 else ''} moved to Recycle Bin  ({size_str})",
+            bg=self.BG, fg=self.FG,
+            font=("", 10),
+        ).pack(side="left", padx=(0, 16))
+
+        tk.Button(
+            frame, text="Undo", bg=self.ACCENT, fg="#000",
+            relief="flat", padx=8, pady=2, font=("", 10, "bold"),
+            cursor="hand2",
+            command=self._undo,
+        ).pack(side="left")
+
+        tk.Button(
+            frame, text="✕", bg=self.BG, fg=self.FG,
+            relief="flat", padx=6, font=("", 10),
+            cursor="hand2",
+            command=self._dismiss,
+        ).pack(side="left", padx=(8, 0))
+
+        # Position: bottom-right of parent
+        self._win.update_idletasks()
+        px = parent.winfo_rootx() + parent.winfo_width()  - self._win.winfo_width() - 24
+        py = parent.winfo_rooty() + parent.winfo_height() - self._win.winfo_height() - 40
+        self._win.geometry(f"+{px}+{py}")
+
+        # Auto-dismiss
+        self._after_id = parent.after(self.TIMEOUT_S * 1000, self._dismiss)
+
+    def _dismiss(self) -> None:
+        try:
+            if self._after_id:
+                self._parent.after_cancel(self._after_id)
+            self._win.destroy()
+        except Exception:
+            pass
+
+    def _undo(self) -> None:
+        """Attempt to restore trashed files from the platform Recycle Bin."""
+        import sys, subprocess
+        restored = 0
+        if sys.platform == "win32":
+            # On Windows, open the Recycle Bin so the user can restore manually
+            try:
+                subprocess.Popen("explorer.exe shell:RecycleBinFolder")
+                restored = -1  # sentinel = opened folder, not auto-restored
+            except Exception:
+                pass
+        elif sys.platform == "darwin":
+            try:
+                subprocess.Popen(["open", os.path.expanduser("~/.Trash")])
+                restored = -1
+            except Exception:
+                pass
+        else:
+            # Linux/XDG: try trash-restore or open file manager
+            try:
+                trash_dir = Path.home() / ".local" / "share" / "Trash" / "files"
+                subprocess.Popen(["xdg-open", str(trash_dir)])
+                restored = -1
+            except Exception:
+                pass
+
+        if restored == -1:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Undo",
+                "The Recycle Bin has been opened.\n"
+                "Select the files and choose 'Restore' to recover them.",
+            )
+        self._dismiss()
 
 
 # Simple logger fallback

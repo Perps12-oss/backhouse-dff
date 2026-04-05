@@ -15,11 +15,9 @@ try:
     import customtkinter as ctk
     CTkFrame = ctk.CTkFrame
     CTkLabel = ctk.CTkLabel
-    CTkSegmentedButton = ctk.CTkSegmentedButton
 except ImportError:
     CTkFrame = tk.Frame
     CTkLabel = tk.Label
-    CTkSegmentedButton = tk.Frame
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
@@ -148,7 +146,7 @@ class ResultsPanel(CTkFrame):
         self._selected_count: int = 0
 
         # Widgets
-        self._filter_tabs: Optional[CTkSegmentedButton] = None
+        self._filter_bar: Optional[_FilterBar] = None
         self._treeview: Optional[CheckTreeview] = None
         self._empty_label: Optional[CTkLabel] = None
         self._status_frame: Optional[CTkFrame] = None
@@ -169,8 +167,9 @@ class ResultsPanel(CTkFrame):
             fg_color=theme_color("results.background")
         )
 
-        # Filter tabs bar
-        self._build_filter_tabs()
+        # Filter tab bar — hidden until load_results() is called with data
+        self._filter_bar = _FilterBar(self, on_filter_changed=self._on_filter_changed)
+        # NOT packed here — shown only post-scan
 
         # Status bar (results count)
         self._build_status_bar()
@@ -196,13 +195,14 @@ class ResultsPanel(CTkFrame):
         self._treeview.bind("<Double-Button-1>", self._on_double_click)
         self._treeview.bind("<Button-3>", self._on_right_click)  # Right-click
 
-        # Empty state label
-        self._empty_label = CTkLabel(
-            self,
-            text="No results to display.\nAdd folders and click 'Start Search' to begin.",
-            font=Typography.FONT_MD,
-            text_color=theme_color("base.foregroundMuted")
-        )
+        # Getting-started / empty state view
+        self._empty_view = _GettingStartedView(self)
+        self._empty_view.on_add_folder(self._on_gs_add_folder)
+        self._empty_view.on_start_search(self._on_gs_start_search)
+
+        # Callbacks that MainWindow wires up for getting-started actions
+        self._on_request_add_folder: Optional[Callable[[], None]] = None
+        self._on_request_start_search: Optional[Callable[[], None]] = None
 
     def _apply_theme(self) -> None:
         """Reconfigure all widget colors when theme changes."""
@@ -211,30 +211,6 @@ class ResultsPanel(CTkFrame):
             self._status_frame.configure(fg_color=theme_color("base.backgroundTertiary"))
         if self._results_count_label:
             self._results_count_label.configure(text_color=theme_color("results.foreground"))
-        if self._empty_label:
-            self._empty_label.configure(text_color=theme_color("base.foregroundMuted"))
-
-    def _build_filter_tabs(self) -> None:
-        """Build filter tabs bar."""
-        filter_frame = CTkFrame(
-            self,
-            height=Dimensions.MODE_TABS_HEIGHT
-        )
-        filter_frame.pack(fill="x", padx=Spacing.XS, pady=(Spacing.SM, 0))
-
-        self._filter_tabs = CTkSegmentedButton(
-            filter_frame,
-            values=FilterType.display_names(),
-            font=Typography.FONT_SM
-        )
-        self._filter_tabs.pack(fill="x", padx=Spacing.SM, pady=Spacing.XS)
-
-        # Configure filter tabs callback
-        try:
-            self._filter_tabs.configure(command=self._on_filter_changed)
-        except AttributeError:
-            # Fallback for non-CustomTkinter
-            pass
 
     def _build_status_bar(self) -> None:
         """Build results count status bar."""
@@ -395,21 +371,10 @@ class ResultsPanel(CTkFrame):
     # EVENT HANDLERS
     # ===================
 
-    def _on_filter_changed(self, value: str) -> None:
-        """Handle filter tab change."""
-        # Convert display name back to filter type
-        filter_map = {
-            "All": FilterType.ALL,
-            "Images": FilterType.IMAGES,
-            "Videos": FilterType.VIDEOS,
-            "Docs": FilterType.DOCUMENTS,
-            "Audio": FilterType.AUDIO,
-            "Other": FilterType.OTHER
-        }
-
-        new_filter = filter_map.get(value, FilterType.ALL)
-        if new_filter != self._current_filter:
-            self._current_filter = new_filter
+    def _on_filter_changed(self, filter_key: str) -> None:
+        """Handle filter tab change — receives a FilterType key directly."""
+        if filter_key != self._current_filter:
+            self._current_filter = filter_key
             self._apply_filter()
 
     def _on_check_changed(self, item_id: str, checked: bool) -> None:
@@ -433,15 +398,139 @@ class ResultsPanel(CTkFrame):
             print(f"Double-clicked: {item_id}")
 
     def _on_right_click(self, event) -> None:
-        """Handle right-click context menu."""
-        # TODO: Show context menu with:
-        # - Open file
-        # - Open containing folder
-        # - Copy path
-        # - Select group
-        # - Deselect group
-        # - Properties
-        print("Right-click context menu")
+        """Show context menu on right-click."""
+        # Identify clicked row
+        item_id = self._treeview.identify_row(event.y)
+        if not item_id:
+            return
+
+        is_group = item_id in self._treeview._group_rows
+        file_data = None if is_group else self._get_file_data_by_item_id(item_id)
+
+        menu = tk.Menu(self, tearoff=0)
+
+        if file_data:
+            path = file_data.get("path", "")
+            menu.add_command(label="Open File",
+                             command=lambda: self._open_file(path))
+            menu.add_command(label="Open Containing Folder",
+                             command=lambda: self._open_folder(path))
+            menu.add_command(label="Copy Path",
+                             command=lambda: self._copy_path(path))
+            menu.add_separator()
+            menu.add_command(label="Select Group",
+                             command=lambda: self._select_group_for_item(item_id))
+            menu.add_command(label="Deselect Group",
+                             command=lambda: self._deselect_group_for_item(item_id))
+            menu.add_separator()
+            menu.add_command(label="Properties",
+                             command=lambda: self._show_properties(file_data))
+        elif is_group:
+            menu.add_command(label="Select Group",
+                             command=lambda: self._select_group_by_row(item_id))
+            menu.add_command(label="Deselect Group",
+                             command=lambda: self._deselect_group_by_row(item_id))
+
+        if menu.index("end") is not None:
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+    # ------------------------------------------------------------------
+    # Context menu actions
+    # ------------------------------------------------------------------
+
+    def _open_file(self, path: str) -> None:
+        import sys, subprocess
+        try:
+            if sys.platform == "win32":
+                import os; os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Open File", f"Could not open file:\n{exc}")
+
+    def _open_folder(self, path: str) -> None:
+        import sys, subprocess
+        folder = str(Path(path).parent)
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Open Folder", f"Could not open folder:\n{exc}")
+
+    def _copy_path(self, path: str) -> None:
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+        except Exception:
+            pass
+
+    def _select_group_for_item(self, item_id: str) -> None:
+        parent = self._treeview.parent(item_id) or item_id
+        self._set_group_checks(parent, True)
+
+    def _deselect_group_for_item(self, item_id: str) -> None:
+        parent = self._treeview.parent(item_id) or item_id
+        self._set_group_checks(parent, False)
+
+    def _select_group_by_row(self, group_row_id: str) -> None:
+        self._set_group_checks(group_row_id, True)
+
+    def _deselect_group_by_row(self, group_row_id: str) -> None:
+        self._set_group_checks(group_row_id, False)
+
+    def _set_group_checks(self, group_row_id: str, checked: bool) -> None:
+        for child in self._treeview.get_children(group_row_id):
+            self._treeview.set_check(child, checked)
+        if self._on_selection_changed:
+            self._on_selection_changed(self._treeview.get_checked())
+
+    def _show_properties(self, file_data: Dict[str, Any]) -> None:
+        from tkinter import messagebox
+        from datetime import datetime
+        path = file_data.get("path", "—")
+        size = file_data.get("size", 0)
+        modified = file_data.get("modified", 0)
+        similarity = file_data.get("similarity", 1.0)
+        size_str = self._format_bytes(size)
+        mod_str = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S") if modified else "—"
+        sim_str = f"{int(similarity * 100)}%"
+        messagebox.showinfo(
+            "File Properties",
+            f"Path:       {path}\n"
+            f"Size:       {size_str}\n"
+            f"Modified:   {mod_str}\n"
+            f"Similarity: {sim_str}",
+        )
+
+    def _get_file_data_by_item_id(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve an item_id like '3_1' to its file_data dict."""
+        try:
+            parts = item_id.split("_")
+            if len(parts) == 2:
+                group_id, file_idx = int(parts[0]), int(parts[1])
+                group = next((g for g in self._filtered_groups if g.group_id == group_id), None)
+                if group and file_idx < len(group.files):
+                    fd = group.files[file_idx]
+                    # Normalise to dict (file objects may be DuplicateFile dataclasses or dicts)
+                    if hasattr(fd, "__dict__"):
+                        d = {k: getattr(fd, k) for k in ("path", "size", "modified", "similarity")}
+                        d["path"] = str(d["path"])
+                        return d
+                    return fd
+        except Exception:
+            pass
+        return None
 
     def _sort_by(self, column: str) -> None:
         """Sort treeview by column."""
@@ -460,8 +549,39 @@ class ResultsPanel(CTkFrame):
         """
         self._groups = groups
         self._total_items = sum(g.file_count for g in groups)
+
+        # Show filter bar with per-type counts (only when there are results)
+        if groups:
+            counts = self._compute_filter_counts(groups)
+            self._filter_bar.update_counts(counts)
+            if not self._filter_bar.winfo_ismapped():
+                self._filter_bar.pack(
+                    fill="x", padx=Spacing.XS,
+                    pady=(Spacing.XS, 0),
+                    before=self._status_frame,
+                )
+
         self._apply_filter()
         self._update_status()
+
+    def _compute_filter_counts(self, groups: List[DuplicateGroup]) -> Dict[str, int]:
+        """Count files per filter type across all groups."""
+        counts: Dict[str, int] = {ft: 0 for ft in FilterType.all_filters()}
+        for group in groups:
+            for file_data in group.files:
+                ext = Path(file_data.get("path", "")).suffix.lower()
+                matched = False
+                for ft in (FilterType.IMAGES, FilterType.VIDEOS,
+                           FilterType.DOCUMENTS, FilterType.AUDIO):
+                    if ext in FilterType.extensions_for_filter(ft):
+                        counts[ft] += 1
+                        counts[FilterType.ALL] += 1
+                        matched = True
+                        break
+                if not matched:
+                    counts[FilterType.OTHER] += 1
+                    counts[FilterType.ALL] += 1
+        return counts
 
     def _apply_filter(self) -> None:
         """Apply current filter to groups and refresh treeview."""
@@ -544,19 +664,26 @@ class ResultsPanel(CTkFrame):
                 )
 
     def _show_empty_state(self) -> None:
-        """Show empty state message."""
+        """Show getting-started / empty state view."""
         if self._treeview.winfo_ismapped():
             self._treeview.pack_forget()
-        if self._empty_label.winfo_ismapped():
-            self._empty_label.pack_forget()
-        self._empty_label.pack(expand=True)
+        if not self._empty_view.winfo_ismapped():
+            self._empty_view.pack(fill="both", expand=True)
 
     def _show_results(self) -> None:
-        """Show results (treeview)."""
-        if self._empty_label.winfo_ismapped():
-            self._empty_label.pack_forget()
+        """Show results treeview, hide empty state."""
+        if self._empty_view.winfo_ismapped():
+            self._empty_view.pack_forget()
         if not self._treeview.winfo_ismapped():
             self._treeview.pack(fill="both", expand=True)
+
+    def _on_gs_add_folder(self) -> None:
+        if self._on_request_add_folder:
+            self._on_request_add_folder()
+
+    def _on_gs_start_search(self) -> None:
+        if self._on_request_start_search:
+            self._on_request_start_search()
 
     def _update_status(self) -> None:
         """Update results count label."""
@@ -599,6 +726,9 @@ class ResultsPanel(CTkFrame):
         self._total_items = 0
         self._selected_count = 0
         self._treeview.clear()
+        # Hide filter bar — only shown post-scan
+        if self._filter_bar.winfo_ismapped():
+            self._filter_bar.pack_forget()
         self._show_empty_state()
         self._update_status()
 
@@ -708,6 +838,71 @@ class ResultsPanel(CTkFrame):
                         self._treeview.set_check(item_id, True)
                         self._selected_count += 1
 
+        elif rule == "select_except_first":
+            # Keep first file in each group (index 0), select all others
+            for group in self._filtered_groups:
+                for i in range(1, len(group.files)):
+                    item_id = f"{group.group_id}_{i}"
+                    self._treeview.set_check(item_id, True)
+                    self._selected_count += 1
+
+        elif rule == "select_except_highest_resolution":
+            # For image/video groups: keep highest resolution, select others
+            for group in self._filtered_groups:
+                best_idx = 0
+                best_res = -1
+                for i, fd in enumerate(group.files):
+                    meta = fd.get("metadata", {}) if isinstance(fd, dict) else getattr(fd, "metadata", {})
+                    w = meta.get("width", 0) or 0
+                    h = meta.get("height", 0) or 0
+                    res = w * h
+                    if res > best_res:
+                        best_res = res
+                        best_idx = i
+                for i in range(len(group.files)):
+                    if i != best_idx:
+                        item_id = f"{group.group_id}_{i}"
+                        self._treeview.set_check(item_id, True)
+                        self._selected_count += 1
+
+        elif rule == "select_in_folder":
+            # Prompt user for a folder; select all files inside it
+            from tkinter import filedialog
+            folder = filedialog.askdirectory(title="Select folder — mark files inside it")
+            if folder:
+                folder_path = Path(folder)
+                for group in self._filtered_groups:
+                    for i, fd in enumerate(group.files):
+                        path_str = fd.get("path", "") if isinstance(fd, dict) else str(getattr(fd, "path", ""))
+                        try:
+                            if Path(path_str).is_relative_to(folder_path):
+                                item_id = f"{group.group_id}_{i}"
+                                self._treeview.set_check(item_id, True)
+                                self._selected_count += 1
+                        except Exception:
+                            pass
+
+        elif rule == "select_by_extension":
+            # Prompt user for extensions (comma-separated); select matching files
+            from tkinter.simpledialog import askstring
+            raw = askstring(
+                "Select by Extension",
+                "Enter extensions to mark (comma-separated, e.g. .jpg,.png):"
+            )
+            if raw:
+                exts = {e.strip().lower().lstrip(".") for e in raw.split(",")}
+                exts = {f".{e}" if not e.startswith(".") else e for e in exts}
+                for group in self._filtered_groups:
+                    for i, fd in enumerate(group.files):
+                        path_str = fd.get("path", "") if isinstance(fd, dict) else str(getattr(fd, "path", ""))
+                        if Path(path_str).suffix.lower() in exts:
+                            item_id = f"{group.group_id}_{i}"
+                            self._treeview.set_check(item_id, True)
+                            self._selected_count += 1
+
+        elif rule == "clear_all":
+            pass  # already cleared above
+
         elif rule == "invert_selection":
             self._treeview.invert_checks()
             self._selected_count = self._total_items - self._selected_count
@@ -738,18 +933,242 @@ class ResultsPanel(CTkFrame):
         self._on_file_double_clicked = callback
 
     def set_mode(self, mode: str) -> None:
-        """
-        Set active scan mode and update columns.
-
-        Args:
-            mode: The scan mode from ScanMode class.
-        """
+        """Set active scan mode and update columns."""
         from cerebro.v2.ui.mode_tabs import ScanMode
-
         if mode not in ScanMode.all_modes():
             return
-
         self._configure_columns_for_mode(mode)
+
+    def on_request_add_folder(self, cb: Callable[[], None]) -> None:
+        """Wire getting-started 'Add Folder' button to MainWindow."""
+        self._on_request_add_folder = cb
+
+    def on_request_start_search(self, cb: Callable[[], None]) -> None:
+        """Wire getting-started 'Search Now' button to MainWindow."""
+        self._on_request_start_search = cb
+
+
+# ---------------------------------------------------------------------------
+# Getting-started / empty state view
+# ---------------------------------------------------------------------------
+
+class _GettingStartedView(CTkFrame):
+    """
+    Pre-scan onboarding view shown in the results area when no scan has run.
+
+    Layout:
+        ① Add a folder       [+ Add Folder]
+        ② Click Search Now   [▶ Search Now]
+        (brief tagline below)
+    """
+
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_add_folder: Optional[Callable[[], None]] = None
+        self._on_start_search: Optional[Callable[[], None]] = None
+
+        subscribe_to_theme(self, self._apply_theme)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        self.configure(fg_color=theme_color("results.background"))
+
+        # Centre-align everything vertically
+        outer = CTkFrame(self, fg_color="transparent")
+        outer.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Headline
+        CTkLabel(
+            outer,
+            text="Find duplicate files",
+            font=("", 22, "bold"),
+            text_color=theme_color("base.foreground"),
+        ).pack(pady=(0, Spacing.SM))
+
+        CTkLabel(
+            outer,
+            text="Add the folders you want to scan, then hit Search Now.",
+            font=Typography.FONT_MD,
+            text_color=theme_color("base.foregroundSecondary"),
+        ).pack(pady=(0, Spacing.XL if hasattr(Spacing, "XL") else 24))
+
+        # Step rows
+        steps_frame = CTkFrame(outer, fg_color="transparent")
+        steps_frame.pack()
+
+        self._add_step(steps_frame, "1", "Choose a folder to scan",
+                       "+ Add Folder", "button.primary", "button.primaryHover",
+                       self._click_add)
+
+        # Spacer between steps
+        CTkFrame(steps_frame, height=Spacing.MD,
+                 fg_color="transparent").pack()
+
+        self._search_btn_row = self._add_step(
+            steps_frame, "2", "Start the search",
+            "▶  Search Now", "feedback.success", "feedback.success",
+            self._click_search)
+
+        # Tagline
+        CTkLabel(
+            outer,
+            text="Cerebro v2  —  fast duplicate finder",
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundMuted"),
+        ).pack(pady=(Spacing.XL if hasattr(Spacing, "XL") else 24, 0))
+
+    def _add_step(self, parent, number: str, label: str,
+                  btn_text: str, color_key: str, hover_key: str,
+                  command) -> CTkFrame:
+        row = CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x")
+
+        # Step number badge
+        badge = CTkLabel(
+            row, text=number, width=28, height=28,
+            font=("", 13, "bold"),
+            text_color="white",
+            fg_color=theme_color(color_key),
+            corner_radius=14,
+        )
+        badge.pack(side="left", padx=(0, Spacing.SM))
+
+        CTkLabel(
+            row, text=label, font=Typography.FONT_MD,
+            text_color=theme_color("base.foreground"),
+        ).pack(side="left", padx=(0, Spacing.MD))
+
+        btn = CTkButton(
+            row, text=btn_text, width=140, height=36,
+            font=Typography.FONT_MD,
+            fg_color=theme_color(color_key),
+            hover_color=theme_color(hover_key),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
+        )
+        btn.pack(side="left")
+        btn.configure(command=command)
+        return row
+
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("results.background"))
+        except Exception:
+            pass
+
+    def _click_add(self) -> None:
+        if self._on_add_folder:
+            self._on_add_folder()
+
+    def _click_search(self) -> None:
+        if self._on_start_search:
+            self._on_start_search()
+
+    def on_add_folder(self, cb: Callable[[], None]) -> None:
+        self._on_add_folder = cb
+
+    def on_start_search(self, cb: Callable[[], None]) -> None:
+        self._on_start_search = cb
+
+
+class _FilterBar(CTkFrame):
+    """
+    Post-scan result filter tab row.
+
+    Hidden by default; shown by ResultsPanel.load_results() once results arrive.
+    Displays per-type counts:  All (347) | Images (120) | Videos (45) | Audio (89) | Docs (93) | Other (0)
+
+    Emits the FilterType key (not display name) via on_filter_changed callback.
+    """
+
+    _TABS = [
+        (FilterType.ALL,       "All"),
+        (FilterType.IMAGES,    "Images"),
+        (FilterType.VIDEOS,    "Videos"),
+        (FilterType.AUDIO,     "Audio"),
+        (FilterType.DOCUMENTS, "Docs"),
+        (FilterType.OTHER,     "Other"),
+    ]
+
+    def __init__(self, master, on_filter_changed: Callable[[str], None], **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_filter_changed = on_filter_changed
+        self._current: str = FilterType.ALL
+        self._counts: Dict[str, int] = {ft: 0 for ft, _ in self._TABS}
+        self._btn_widgets: Dict[str, tk.Button] = {}
+        subscribe_to_theme(self, self._apply_theme)
+        self._build()
+
+    def _build(self) -> None:
+        self.configure(
+            fg_color=theme_color("tabs.background"),
+            height=32,
+        )
+        inner = tk.Frame(self, bg=theme_color("tabs.background"))
+        inner.pack(side="left", padx=Spacing.XS, pady=2)
+        self._inner = inner
+
+        for ft, label in self._TABS:
+            btn = tk.Button(
+                inner,
+                text=self._tab_text(label, 0),
+                relief="flat",
+                padx=Spacing.MD,
+                pady=3,
+                cursor="hand2",
+                font=Typography.FONT_SM,
+                command=lambda k=ft: self._select(k),
+            )
+            btn.pack(side="left")
+            self._btn_widgets[ft] = btn
+
+        self._refresh_styles()
+
+    def _tab_text(self, label: str, count: int) -> str:
+        return f"{label} ({count})"
+
+    def update_counts(self, counts: Dict[str, int]) -> None:
+        """Update displayed counts on each tab button."""
+        self._counts = counts
+        for ft, label in self._TABS:
+            btn = self._btn_widgets.get(ft)
+            if btn:
+                btn.configure(text=self._tab_text(label, counts.get(ft, 0)))
+        self._refresh_styles()
+
+    def _select(self, filter_key: str) -> None:
+        if filter_key == self._current:
+            return
+        self._current = filter_key
+        self._refresh_styles()
+        self._on_filter_changed(filter_key)
+
+    def _refresh_styles(self) -> None:
+        for ft, _ in self._TABS:
+            btn = self._btn_widgets.get(ft)
+            if not btn:
+                continue
+            if ft == self._current:
+                btn.configure(
+                    bg=theme_color("tabs.activeBackground"),
+                    fg=theme_color("tabs.activeForeground"),
+                    relief="solid",
+                    bd=0,
+                )
+            else:
+                btn.configure(
+                    bg=theme_color("tabs.inactiveBackground"),
+                    fg=theme_color("tabs.inactiveForeground"),
+                    relief="flat",
+                    bd=0,
+                )
+
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("tabs.background"))
+            self._inner.configure(bg=theme_color("tabs.background"))
+        except Exception:
+            pass
+        self._refresh_styles()
 
 
 # Simple logger fallback

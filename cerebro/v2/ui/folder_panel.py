@@ -1,16 +1,17 @@
 """
 Folder Panel Widget
 
-Left panel with 3 collapsible sections:
-- Scan Folders: folders to include in scan
-- Protect Folders: folders excluded from deletion
-- Scan Options: mode-specific options
+Left panel with 2-tab layout:
+- Folders tab: scan folders + mode-dependent scan options
+- Protect tab: protected folders (excluded from deletion)
+
+Supports post-scan collapse (full-width results) and pre-scan expand.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog
 from typing import Optional, Callable, List, Dict
 from pathlib import Path
 
@@ -27,7 +28,7 @@ except ImportError:
     CTkFrame = tk.Frame
     CTkButton = tk.Button
     CTkLabel = tk.Label
-    CTkScrollableFrame = tk.Frame  # Simple fallback
+    CTkScrollableFrame = tk.Frame
     CTkOptionMenu = tk.OptionMenu
     CTkSlider = tk.Scale
     CTkCheckBox = tk.Checkbutton
@@ -36,841 +37,550 @@ from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 
 
-class FolderEntry:
-    """Represents a folder entry in the list."""
-
-    def __init__(self, path: Path, index: int = 0):
-        self.path = path
-        self.index = index
-        self.selected: bool = False
-
-
-class CollapsibleSection(CTkFrame):
-    """
-    Collapsible section with header and content.
-
-    Features:
-    - Expand/collapse toggle
-    - Header with title and count indicator
-    - Content frame that hides/shows
-    """
-
-    def __init__(
-        self,
-        master=None,
-        title: str = "",
-        count: int = 0,
-        accent_color: Optional[str] = None,
-        **kwargs
-    ):
-        super().__init__(master, **kwargs)
-        self._title = title
-        self._count = count
-        self._custom_accent = accent_color
-        self._accent_color = accent_color or theme_color("base.foreground")
-        self._expanded = True
-
-        subscribe_to_theme(self, self._apply_theme)
-
-        # Widgets
-        self._header_frame: Optional[CTkFrame] = None
-        self._title_label: Optional[CTkLabel] = None
-        self._count_label: Optional[CTkLabel] = None
-        self._toggle_btn: Optional[CTkButton] = None
-        self._content_frame: Optional[CTkFrame] = None
-
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        """Build collapsible section UI."""
-        # Header frame
-        self._header_frame = CTkFrame(
-            self,
-            height=32,
-            fg_color=self._accent_color if self._custom_accent else theme_color("base.backgroundTertiary")
-        )
-        self._header_frame.pack(fill="x")
-
-        # Title label
-        self._title_label = CTkLabel(
-            self._header_frame,
-            text=self._title,
-            font=Typography.FONT_MD,
-            text_color=self._accent_color
-        )
-        self._title_label.pack(side="left", padx=Spacing.MD)
-
-        # Count label
-        self._count_label = CTkLabel(
-            self._header_frame,
-            text=f"({self._count})",
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foregroundSecondary")
-        )
-        self._count_label.pack(side="left", padx=Spacing.XS)
-
-        # Spacer
-        spacer = CTkLabel(self._header_frame, text="")
-        spacer.pack(side="left", expand=True)
-
-        # Toggle button
-        self._toggle_btn = CTkButton(
-            self._header_frame,
-            text="▼",
-            width=28,
-            height=28,
-            font=Typography.FONT_SM,
-            fg_color="transparent",
-            hover_color=theme_color("base.backgroundElevated"),
-            border_width=0,
-            corner_radius=0
-        )
-        self._toggle_btn.pack(side="right")
-        self._toggle_btn.configure(command=self._toggle)
-
-        # Content frame
-        self._content_frame = CTkFrame(
-            self,
-            fg_color=theme_color("base.backgroundTertiary")
-        )
-        self._content_frame.pack(fill="both", expand=True, padx=Spacing.XS)
-
-    def _apply_theme(self) -> None:
-        """Apply theme colors to all widgets."""
-        if self._custom_accent:
-            self._accent_color = self._custom_accent
-        else:
-            self._accent_color = theme_color("base.foreground")
-
-        try:
-            self._header_frame.configure(
-                fg_color=self._accent_color if self._custom_accent else theme_color("base.backgroundTertiary")
-            )
-        except Exception:
-            pass
-        try:
-            self._title_label.configure(text_color=self._accent_color)
-        except Exception:
-            pass
-        try:
-            self._count_label.configure(text_color=theme_color("base.foregroundSecondary"))
-        except Exception:
-            pass
-        try:
-            self._toggle_btn.configure(hover_color=theme_color("base.backgroundElevated"))
-        except Exception:
-            pass
-        try:
-            self._content_frame.configure(fg_color=theme_color("base.backgroundTertiary"))
-        except Exception:
-            pass
-
-    def _toggle(self) -> None:
-        """Toggle expand/collapse."""
-        self._expanded = not self._expanded
-        self._toggle_btn.configure(text="▼" if self._expanded else "▶")
-
-        if self._expanded:
-            self._content_frame.pack(fill="both", expand=True, padx=Spacing.XS)
-        else:
-            self._content_frame.pack_forget()
-
-    def set_title(self, title: str) -> None:
-        """Set section title."""
-        self._title = title
-        self._title_label.configure(text=title)
-
-    def set_count(self, count: int) -> None:
-        """Set item count."""
-        self._count = count
-        self._count_label.configure(text=f"({count})")
-
-    def increment_count(self) -> None:
-        """Increment item count."""
-        self._count += 1
-        self._count_label.configure(text=f"({self._count})")
-
-    def decrement_count(self) -> None:
-        """Decrement item count."""
-        self._count = max(0, self._count - 1)
-        self._count_label.configure(text=f"({self._count})")
-
-    def set_expanded(self, expanded: bool) -> None:
-        """Set expanded state."""
-        if self._expanded != expanded:
-            self._toggle()
-
-    def is_expanded(self) -> bool:
-        """Check if section is expanded."""
-        return self._expanded
-
-    def get_content_frame(self) -> CTkFrame:
-        """Get the content frame for adding widgets."""
-        return self._content_frame
-
+# ---------------------------------------------------------------------------
+# Folder list widgets (reused by both tabs)
+# ---------------------------------------------------------------------------
 
 class ScanFolderList(CTkScrollableFrame):
-    """
-    Scrollable list of scan folders with remove buttons.
+    """Scrollable list of folders with add/remove controls."""
 
-    Features:
-    - Folder path display
-    - Remove (×) button per entry
-    - Add folder button at bottom
-    """
+    _add_label: str = "+ Add Folder"
+    _add_color_key: str = "button.primary"
+    _add_hover_key: str = "button.primaryHover"
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
-
-        subscribe_to_theme(self, self._apply_theme)
-
-        # State
         self._folders: List[Path] = []
         self._folder_widgets: Dict[Path, Dict[str, tk.Widget]] = {}
-
-        # Callbacks
         self._on_folder_added: Optional[Callable[[Path], None]] = None
         self._on_folder_removed: Optional[Callable[[Path], None]] = None
 
-        # Build UI
+        subscribe_to_theme(self, self._apply_theme)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        """Build folder list UI."""
-        # Configure scrollbar styling if available
         try:
             self.configure(
                 fg_color=theme_color("base.backgroundTertiary"),
                 scrollbar_fg_color=theme_color("panel.background"),
                 scrollbar_button_color=theme_color("base.backgroundTertiary"),
-                scrollbar_button_hover_color=theme_color("button.primary")
+                scrollbar_button_hover_color=theme_color(self._add_color_key),
             )
         except AttributeError:
             pass
 
-        # Add button
         self._add_btn = CTkButton(
             self,
-            text="+ Add Folder",
+            text=self._add_label,
             height=Dimensions.BUTTON_HEIGHT_MD,
-            font=Typography.FONT_MD,
-            fg_color=theme_color("button.primary"),
-            hover_color=theme_color("button.primaryHover"),
-            corner_radius=Spacing.BORDER_RADIUS_SM
+            font=Typography.FONT_SM,
+            fg_color=theme_color(self._add_color_key),
+            hover_color=theme_color(self._add_hover_key),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
         )
         self._add_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.SM))
-        self._add_btn.configure(command=self._trigger_add_folder)
+        self._add_btn.configure(command=self._trigger_add)
 
     def _apply_theme(self) -> None:
-        """Apply theme colors to all widgets."""
         try:
             self.configure(
                 fg_color=theme_color("base.backgroundTertiary"),
                 scrollbar_fg_color=theme_color("panel.background"),
                 scrollbar_button_color=theme_color("base.backgroundTertiary"),
-                scrollbar_button_hover_color=theme_color("button.primary")
-            )
-        except (AttributeError, Exception):
-            pass
-        try:
-            self._add_btn.configure(
-                fg_color=theme_color("button.primary"),
-                hover_color=theme_color("button.primaryHover")
+                scrollbar_button_hover_color=theme_color(self._add_color_key),
             )
         except Exception:
             pass
-        # Update existing folder row widgets
-        for path, widgets in self._folder_widgets.items():
+        try:
+            self._add_btn.configure(
+                fg_color=theme_color(self._add_color_key),
+                hover_color=theme_color(self._add_hover_key),
+            )
+        except Exception:
+            pass
+        for widgets in self._folder_widgets.values():
             try:
                 widgets["frame"].configure(fg_color=theme_color("base.backgroundElevated"))
-            except Exception:
-                pass
-            try:
                 widgets["label"].configure(text_color=theme_color("base.foreground"))
-            except Exception:
-                pass
-            try:
                 widgets["button"].configure(
                     fg_color=theme_color("base.foregroundSecondary"),
                     hover_color=theme_color("feedback.danger"),
-                    text_color=theme_color("base.foreground")
                 )
             except Exception:
                 pass
 
-    def _trigger_add_folder(self) -> None:
-        """Trigger add folder dialog."""
-        path = filedialog.askdirectory(title="Select folder to scan")
+    def _trigger_add(self) -> None:
+        path = filedialog.askdirectory(title="Select folder")
         if path:
             self.add_folder(Path(path))
 
     def add_folder(self, path: Path) -> None:
-        """Add a folder to the list."""
         if path in self._folders:
             return
-
         self._folders.append(path)
 
-        # Create folder entry row
-        row_frame = CTkFrame(
-            self,
-            height=Dimensions.ROW_HEIGHT,
-            fg_color=theme_color("base.backgroundElevated")
-        )
-        row_frame.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.XS))
+        row = CTkFrame(self, height=Dimensions.ROW_HEIGHT,
+                       fg_color=theme_color("base.backgroundElevated"))
+        row.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.XS))
 
-        # Folder name label (truncated)
-        folder_name = path.name if path.name else str(path)
-        if len(folder_name) > 30:
-            folder_name = folder_name[:27] + "..."
+        name = path.name or str(path)
+        if len(name) > 28:
+            name = name[:25] + "..."
 
-        name_label = CTkLabel(
-            row_frame,
-            text=folder_name,
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foreground"),
-            anchor="w"
-        )
-        name_label.pack(side="left", padx=Spacing.SM, fill="x", expand=True)
+        lbl = CTkLabel(row, text=name, font=Typography.FONT_SM,
+                       text_color=theme_color("base.foreground"), anchor="w")
+        lbl.pack(side="left", padx=Spacing.SM, fill="x", expand=True)
 
-        # Remove button
-        remove_btn = CTkButton(
-            row_frame,
-            text="×",
-            width=24,
-            height=24,
-            font=Typography.FONT_LG,
-            fg_color=theme_color("base.foregroundSecondary"),
-            hover_color=theme_color("feedback.danger"),
-            text_color=theme_color("base.foreground"),
-            corner_radius=Spacing.BORDER_RADIUS_SM
-        )
-        remove_btn.pack(side="right", padx=Spacing.SM)
-        remove_btn.configure(command=lambda: self._remove_folder(path))
+        btn = CTkButton(row, text="×", width=24, height=24,
+                        font=Typography.FONT_LG,
+                        fg_color=theme_color("base.foregroundSecondary"),
+                        hover_color=theme_color("feedback.danger"),
+                        corner_radius=Spacing.BORDER_RADIUS_SM)
+        btn.pack(side="right", padx=Spacing.SM)
+        btn.configure(command=lambda p=path: self._remove_folder(p))
 
-        # Store widgets reference
-        self._folder_widgets[path] = {
-            "frame": row_frame,
-            "label": name_label,
-            "button": remove_btn
-        }
-
-        # Notify callback
+        self._folder_widgets[path] = {"frame": row, "label": lbl, "button": btn}
         if self._on_folder_added:
             self._on_folder_added(path)
 
     def _remove_folder(self, path: Path) -> None:
-        """Remove a folder from the list."""
         if path not in self._folders:
             return
-
         self._folders.remove(path)
-
-        # Remove widgets
         widgets = self._folder_widgets.pop(path, {})
         if widgets:
             widgets["frame"].destroy()
-
-        # Notify callback
         if self._on_folder_removed:
             self._on_folder_removed(path)
 
     def clear_folders(self) -> None:
-        """Clear all folders from the list."""
         for path in list(self._folders):
             self._remove_folder(path)
 
     def get_folders(self) -> List[Path]:
-        """Get list of folders."""
         return self._folders.copy()
 
     def set_folders(self, folders: List[Path]) -> None:
-        """Set folders list (replaces existing)."""
         self.clear_folders()
-        for path in folders:
-            self.add_folder(path)
+        for p in folders:
+            self.add_folder(p)
 
-    def on_folder_added(self, callback: Callable[[Path], None]) -> None:
-        """Set callback for folder added."""
-        self._on_folder_added = callback
+    def on_folder_added(self, cb: Callable[[Path], None]) -> None:
+        self._on_folder_added = cb
 
-    def on_folder_removed(self, callback: Callable[[Path], None]) -> None:
-        """Set callback for folder removed."""
-        self._on_folder_removed = callback
+    def on_folder_removed(self, cb: Callable[[Path], None]) -> None:
+        self._on_folder_removed = cb
 
 
 class ProtectFolderList(ScanFolderList):
-    """
-    Scrollable list of protected folders (warning accent).
-
-    Files in these paths will never be auto-selected for deletion.
-    """
-
-    def _build_ui(self) -> None:
-        """Build protect folder list UI."""
-        # Configure scrollbar styling if available
-        try:
-            self.configure(
-                fg_color=theme_color("base.backgroundTertiary"),
-                scrollbar_fg_color=theme_color("panel.background"),
-                scrollbar_button_color=theme_color("base.backgroundTertiary"),
-                scrollbar_button_hover_color=theme_color("feedback.warning")
-            )
-        except AttributeError:
-            pass
-
-        # Add button
-        self._add_btn = CTkButton(
-            self,
-            text="+ Add Protected Folder",
-            height=Dimensions.BUTTON_HEIGHT_MD,
-            font=Typography.FONT_SM,
-            fg_color=theme_color("feedback.warning"),
-            hover_color=theme_color("feedback.warning"),
-            corner_radius=Spacing.BORDER_RADIUS_SM
-        )
-        self._add_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.SM))
-        self._add_btn.configure(command=self._trigger_add_folder)
-
-    def _apply_theme(self) -> None:
-        """Apply theme colors to all widgets."""
-        try:
-            self.configure(
-                fg_color=theme_color("base.backgroundTertiary"),
-                scrollbar_fg_color=theme_color("panel.background"),
-                scrollbar_button_color=theme_color("base.backgroundTertiary"),
-                scrollbar_button_hover_color=theme_color("feedback.warning")
-            )
-        except (AttributeError, Exception):
-            pass
-        try:
-            self._add_btn.configure(
-                fg_color=theme_color("feedback.warning"),
-                hover_color=theme_color("feedback.warning")
-            )
-        except Exception:
-            pass
-        # Update existing folder row widgets
-        for path, widgets in self._folder_widgets.items():
-            try:
-                widgets["frame"].configure(fg_color=theme_color("base.backgroundElevated"))
-            except Exception:
-                pass
-            try:
-                widgets["label"].configure(text_color=theme_color("base.foreground"))
-            except Exception:
-                pass
-            try:
-                widgets["button"].configure(
-                    fg_color=theme_color("base.foregroundSecondary"),
-                    hover_color=theme_color("feedback.danger"),
-                    text_color=theme_color("base.foreground")
-                )
-            except Exception:
-                pass
+    """Protected-folder variant — warning accent."""
+    _add_label = "+ Add Protected Folder"
+    _add_color_key = "feedback.warning"
+    _add_hover_key = "feedback.warning"
 
 
-class ScanOptionsPanel(CTkFrame):
-    """
-    Dynamic panel for scan mode options.
+# ---------------------------------------------------------------------------
+# Scan options panel (mode-dependent)
+# ---------------------------------------------------------------------------
 
-    Content swaps based on active scan mode:
-    - Files: hash algo, min/max size, extensions
-    - Photos: similarity threshold, format checkboxes
-    - Videos: duration tolerance, frame count
-    - Music: match fields checkboxes
-    - Empty Folders: min depth
-    - Large Files: top N count, min size
-    """
+class ScanOptionsPanel(CTkScrollableFrame):
+    """Dynamic panel for scan-mode options; swaps content on mode change."""
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
+        self._current_mode: str = "files"
+        self._option_widgets: Dict[str, tk.Widget] = {}
+        self._on_options_changed: Optional[Callable[[Dict], None]] = None
 
         subscribe_to_theme(self, self._apply_theme)
 
-        self._current_mode: str = "files"
-        self._option_widgets: Dict[str, tk.Widget] = {}
-
-        # Callbacks
-        self._on_options_changed: Optional[Callable[[Dict], None]] = None
-
-        # Build UI
-        self._build_ui()
-        self._set_mode_options("files")
-
-    def _build_ui(self) -> None:
-        """Build options panel UI."""
-        self.configure(
-            fg_color=theme_color("base.backgroundTertiary")
-        )
-
-        # Title label
-        CTkLabel(
-            self,
-            text="Scan Options",
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foregroundSecondary")
-        ).pack(anchor="w", padx=Spacing.SM, pady=(Spacing.SM, 0))
-
-        # Options container
-        self._options_container = CTkFrame(self)
-        self._options_container.pack(fill="both", expand=True, padx=Spacing.XS, pady=Spacing.SM)
-
-    def _apply_theme(self) -> None:
-        """Apply theme colors to all widgets."""
         try:
             self.configure(fg_color=theme_color("base.backgroundTertiary"))
         except Exception:
             pass
-        # Rebuild mode options to pick up new colors
+
+        self._options_container = CTkFrame(self, fg_color="transparent")
+        self._options_container.pack(fill="both", expand=True)
+
+        self._set_mode_options("files")
+
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("base.backgroundTertiary"))
+        except Exception:
+            pass
         self._set_mode_options(self._current_mode)
 
-    def _set_mode_options(self, mode: str) -> None:
-        """Swap options based on scan mode."""
-        self._current_mode = mode
-
-        # Clear existing options
-        for widget in self._option_widgets.values():
-            widget.destroy()
+    def _clear(self) -> None:
+        for w in self._option_widgets.values():
+            try:
+                w.destroy()
+            except Exception:
+                pass
         self._option_widgets.clear()
+        # Also destroy any bare labels in container
+        for child in list(self._options_container.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:
+                pass
 
-        # Build mode-specific options
-        if mode == "files":
-            self._build_files_options()
-        elif mode == "photos":
-            self._build_photos_options()
-        elif mode == "videos":
-            self._build_videos_options()
-        elif mode == "music":
-            self._build_music_options()
-        elif mode == "empty_folders":
-            self._build_empty_folders_options()
-        elif mode == "large_files":
-            self._build_large_files_options()
+    def _set_mode_options(self, mode: str) -> None:
+        self._current_mode = mode
+        self._clear()
+        builder = {
+            "files": self._build_files_options,
+            "photos": self._build_photos_options,
+            "videos": self._build_videos_options,
+            "music": self._build_music_options,
+            "empty_folders": self._build_empty_folders_options,
+            "large_files": self._build_large_files_options,
+        }.get(mode)
+        if builder:
+            builder()
+
+    # ---- option builders --------------------------------------------------
+
+    def _lbl(self, text: str) -> None:
+        CTkLabel(self._options_container, text=text, font=Typography.FONT_XS,
+                 text_color=theme_color("base.foregroundSecondary"),
+                 anchor="w").pack(fill="x", padx=Spacing.SM, pady=(Spacing.SM, 0))
+
+    def _menu(self, key: str, values: List[str], default: str) -> None:
+        m = CTkOptionMenu(self._options_container, values=values,
+                          font=Typography.FONT_SM,
+                          fg_color=theme_color("base.backgroundElevated"),
+                          button_color=theme_color("base.backgroundElevated"),
+                          dropdown_fg_color=theme_color("base.backgroundElevated"))
+        m.set(default)
+        m.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, 0))
+        self._option_widgets[key] = m
+
+    def _slider(self, key: str, mn: float, mx: float, default: float) -> None:
+        s = CTkSlider(self._options_container, from_=mn, to=mx,
+                      number_of_steps=int(mx - mn))
+        s.set(default)
+        s.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, 0))
+        self._option_widgets[key] = s
+
+    def _check(self, key: str, text: str, default: bool) -> None:
+        cb = CTkCheckBox(self._options_container, text=text, font=Typography.FONT_SM)
+        if default:
+            cb.select()
+        cb.pack(anchor="w", padx=Spacing.SM, pady=(Spacing.XS, 0))
+        self._option_widgets[key] = cb
 
     def _build_files_options(self) -> None:
-        """Build file dedup options."""
-        # Hash algorithm
-        self._add_option_label("Hash Algorithm")
-        self._add_option_menu(
-            "Hash Algorithm",
-            ["SHA256", "Blake3", "MD5"],
-            "SHA256"
-        )
-
-        # Minimum size
-        self._add_option_label("Minimum Size (MB)")
-        self._add_slider(0, 1024, 0, "min_size")
-
-        # Maximum size
-        self._add_option_label("Maximum Size (MB)")
-        self._add_slider(0, 10240, 0, "max_size")
+        self._lbl("Hash Algorithm")
+        self._menu("hash_algo", ["SHA256", "Blake3", "MD5"], "SHA256")
+        self._lbl("Min Size (MB)")
+        self._slider("min_size", 0, 1024, 0)
+        self._lbl("Max Size (MB)  (0 = no limit)")
+        self._slider("max_size", 0, 10240, 0)
 
     def _build_photos_options(self) -> None:
-        """Build photo dedup options."""
-        # Similarity threshold
-        self._add_option_label("Similarity Threshold (Hamming Distance)")
-        self._add_slider(1, 20, 10, "phash_threshold")
-
-        # Format checkboxes
-        self._add_option_label("Include Formats")
-        self._add_checkbox("JPG/JPEG", True, "format_jpg")
-        self._add_checkbox("PNG", True, "format_png")
-        self._add_checkbox("WEBP", True, "format_webp")
-        self._add_checkbox("HEIC", False, "format_heic")
-        self._add_checkbox("RAW (CR2, NEF, DNG)", False, "format_raw")
+        self._lbl("Similarity (Hamming Distance)")
+        self._slider("phash_threshold", 1, 20, 10)
+        self._lbl("Include Formats")
+        self._check("format_jpg", "JPG / JPEG", True)
+        self._check("format_png", "PNG", True)
+        self._check("format_webp", "WEBP", True)
+        self._check("format_heic", "HEIC", False)
+        self._check("format_raw", "RAW (CR2, NEF, DNG…)", False)
 
     def _build_videos_options(self) -> None:
-        """Build video dedup options."""
-        # Duration tolerance
-        self._add_option_label("Duration Tolerance (seconds)")
-        self._add_slider(0, 30, 3, "duration_tolerance")
-
-        # Frame count
-        self._add_option_label("Keyframe Count")
-        self._add_option_menu(
-            "Keyframe Count",
-            ["3 (Fast)", "5 (Thorough)"],
-            "3 (Fast)"
-        )
+        self._lbl("Duration Tolerance (seconds)")
+        self._slider("duration_tolerance", 0, 30, 3)
+        self._lbl("Keyframes to Extract")
+        self._menu("keyframe_count", ["3 (Fast)", "5 (Thorough)"], "3 (Fast)")
 
     def _build_music_options(self) -> None:
-        """Build music dedup options."""
-        # Match fields
-        self._add_option_label("Match Fields")
-        self._add_checkbox("Artist", True, "match_artist")
-        self._add_checkbox("Title", True, "match_title")
-        self._add_checkbox("Album", False, "match_album")
-        self._add_checkbox("Duration", True, "match_duration")
-
-        # Similarity threshold
-        self._add_option_label("Similarity Threshold (%)")
-        self._add_slider(50, 100, 85, "similarity_threshold")
+        self._lbl("Match Fields")
+        self._check("match_artist", "Artist", True)
+        self._check("match_title", "Title", True)
+        self._check("match_album", "Album", False)
+        self._check("match_duration", "Duration", True)
+        self._lbl("Similarity Threshold (%)")
+        self._slider("similarity_threshold", 50, 100, 85)
 
     def _build_empty_folders_options(self) -> None:
-        """Build empty folders options."""
-        self._add_option_label("Minimum Depth")
-        self._add_slider(0, 10, 0, "min_depth")
+        self._lbl("Minimum Depth")
+        self._slider("min_depth", 0, 10, 0)
 
     def _build_large_files_options(self) -> None:
-        """Build large files options."""
-        self._add_option_label("Top N Files")
-        self._add_slider(10, 500, 100, "top_n")
+        self._lbl("Top N Files")
+        self._slider("top_n", 10, 500, 100)
+        self._lbl("Minimum Size (MB)")
+        self._slider("min_size_mb", 0, 1024, 100)
+        self._check("group_by_type", "Group by File Type", True)
 
-        self._add_option_label("Minimum Size (MB)")
-        self._add_slider(0, 1024, 100, "min_size_mb")
-
-        self._add_checkbox("Group by File Type", True, "group_by_type")
-
-    def _add_option_label(self, text: str) -> None:
-        """Add a label for an option."""
-        CTkLabel(
-            self._options_container,
-            text=text,
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foregroundSecondary"),
-            anchor="w"
-        ).pack(fill="x", padx=Spacing.SM, pady=(Spacing.SM, 0))
-
-    def _add_option_menu(
-        self,
-        name: str,
-        values: List[str],
-        default: str
-    ) -> CTkOptionMenu:
-        """Add an option menu."""
-        menu = CTkOptionMenu(
-            self._options_container,
-            values=values,
-            default_value=default,
-            font=Typography.FONT_SM,
-            fg_color=theme_color("base.foreground"),
-            button_color=theme_color("base.backgroundElevated"),
-            dropdown_fg_color=theme_color("base.foreground")
-        )
-        menu.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, Spacing.SM))
-        self._option_widgets[name] = menu
-        return menu
-
-    def _add_slider(
-        self,
-        min_val: float,
-        max_val: float,
-        default: float,
-        name: str
-    ) -> CTkSlider:
-        """Add a slider option."""
-        slider = CTkSlider(
-            self._options_container,
-            from_=min_val,
-            to=max_val,
-            number_of_steps=int(max_val - min_val),
-            font=Typography.FONT_SM
-        )
-        slider.set(default)
-        slider.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, Spacing.SM))
-        self._option_widgets[name] = slider
-        return slider
-
-    def _add_checkbox(
-        self,
-        text: str,
-        default: bool,
-        name: str
-    ) -> CTkCheckBox:
-        """Add a checkbox option."""
-        checkbox = CTkCheckBox(
-            self._options_container,
-            text=text,
-            font=Typography.FONT_SM,
-            onvalue=True,
-            offvalue=False
-        )
-        if default:
-            checkbox.select()
-        checkbox.pack(anchor="w", padx=Spacing.SM, pady=(Spacing.XS, Spacing.SM))
-        self._option_widgets[name] = checkbox
-        return checkbox
+    # ---- public API -------------------------------------------------------
 
     def set_mode(self, mode: str) -> None:
-        """Set active scan mode and update options."""
         self._set_mode_options(mode)
 
     def get_options(self) -> Dict:
-        """Get current options as a dictionary."""
-        # TODO: Read values from widgets and return as dict
-        return {
-            "mode": self._current_mode
-        }
+        return {"mode": self._current_mode}
 
-    def on_options_changed(self, callback: Callable[[Dict], None]) -> None:
-        """Set callback for options changed."""
-        self._on_options_changed = callback
+    def on_options_changed(self, cb: Callable[[Dict], None]) -> None:
+        self._on_options_changed = cb
 
+
+# ---------------------------------------------------------------------------
+# FolderPanel — 2-tab layout with collapse support
+# ---------------------------------------------------------------------------
 
 class FolderPanel(CTkFrame):
     """
-    Complete left panel with 3 collapsible sections.
+    Left panel with 2-tab layout.
 
-    Features:
-    - Scan Folders section with add/remove
-    - Protect Folders section with warning accent
-    - Scan Options section with mode-specific widgets
-    - Collapsible sections
+    Tab "Folders":  scan folder list  +  mode-dependent scan options below
+    Tab "Protect":  protected folders list
+
+    Collapse/expand: call set_collapsed(True) after scan starts, False before.
+    When collapsed the frame width drops to a narrow toggle strip that the
+    parent paned window can read via get_collapsed_width().
     """
+
+    COLLAPSED_WIDTH = 28  # px — just enough for the toggle arrow
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
 
-        subscribe_to_theme(self, self._apply_theme)
+        self._active_tab: str = "folders"   # "folders" | "protect"
+        self._collapsed: bool = False
 
-        # Widgets
-        self._scan_folders_section: Optional[CollapsibleSection] = None
-        self._protect_folders_section: Optional[CollapsibleSection] = None
-        self._options_section: Optional[CollapsibleSection] = None
-        self._scan_folders_list: Optional[ScanFolderList] = None
-        self._protect_folders_list: Optional[ProtectFolderList] = None
-        self._options_panel: Optional[ScanOptionsPanel] = None
-
-        # Callbacks
+        # Public-API callbacks
         self._on_folders_changed: Optional[Callable[[List[Path]], None]] = None
         self._on_protected_changed: Optional[Callable[[List[Path]], None]] = None
         self._on_options_changed: Optional[Callable[[str, Dict], None]] = None
+        self._on_collapse_toggled: Optional[Callable[[bool], None]] = None
 
-        # Build UI
+        subscribe_to_theme(self, self._apply_theme)
         self._build_ui()
 
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
-        """Build folder panel UI."""
-        self.configure(
-            fg_color=theme_color("panel.background")
-        )
+        self.configure(fg_color=theme_color("panel.background"))
 
-        # Scan Folders section
-        self._scan_folders_section = CollapsibleSection(
-            self,
-            title="Scan Folders",
-            count=0
-        )
-        self._scan_folders_section.pack(fill="x", padx=Spacing.XS, pady=(Spacing.SM, 0))
+        # ── Collapse strip (always visible, left edge) ──────────────
+        self._strip = CTkFrame(self, width=self.COLLAPSED_WIDTH,
+                               fg_color=theme_color("base.backgroundTertiary"))
+        self._strip.pack(side="left", fill="y")
+        self._strip.pack_propagate(False)
 
-        self._scan_folders_list = ScanFolderList(
-            self._scan_folders_section.get_content_frame(),
-            height=200
+        self._toggle_btn = CTkButton(
+            self._strip, text="◀", width=self.COLLAPSED_WIDTH, height=36,
+            font=Typography.FONT_SM,
+            fg_color="transparent",
+            hover_color=theme_color("base.backgroundElevated"),
+            border_width=0, corner_radius=0,
         )
-        self._scan_folders_list.pack(fill="both", expand=True)
-        self._scan_folders_list.on_folder_added(self._on_scan_folder_added)
-        self._scan_folders_list.on_folder_removed(self._on_scan_folder_removed)
+        self._toggle_btn.pack(side="top", pady=(Spacing.MD, 0))
+        self._toggle_btn.configure(command=self._toggle_collapse)
 
-        # Protect Folders section
-        self._protect_folders_section = CollapsibleSection(
-            self,
-            title="Protect Folders",
-            count=0,
-            accent_color=theme_color("feedback.warning")
-        )
-        self._protect_folders_section.pack(fill="x", padx=Spacing.XS, pady=Spacing.SM)
+        # ── Main content (hidden when collapsed) ─────────────────────
+        self._content = CTkFrame(self, fg_color=theme_color("panel.background"))
+        self._content.pack(side="left", fill="both", expand=True)
 
-        self._protect_folders_list = ProtectFolderList(
-            self._protect_folders_section.get_content_frame(),
-            height=150
-        )
-        self._protect_folders_list.pack(fill="both", expand=True)
-        self._protect_folders_list.on_folder_added(self._on_protected_folder_added)
-        self._protect_folders_list.on_folder_removed(self._on_protected_folder_removed)
+        # Tab bar
+        self._tab_bar = CTkFrame(self._content, height=36,
+                                 fg_color=theme_color("base.backgroundTertiary"))
+        self._tab_bar.pack(fill="x")
 
-        # Scan Options section
-        self._options_section = CollapsibleSection(
-            self,
-            title="Scan Options",
-            count=0
-        )
-        self._options_section.pack(fill="x", padx=Spacing.XS, pady=Spacing.SM)
+        self._tab_folders_btn = self._make_tab_btn("Folders", "folders")
+        self._tab_protect_btn = self._make_tab_btn("🛡 Protect", "protect")
 
-        self._options_panel = ScanOptionsPanel(
-            self._options_section.get_content_frame()
+        # Tab pages (swapped)
+        self._page_folders = CTkFrame(self._content,
+                                      fg_color=theme_color("panel.background"))
+        self._page_protect = CTkFrame(self._content,
+                                      fg_color=theme_color("panel.background"))
+
+        # Build folder page content
+        self._scan_list = ScanFolderList(self._page_folders)
+        self._scan_list.pack(fill="both", expand=True, padx=Spacing.XS, pady=Spacing.XS)
+        self._scan_list.on_folder_added(self._on_scan_added)
+        self._scan_list.on_folder_removed(self._on_scan_removed)
+
+        # Divider
+        CTkFrame(self._page_folders, height=1,
+                 fg_color=theme_color("base.backgroundElevated")).pack(
+            fill="x", padx=Spacing.SM, pady=(Spacing.XS, 0))
+
+        # Options section header
+        self._options_header = CTkLabel(
+            self._page_folders, text="Scan Options",
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundSecondary"),
+            anchor="w")
+        self._options_header.pack(fill="x", padx=Spacing.MD, pady=(Spacing.SM, 0))
+
+        self._options_panel = ScanOptionsPanel(self._page_folders, height=200)
+        self._options_panel.pack(fill="x", padx=Spacing.XS)
+
+        # Build protect page content
+        self._protect_list = ProtectFolderList(self._page_protect)
+        self._protect_list.pack(fill="both", expand=True,
+                                padx=Spacing.XS, pady=Spacing.XS)
+        self._protect_list.on_folder_added(self._on_protect_added)
+        self._protect_list.on_folder_removed(self._on_protect_removed)
+
+        # Show folders tab by default
+        self._switch_tab("folders")
+
+    def _make_tab_btn(self, label: str, tab_id: str) -> CTkButton:
+        btn = CTkButton(
+            self._tab_bar, text=label,
+            height=32, font=Typography.FONT_SM,
+            fg_color=theme_color("base.backgroundTertiary"),
+            hover_color=theme_color("base.backgroundElevated"),
+            text_color=theme_color("base.foreground"),
+            border_width=0, corner_radius=0,
         )
-        self._options_panel.pack(fill="both", expand=True)
+        btn.pack(side="left", fill="x", expand=True)
+        btn.configure(command=lambda t=tab_id: self._switch_tab(t))
+        return btn
+
+    # ------------------------------------------------------------------
+    # Tab switching
+    # ------------------------------------------------------------------
+
+    def _switch_tab(self, tab_id: str) -> None:
+        self._active_tab = tab_id
+
+        # Update tab button appearance
+        active_fg = theme_color("button.primary")
+        inactive_fg = theme_color("base.backgroundTertiary")
+
+        self._tab_folders_btn.configure(
+            fg_color=active_fg if tab_id == "folders" else inactive_fg)
+        self._tab_protect_btn.configure(
+            fg_color=active_fg if tab_id == "protect" else inactive_fg)
+
+        # Swap pages
+        self._page_folders.pack_forget()
+        self._page_protect.pack_forget()
+
+        if tab_id == "folders":
+            self._page_folders.pack(fill="both", expand=True)
+        else:
+            self._page_protect.pack(fill="both", expand=True)
+
+    # ------------------------------------------------------------------
+    # Collapse / expand
+    # ------------------------------------------------------------------
+
+    def _toggle_collapse(self) -> None:
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Collapse or expand the panel. Call from MainWindow after scan."""
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+
+        if collapsed:
+            self._content.pack_forget()
+            self._toggle_btn.configure(text="▶")
+        else:
+            self._content.pack(side="left", fill="both", expand=True)
+            self._toggle_btn.configure(text="◀")
+
+        if self._on_collapse_toggled:
+            self._on_collapse_toggled(collapsed)
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    # ------------------------------------------------------------------
+    # Internal callbacks
+    # ------------------------------------------------------------------
+
+    def _on_scan_added(self, path: Path) -> None:
+        if self._on_folders_changed:
+            self._on_folders_changed(self._scan_list.get_folders())
+
+    def _on_scan_removed(self, path: Path) -> None:
+        if self._on_folders_changed:
+            self._on_folders_changed(self._scan_list.get_folders())
+
+    def _on_protect_added(self, path: Path) -> None:
+        if self._on_protected_changed:
+            self._on_protected_changed(self._protect_list.get_folders())
+
+    def _on_protect_removed(self, path: Path) -> None:
+        if self._on_protected_changed:
+            self._on_protected_changed(self._protect_list.get_folders())
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
 
     def _apply_theme(self) -> None:
-        """Apply theme colors to all widgets."""
         try:
             self.configure(fg_color=theme_color("panel.background"))
+            self._strip.configure(fg_color=theme_color("base.backgroundTertiary"))
+            self._content.configure(fg_color=theme_color("panel.background"))
+            self._tab_bar.configure(fg_color=theme_color("base.backgroundTertiary"))
+            self._toggle_btn.configure(hover_color=theme_color("base.backgroundElevated"))
         except Exception:
             pass
-        # Update protect section accent color on theme change
-        if self._protect_folders_section:
-            try:
-                self._protect_folders_section._custom_accent = theme_color("feedback.warning")
-                self._protect_folders_section._accent_color = theme_color("feedback.warning")
-                self._protect_folders_section._apply_theme()
-            except Exception:
-                pass
+        # Re-apply active tab highlight
+        self._switch_tab(self._active_tab)
 
-    def _on_scan_folder_added(self, path: Path) -> None:
-        """Handle scan folder added."""
-        self._scan_folders_section.increment_count()
-        if self._on_folders_changed:
-            self._on_folders_changed(self._scan_folders_list.get_folders())
-
-    def _on_scan_folder_removed(self, path: Path) -> None:
-        """Handle scan folder removed."""
-        self._scan_folders_section.decrement_count()
-        if self._on_folders_changed:
-            self._on_folders_changed(self._scan_folders_list.get_folders())
-
-    def _on_protected_folder_added(self, path: Path) -> None:
-        """Handle protected folder added."""
-        self._protect_folders_section.increment_count()
-        if self._on_protected_changed:
-            self._on_protected_changed(self._protect_folders_list.get_folders())
-
-    def _on_protected_folder_removed(self, path: Path) -> None:
-        """Handle protected folder removed."""
-        self._protect_folders_section.decrement_count()
-        if self._on_protected_changed:
-            self._on_protected_changed(self._protect_folders_list.get_folders())
+    # ------------------------------------------------------------------
+    # Public API (same as before — MainWindow unchanged)
+    # ------------------------------------------------------------------
 
     def set_scan_mode(self, mode: str) -> None:
-        """Set active scan mode (updates options panel)."""
+        """Update options panel when scan mode changes."""
         self._options_panel.set_mode(mode)
+        # Update header label
+        mode_labels = {
+            "files": "Scan Options — Files",
+            "photos": "Scan Options — Photos",
+            "videos": "Scan Options — Videos",
+            "music": "Scan Options — Music",
+            "empty_folders": "Scan Options — Empty Folders",
+            "large_files": "Scan Options — Large Files",
+        }
+        try:
+            self._options_header.configure(
+                text=mode_labels.get(mode, "Scan Options"))
+        except Exception:
+            pass
 
     def get_scan_folders(self) -> List[Path]:
-        """Get list of scan folders."""
-        return self._scan_folders_list.get_folders()
+        return self._scan_list.get_folders()
 
     def get_protected_folders(self) -> List[Path]:
-        """Get list of protected folders."""
-        return self._protect_folders_list.get_folders()
+        return self._protect_list.get_folders()
 
     def get_options(self) -> Dict:
-        """Get current scan options."""
         return self._options_panel.get_options()
 
     def set_scan_folders(self, folders: List[Path]) -> None:
-        """Set scan folders list."""
-        current_count = len(self._scan_folders_list.get_folders())
-        self._scan_folders_list.set_folders(folders)
-        new_count = len(folders)
-        self._scan_folders_section.set_count(new_count)
+        self._scan_list.set_folders(folders)
 
     def set_protected_folders(self, folders: List[Path]) -> None:
-        """Set protected folders list."""
-        self._protect_folders_list.set_folders(folders)
-        self._protect_folders_section.set_count(len(folders))
+        self._protect_list.set_folders(folders)
 
-    def on_folders_changed(self, callback: Callable[[List[Path]], None]) -> None:
-        """Set callback for scan folders changed."""
-        self._on_folders_changed = callback
+    def on_folders_changed(self, cb: Callable[[List[Path]], None]) -> None:
+        self._on_folders_changed = cb
 
-    def on_protected_changed(self, callback: Callable[[List[Path]], None]) -> None:
-        """Set callback for protected folders changed."""
-        self._on_protected_changed = callback
+    def on_protected_changed(self, cb: Callable[[List[Path]], None]) -> None:
+        self._on_protected_changed = cb
 
-    def on_options_changed(self, callback: Callable[[str, Dict], None]) -> None:
-        """Set callback for options changed."""
-        self._on_options_changed = callback
+    def on_options_changed(self, cb: Callable[[str, Dict], None]) -> None:
+        self._on_options_changed = cb
+
+    def on_collapse_toggled(self, cb: Callable[[bool], None]) -> None:
+        """Notify when user toggles collapse; used by MainWindow to resize paned window."""
+        self._on_collapse_toggled = cb
 
 
-# Simple logger fallback
 logger = __import__('logging').getLogger(__name__)

@@ -46,17 +46,19 @@ class ScanOrchestrator:
 
     def _register_engines(self) -> None:
         """Register all available scan engines."""
-        # Engines will be registered here once implemented
         from cerebro.engines.file_dedup_engine import FileDedupEngine
         from cerebro.engines.image_dedup_engine import ImageDedupEngine
-        self._engines["files"] = FileDedupEngine()
-        self._engines["photos"] = ImageDedupEngine()
+        from cerebro.engines.video_dedup_engine import VideoDedupEngine
+        from cerebro.engines.music_dedup_engine import MusicDedupEngine
+        from cerebro.engines.empty_folder_engine import EmptyFolderEngine
+        from cerebro.engines.large_file_engine import LargeFileEngine
 
-        # Placeholder engines for future implementation
-        # self._engines["videos"] = VideoDedupEngine()
-        # self._engines["music"] = MusicDedupEngine()
-        # self._engines["empty_folders"] = EmptyFolderEngine()
-        # self._engines["large_files"] = LargeFileEngine()
+        self._engines["files"]         = FileDedupEngine()
+        self._engines["photos"]        = ImageDedupEngine()
+        self._engines["videos"]        = VideoDedupEngine()
+        self._engines["music"]         = MusicDedupEngine()
+        self._engines["empty_folders"] = EmptyFolderEngine()
+        self._engines["large_files"]   = LargeFileEngine()
 
     def register_engine(self, mode: str, engine: BaseEngine) -> None:
         """

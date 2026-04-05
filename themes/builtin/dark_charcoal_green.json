@@ -1,0 +1,27 @@
+{
+  "name": "dark_charcoal_green",
+  "display_name": "Dark Charcoal + Green",
+  "type": "dark",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#1a1a1a",
+    "base.backgroundSecondary": "#212121",
+    "base.backgroundTertiary":  "#2a2a2a",
+    "base.backgroundElevated":  "#333333",
+    "base.foreground":          "#e8e8e8",
+    "base.foregroundSecondary": "#909090",
+    "base.foregroundMuted":     "#555555",
+    "base.border":              "#333333",
+    "base.accent":              "#00e676",
+    "base.accentHover":         "#33eb91",
+    "base.accentMuted":         "#003322",
+    "button.primary":           "#00e676",
+    "button.primaryHover":      "#33eb91",
+    "button.danger":            "#f85149",
+    "button.dangerHover":       "#ff6b63",
+    "feedback.success":         "#3fb950",
+    "feedback.warning":         "#e3b341",
+    "feedback.danger":          "#f85149",
+    "feedback.info":            "#58a6ff"
+  }
+}

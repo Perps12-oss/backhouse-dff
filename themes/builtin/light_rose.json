@@ -1,0 +1,27 @@
+{
+  "name": "light_rose",
+  "display_name": "Light Rose",
+  "type": "light",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#fdf5f7",
+    "base.backgroundSecondary": "#f5e8ec",
+    "base.backgroundTertiary":  "#ecdde2",
+    "base.backgroundElevated":  "#e0d0d5",
+    "base.foreground":          "#2a1018",
+    "base.foregroundSecondary": "#7a4050",
+    "base.foregroundMuted":     "#bb8090",
+    "base.border":              "#d8b8c0",
+    "base.accent":              "#c2185b",
+    "base.accentHover":         "#a01040",
+    "base.accentMuted":         "#f9d0dc",
+    "button.primary":           "#c2185b",
+    "button.primaryHover":      "#a01040",
+    "button.danger":            "#d32f2f",
+    "button.dangerHover":       "#b71c1c",
+    "feedback.success":         "#2e7d32",
+    "feedback.warning":         "#f57c00",
+    "feedback.danger":          "#d32f2f",
+    "feedback.info":            "#0277bd"
+  }
+}

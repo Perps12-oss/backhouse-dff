@@ -73,6 +73,7 @@ class CheckTreeview(ttk.Treeview):
 
         # Bind selection events
         self.bind("<<TreeviewSelect>>", self._on_select)
+        self.bind("<Button-1>", self._on_click)
         self.bind("<Double-Button-1>", self._on_double_click)
 
     def _setup_tags(self) -> None:
@@ -149,15 +150,20 @@ class CheckTreeview(ttk.Treeview):
         """
         self._item_states[item_id] = checked
 
-        # Add check icon to values
-        check_icon = CHECK_CHECKED if checked else CHECK_UNCHECKED
+        # Pop values and tags from kwargs to avoid duplicate-keyword error
+        file_values = kwargs.pop("values", ())
+        row_tags = kwargs.pop("tags", self._get_row_tags(parent))
 
-        item_id = self.insert(
+        # Prepend checkbox icon to file values
+        check_icon = CHECK_CHECKED if checked else CHECK_UNCHECKED
+        combined_values = (check_icon,) + tuple(file_values)
+
+        self.insert(
             parent,
             "end",
             iid=item_id,
-            values=(check_icon,),
-            tags=self._get_row_tags(parent),
+            values=combined_values,
+            tags=row_tags,
             **kwargs
         )
         return item_id
@@ -345,6 +351,16 @@ class CheckTreeview(ttk.Treeview):
             callback: Function called with (item_id, new_state).
         """
         self._check_callback = callback
+
+    def _on_click(self, event) -> None:
+        """Handle left-click — toggle checkbox if clicking on a file row."""
+        region = self.identify_region(event.x, event.y)
+        if region not in ("cell", "tree"):
+            return
+        item_id = self.identify_row(event.y)
+        if not item_id or item_id in self._group_rows:
+            return  # ignore clicks on group headers
+        self.toggle_check(item_id)
 
     def _on_select(self, event) -> None:
         """Handle selection event."""
