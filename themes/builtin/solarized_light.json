@@ -1,0 +1,27 @@
+{
+  "name": "solarized_light",
+  "display_name": "Solarized Light",
+  "type": "light",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#fdf6e3",
+    "base.backgroundSecondary": "#eee8d5",
+    "base.backgroundTertiary":  "#e5dcc8",
+    "base.backgroundElevated":  "#d8cebc",
+    "base.foreground":          "#657b83",
+    "base.foregroundSecondary": "#839496",
+    "base.foregroundMuted":     "#93a1a1",
+    "base.border":              "#cdc9bb",
+    "base.accent":              "#268bd2",
+    "base.accentHover":         "#1a72b8",
+    "base.accentMuted":         "#cce0f5",
+    "button.primary":           "#268bd2",
+    "button.primaryHover":      "#1a72b8",
+    "button.danger":            "#d32f2f",
+    "button.dangerHover":       "#b71c1c",
+    "feedback.success":         "#2e7d32",
+    "feedback.warning":         "#f57c00",
+    "feedback.danger":          "#d32f2f",
+    "feedback.info":            "#0277bd"
+  }
+}

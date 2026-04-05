@@ -1,0 +1,27 @@
+{
+  "name": "dark_midnight_purple",
+  "display_name": "Midnight Purple",
+  "type": "dark",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#12001f",
+    "base.backgroundSecondary": "#1a0030",
+    "base.backgroundTertiary":  "#220040",
+    "base.backgroundElevated":  "#2a0055",
+    "base.foreground":          "#e8d5ff",
+    "base.foregroundSecondary": "#9966cc",
+    "base.foregroundMuted":     "#553388",
+    "base.border":              "#2a0055",
+    "base.accent":              "#c084fc",
+    "base.accentHover":         "#d4a8ff",
+    "base.accentMuted":         "#2a004a",
+    "button.primary":           "#c084fc",
+    "button.primaryHover":      "#d4a8ff",
+    "button.danger":            "#f85149",
+    "button.dangerHover":       "#ff6b63",
+    "feedback.success":         "#3fb950",
+    "feedback.warning":         "#e3b341",
+    "feedback.danger":          "#f85149",
+    "feedback.info":            "#58a6ff"
+  }
+}

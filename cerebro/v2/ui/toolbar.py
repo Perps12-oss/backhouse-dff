@@ -31,12 +31,19 @@ from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 
 # Auto-mark rule labels → rule keys (same keys used by results_panel.apply_selection_rule)
 _AUTO_MARK_RULES = [
-    ("Select All Duplicates",       "select_all"),
-    ("Keep Largest (mark others)",  "select_except_largest"),
-    ("Keep Smallest (mark others)", "select_except_smallest"),
-    ("Keep Newest (mark others)",   "select_except_newest"),
-    ("Keep Oldest (mark others)",   "select_except_oldest"),
-    ("Invert Selection",            "invert_selection"),
+    ("Select All Duplicates",              "select_all"),
+    ("Keep Largest — mark others",         "select_except_largest"),
+    ("Keep Smallest — mark others",        "select_except_smallest"),
+    ("Keep Newest — mark others",          "select_except_newest"),
+    ("Keep Oldest — mark others",          "select_except_oldest"),
+    ("Keep First in Group — mark others",  "select_except_first"),
+    ("Keep Highest Resolution — mark others", "select_except_highest_resolution"),
+    (None, None),  # separator
+    ("Select All in Folder…",             "select_in_folder"),
+    ("Select by Extension…",              "select_by_extension"),
+    (None, None),  # separator
+    ("Invert Selection",                   "invert_selection"),
+    ("Clear All Selections",               "clear_all"),
 ]
 
 
@@ -253,10 +260,13 @@ class Toolbar(CTkFrame):
         """Pop up the Auto Mark dropdown menu below the button."""
         menu = tk.Menu(self, tearoff=0)
         for label, rule_key in _AUTO_MARK_RULES:
-            menu.add_command(
-                label=label,
-                command=lambda k=rule_key: self._on_auto_mark(k) if self._on_auto_mark else None,
-            )
+            if label is None:
+                menu.add_separator()
+            else:
+                menu.add_command(
+                    label=label,
+                    command=lambda k=rule_key: self._on_auto_mark(k) if self._on_auto_mark else None,
+                )
         try:
             x = self._auto_mark_btn.winfo_rootx()
             y = self._auto_mark_btn.winfo_rooty() + self._auto_mark_btn.winfo_height()

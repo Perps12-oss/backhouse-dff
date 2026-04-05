@@ -411,33 +411,37 @@ class MainWindow(CTk):
         SettingsDialog.show_dialog(parent=self, settings=None)
 
     def _on_help(self) -> None:
-        """Handle help button."""
-        # Create a simple help dialog
+        """Handle help button — show a small popup menu."""
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Keyboard Shortcuts…", command=self._show_keyboard_help)
+        menu.add_command(label="Scan History…",        command=self._show_scan_history)
+        try:
+            btn = self._toolbar._help_btn
+            x = btn.winfo_rootx()
+            y = btn.winfo_rooty() + btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _show_keyboard_help(self) -> None:
         from tkinter import messagebox
-        help_text = """Cerebro v2 — Help
+        messagebox.showinfo("Keyboard Shortcuts", (
+            "Ctrl+O          Add folder\n"
+            "Ctrl+Enter      Start scan\n"
+            "Escape          Stop scan / close dialog\n"
+            "Delete          Delete selected\n"
+            "Space           Toggle checkbox\n"
+            "Ctrl+A          Select all\n"
+            "Ctrl+D          Deselect all\n"
+            "Ctrl+I          Invert selection\n"
+            "F5              Refresh\n"
+            "Ctrl+P          Toggle preview panel\n"
+            "1–6             Switch scan mode\n"
+        ))
 
-Keyboard Shortcuts:
-Ctrl+O — Add folder
-Ctrl+Enter — Start scan
-Escape — Stop scan
-Ctrl+A — Select all
-Ctrl+D — Deselect all
-Ctrl+I — Invert selection
-F5 — Refresh
-Ctrl+P — Toggle preview panel
-1-6 — Switch scan mode
-
-Scan Modes:
-1. Files — Duplicate files by hash
-2. Photos — Similar images
-3. Videos — Duplicate videos
-4. Music — Duplicate music files
-5. Empty Folders — Find empty dirs
-6. Large Files — Find large files
-
-For more information, visit:
-github.com/Perps12-oss/dedup"""
-        messagebox.showinfo("Help", help_text)
+    def _show_scan_history(self) -> None:
+        from cerebro.v2.ui.scan_history_dialog import ScanHistoryDialog
+        ScanHistoryDialog.show(parent=self)
 
     def _on_folder_panel_collapse(self, collapsed: bool) -> None:
         """Resize paned window sash when left panel collapses/expands."""
@@ -567,6 +571,21 @@ github.com/Perps12-oss/dedup"""
             total_files = sum(len(g.files) for g in self._scan_results)
             reclaimable = sum(g.reclaimable for g in self._scan_results)
             elapsed = time.time() - self._scan_start_time if self._scan_start_time > 0 else 0.0
+
+            # Record this scan in history
+            try:
+                from cerebro.v2.ui.scan_history_dialog import record_scan
+                record_scan(
+                    mode=self._current_scan_mode,
+                    folders=[str(f) for f in self._folder_panel.get_scan_folders()],
+                    groups_found=len(self._scan_results),
+                    files_found=total_files,
+                    bytes_reclaimable=reclaimable,
+                    duration_seconds=elapsed,
+                )
+            except Exception:
+                pass
+
             self._status_bar.update_metrics(StatusBarMetrics(
                 files_scanned=total_files,
                 duplicates_found=total_files - len(self._scan_results),

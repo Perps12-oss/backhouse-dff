@@ -1,0 +1,27 @@
+{
+  "name": "light_default",
+  "display_name": "Light Default",
+  "type": "light",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#ffffff",
+    "base.backgroundSecondary": "#f3f3f3",
+    "base.backgroundTertiary":  "#e8e8e8",
+    "base.backgroundElevated":  "#dddddd",
+    "base.foreground":          "#1e1e1e",
+    "base.foregroundSecondary": "#555555",
+    "base.foregroundMuted":     "#999999",
+    "base.border":              "#c8c8c8",
+    "base.accent":              "#0066b8",
+    "base.accentHover":         "#0050a0",
+    "base.accentMuted":         "#cce4f7",
+    "button.primary":           "#0066b8",
+    "button.primaryHover":      "#0050a0",
+    "button.danger":            "#d32f2f",
+    "button.dangerHover":       "#b71c1c",
+    "feedback.success":         "#2e7d32",
+    "feedback.warning":         "#f57c00",
+    "feedback.danger":          "#d32f2f",
+    "feedback.info":            "#0277bd"
+  }
+}

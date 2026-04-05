@@ -1,0 +1,27 @@
+{
+  "name": "dark_coffee_gold",
+  "display_name": "Dark Coffee + Gold",
+  "type": "dark",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#1a1008",
+    "base.backgroundSecondary": "#221508",
+    "base.backgroundTertiary":  "#2a1c0a",
+    "base.backgroundElevated":  "#352212",
+    "base.foreground":          "#f0e4cc",
+    "base.foregroundSecondary": "#a08060",
+    "base.foregroundMuted":     "#5a4020",
+    "base.border":              "#352212",
+    "base.accent":              "#f0a500",
+    "base.accentHover":         "#ffbe33",
+    "base.accentMuted":         "#382500",
+    "button.primary":           "#f0a500",
+    "button.primaryHover":      "#ffbe33",
+    "button.danger":            "#f85149",
+    "button.dangerHover":       "#ff6b63",
+    "feedback.success":         "#3fb950",
+    "feedback.warning":         "#e3b341",
+    "feedback.danger":          "#f85149",
+    "feedback.info":            "#58a6ff"
+  }
+}

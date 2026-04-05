@@ -348,7 +348,29 @@ class SettingsDialog(CTkToplevel):
             self._theme_menu.set(current_theme)
         elif theme_names:
             self._theme_menu.set(theme_names[0])
-        self._theme_menu.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, Spacing.MD))
+        self._theme_menu.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, 0))
+
+        # Edit / New Theme buttons
+        btn_row = CTkFrame(tab, fg_color="transparent")
+        btn_row.pack(fill="x", padx=Spacing.SM, pady=(Spacing.XS, Spacing.MD))
+
+        CTkButton(
+            btn_row, text="✏ Edit Theme", width=120, height=28,
+            font=Typography.FONT_SM,
+            fg_color=theme_color("button.secondary"),
+            hover_color=theme_color("button.secondaryHover"),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
+            command=self._open_theme_editor_current,
+        ).pack(side="left", padx=(0, Spacing.SM))
+
+        CTkButton(
+            btn_row, text="+ New Theme", width=120, height=28,
+            font=Typography.FONT_SM,
+            fg_color=theme_color("button.secondary"),
+            hover_color=theme_color("button.secondaryHover"),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
+            command=self._open_theme_editor_new,
+        ).pack(side="left")
 
         # Font size
         CTkLabel(
@@ -400,6 +422,17 @@ class SettingsDialog(CTkToplevel):
             self._settings.appearance["theme"] = theme_name
         except Exception:
             pass
+
+    def _open_theme_editor_current(self) -> None:
+        """Open theme editor pre-loaded with the currently selected theme."""
+        from cerebro.v2.ui.theme_editor_dialog import ThemeEditorDialog
+        current = self._get_active_theme()
+        ThemeEditorDialog.show(parent=self, base_theme_name=current or None)
+
+    def _open_theme_editor_new(self) -> None:
+        """Open theme editor starting from a blank slate."""
+        from cerebro.v2.ui.theme_editor_dialog import ThemeEditorDialog
+        ThemeEditorDialog.show(parent=self)
 
     def _build_performance_tab(self) -> None:
         """Build Performance settings tab."""

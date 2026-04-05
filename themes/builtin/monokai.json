@@ -1,0 +1,27 @@
+{
+  "name": "monokai",
+  "display_name": "Monokai",
+  "type": "dark",
+  "author": "Cerebro",
+  "colors": {
+    "base.background":          "#272822",
+    "base.backgroundSecondary": "#2d2e27",
+    "base.backgroundTertiary":  "#33342d",
+    "base.backgroundElevated":  "#3e3f38",
+    "base.foreground":          "#f8f8f2",
+    "base.foregroundSecondary": "#ccc9c2",
+    "base.foregroundMuted":     "#75715e",
+    "base.border":              "#3e3f38",
+    "base.accent":              "#a6e22e",
+    "base.accentHover":         "#c0f050",
+    "base.accentMuted":         "#2a3515",
+    "button.primary":           "#a6e22e",
+    "button.primaryHover":      "#c0f050",
+    "button.danger":            "#f85149",
+    "button.dangerHover":       "#ff6b63",
+    "feedback.success":         "#3fb950",
+    "feedback.warning":         "#e3b341",
+    "feedback.danger":          "#f85149",
+    "feedback.info":            "#58a6ff"
+  }
+}

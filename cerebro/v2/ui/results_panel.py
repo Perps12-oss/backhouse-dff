@@ -398,15 +398,139 @@ class ResultsPanel(CTkFrame):
             print(f"Double-clicked: {item_id}")
 
     def _on_right_click(self, event) -> None:
-        """Handle right-click context menu."""
-        # TODO: Show context menu with:
-        # - Open file
-        # - Open containing folder
-        # - Copy path
-        # - Select group
-        # - Deselect group
-        # - Properties
-        print("Right-click context menu")
+        """Show context menu on right-click."""
+        # Identify clicked row
+        item_id = self._treeview.identify_row(event.y)
+        if not item_id:
+            return
+
+        is_group = item_id in self._treeview._group_rows
+        file_data = None if is_group else self._get_file_data_by_item_id(item_id)
+
+        menu = tk.Menu(self, tearoff=0)
+
+        if file_data:
+            path = file_data.get("path", "")
+            menu.add_command(label="Open File",
+                             command=lambda: self._open_file(path))
+            menu.add_command(label="Open Containing Folder",
+                             command=lambda: self._open_folder(path))
+            menu.add_command(label="Copy Path",
+                             command=lambda: self._copy_path(path))
+            menu.add_separator()
+            menu.add_command(label="Select Group",
+                             command=lambda: self._select_group_for_item(item_id))
+            menu.add_command(label="Deselect Group",
+                             command=lambda: self._deselect_group_for_item(item_id))
+            menu.add_separator()
+            menu.add_command(label="Properties",
+                             command=lambda: self._show_properties(file_data))
+        elif is_group:
+            menu.add_command(label="Select Group",
+                             command=lambda: self._select_group_by_row(item_id))
+            menu.add_command(label="Deselect Group",
+                             command=lambda: self._deselect_group_by_row(item_id))
+
+        if menu.index("end") is not None:
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+    # ------------------------------------------------------------------
+    # Context menu actions
+    # ------------------------------------------------------------------
+
+    def _open_file(self, path: str) -> None:
+        import sys, subprocess
+        try:
+            if sys.platform == "win32":
+                import os; os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Open File", f"Could not open file:\n{exc}")
+
+    def _open_folder(self, path: str) -> None:
+        import sys, subprocess
+        folder = str(Path(path).parent)
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Open Folder", f"Could not open folder:\n{exc}")
+
+    def _copy_path(self, path: str) -> None:
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+        except Exception:
+            pass
+
+    def _select_group_for_item(self, item_id: str) -> None:
+        parent = self._treeview.parent(item_id) or item_id
+        self._set_group_checks(parent, True)
+
+    def _deselect_group_for_item(self, item_id: str) -> None:
+        parent = self._treeview.parent(item_id) or item_id
+        self._set_group_checks(parent, False)
+
+    def _select_group_by_row(self, group_row_id: str) -> None:
+        self._set_group_checks(group_row_id, True)
+
+    def _deselect_group_by_row(self, group_row_id: str) -> None:
+        self._set_group_checks(group_row_id, False)
+
+    def _set_group_checks(self, group_row_id: str, checked: bool) -> None:
+        for child in self._treeview.get_children(group_row_id):
+            self._treeview.set_check(child, checked)
+        if self._on_selection_changed:
+            self._on_selection_changed(self._treeview.get_checked())
+
+    def _show_properties(self, file_data: Dict[str, Any]) -> None:
+        from tkinter import messagebox
+        from datetime import datetime
+        path = file_data.get("path", "—")
+        size = file_data.get("size", 0)
+        modified = file_data.get("modified", 0)
+        similarity = file_data.get("similarity", 1.0)
+        size_str = self._format_bytes(size)
+        mod_str = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S") if modified else "—"
+        sim_str = f"{int(similarity * 100)}%"
+        messagebox.showinfo(
+            "File Properties",
+            f"Path:       {path}\n"
+            f"Size:       {size_str}\n"
+            f"Modified:   {mod_str}\n"
+            f"Similarity: {sim_str}",
+        )
+
+    def _get_file_data_by_item_id(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve an item_id like '3_1' to its file_data dict."""
+        try:
+            parts = item_id.split("_")
+            if len(parts) == 2:
+                group_id, file_idx = int(parts[0]), int(parts[1])
+                group = next((g for g in self._filtered_groups if g.group_id == group_id), None)
+                if group and file_idx < len(group.files):
+                    fd = group.files[file_idx]
+                    # Normalise to dict (file objects may be DuplicateFile dataclasses or dicts)
+                    if hasattr(fd, "__dict__"):
+                        d = {k: getattr(fd, k) for k in ("path", "size", "modified", "similarity")}
+                        d["path"] = str(d["path"])
+                        return d
+                    return fd
+        except Exception:
+            pass
+        return None
 
     def _sort_by(self, column: str) -> None:
         """Sort treeview by column."""
@@ -713,6 +837,71 @@ class ResultsPanel(CTkFrame):
                         item_id = f"{group.group_id}_{i}"
                         self._treeview.set_check(item_id, True)
                         self._selected_count += 1
+
+        elif rule == "select_except_first":
+            # Keep first file in each group (index 0), select all others
+            for group in self._filtered_groups:
+                for i in range(1, len(group.files)):
+                    item_id = f"{group.group_id}_{i}"
+                    self._treeview.set_check(item_id, True)
+                    self._selected_count += 1
+
+        elif rule == "select_except_highest_resolution":
+            # For image/video groups: keep highest resolution, select others
+            for group in self._filtered_groups:
+                best_idx = 0
+                best_res = -1
+                for i, fd in enumerate(group.files):
+                    meta = fd.get("metadata", {}) if isinstance(fd, dict) else getattr(fd, "metadata", {})
+                    w = meta.get("width", 0) or 0
+                    h = meta.get("height", 0) or 0
+                    res = w * h
+                    if res > best_res:
+                        best_res = res
+                        best_idx = i
+                for i in range(len(group.files)):
+                    if i != best_idx:
+                        item_id = f"{group.group_id}_{i}"
+                        self._treeview.set_check(item_id, True)
+                        self._selected_count += 1
+
+        elif rule == "select_in_folder":
+            # Prompt user for a folder; select all files inside it
+            from tkinter import filedialog
+            folder = filedialog.askdirectory(title="Select folder — mark files inside it")
+            if folder:
+                folder_path = Path(folder)
+                for group in self._filtered_groups:
+                    for i, fd in enumerate(group.files):
+                        path_str = fd.get("path", "") if isinstance(fd, dict) else str(getattr(fd, "path", ""))
+                        try:
+                            if Path(path_str).is_relative_to(folder_path):
+                                item_id = f"{group.group_id}_{i}"
+                                self._treeview.set_check(item_id, True)
+                                self._selected_count += 1
+                        except Exception:
+                            pass
+
+        elif rule == "select_by_extension":
+            # Prompt user for extensions (comma-separated); select matching files
+            from tkinter.simpledialog import askstring
+            raw = askstring(
+                "Select by Extension",
+                "Enter extensions to mark (comma-separated, e.g. .jpg,.png):"
+            )
+            if raw:
+                exts = {e.strip().lower().lstrip(".") for e in raw.split(",")}
+                exts = {f".{e}" if not e.startswith(".") else e for e in exts}
+                for group in self._filtered_groups:
+                    for i, fd in enumerate(group.files):
+                        path_str = fd.get("path", "") if isinstance(fd, dict) else str(getattr(fd, "path", ""))
+                        if Path(path_str).suffix.lower() in exts:
+                            item_id = f"{group.group_id}_{i}"
+                            self._treeview.set_check(item_id, True)
+                            self._selected_count += 1
+
+        elif rule == "clear_all":
+            pass  # already cleared above
 
         elif rule == "invert_selection":
             self._treeview.invert_checks()
