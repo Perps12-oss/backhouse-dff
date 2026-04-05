@@ -196,13 +196,14 @@ class ResultsPanel(CTkFrame):
         self._treeview.bind("<Double-Button-1>", self._on_double_click)
         self._treeview.bind("<Button-3>", self._on_right_click)  # Right-click
 
-        # Empty state label
-        self._empty_label = CTkLabel(
-            self,
-            text="No results to display.\nAdd folders and click 'Start Search' to begin.",
-            font=Typography.FONT_MD,
-            text_color=theme_color("base.foregroundMuted")
-        )
+        # Getting-started / empty state view
+        self._empty_view = _GettingStartedView(self)
+        self._empty_view.on_add_folder(self._on_gs_add_folder)
+        self._empty_view.on_start_search(self._on_gs_start_search)
+
+        # Callbacks that MainWindow wires up for getting-started actions
+        self._on_request_add_folder: Optional[Callable[[], None]] = None
+        self._on_request_start_search: Optional[Callable[[], None]] = None
 
     def _apply_theme(self) -> None:
         """Reconfigure all widget colors when theme changes."""
@@ -211,8 +212,6 @@ class ResultsPanel(CTkFrame):
             self._status_frame.configure(fg_color=theme_color("base.backgroundTertiary"))
         if self._results_count_label:
             self._results_count_label.configure(text_color=theme_color("results.foreground"))
-        if self._empty_label:
-            self._empty_label.configure(text_color=theme_color("base.foregroundMuted"))
 
     def _build_filter_tabs(self) -> None:
         """Build filter tabs bar."""
@@ -544,19 +543,26 @@ class ResultsPanel(CTkFrame):
                 )
 
     def _show_empty_state(self) -> None:
-        """Show empty state message."""
+        """Show getting-started / empty state view."""
         if self._treeview.winfo_ismapped():
             self._treeview.pack_forget()
-        if self._empty_label.winfo_ismapped():
-            self._empty_label.pack_forget()
-        self._empty_label.pack(expand=True)
+        if not self._empty_view.winfo_ismapped():
+            self._empty_view.pack(fill="both", expand=True)
 
     def _show_results(self) -> None:
-        """Show results (treeview)."""
-        if self._empty_label.winfo_ismapped():
-            self._empty_label.pack_forget()
+        """Show results treeview, hide empty state."""
+        if self._empty_view.winfo_ismapped():
+            self._empty_view.pack_forget()
         if not self._treeview.winfo_ismapped():
             self._treeview.pack(fill="both", expand=True)
+
+    def _on_gs_add_folder(self) -> None:
+        if self._on_request_add_folder:
+            self._on_request_add_folder()
+
+    def _on_gs_start_search(self) -> None:
+        if self._on_request_start_search:
+            self._on_request_start_search()
 
     def _update_status(self) -> None:
         """Update results count label."""
@@ -738,18 +744,141 @@ class ResultsPanel(CTkFrame):
         self._on_file_double_clicked = callback
 
     def set_mode(self, mode: str) -> None:
-        """
-        Set active scan mode and update columns.
-
-        Args:
-            mode: The scan mode from ScanMode class.
-        """
+        """Set active scan mode and update columns."""
         from cerebro.v2.ui.mode_tabs import ScanMode
-
         if mode not in ScanMode.all_modes():
             return
-
         self._configure_columns_for_mode(mode)
+
+    def on_request_add_folder(self, cb: Callable[[], None]) -> None:
+        """Wire getting-started 'Add Folder' button to MainWindow."""
+        self._on_request_add_folder = cb
+
+    def on_request_start_search(self, cb: Callable[[], None]) -> None:
+        """Wire getting-started 'Search Now' button to MainWindow."""
+        self._on_request_start_search = cb
+
+
+# ---------------------------------------------------------------------------
+# Getting-started / empty state view
+# ---------------------------------------------------------------------------
+
+class _GettingStartedView(CTkFrame):
+    """
+    Pre-scan onboarding view shown in the results area when no scan has run.
+
+    Layout:
+        ① Add a folder       [+ Add Folder]
+        ② Click Search Now   [▶ Search Now]
+        (brief tagline below)
+    """
+
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_add_folder: Optional[Callable[[], None]] = None
+        self._on_start_search: Optional[Callable[[], None]] = None
+
+        subscribe_to_theme(self, self._apply_theme)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        self.configure(fg_color=theme_color("results.background"))
+
+        # Centre-align everything vertically
+        outer = CTkFrame(self, fg_color="transparent")
+        outer.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Headline
+        CTkLabel(
+            outer,
+            text="Find duplicate files",
+            font=("", 22, "bold"),
+            text_color=theme_color("base.foreground"),
+        ).pack(pady=(0, Spacing.SM))
+
+        CTkLabel(
+            outer,
+            text="Add the folders you want to scan, then hit Search Now.",
+            font=Typography.FONT_MD,
+            text_color=theme_color("base.foregroundSecondary"),
+        ).pack(pady=(0, Spacing.XL if hasattr(Spacing, "XL") else 24))
+
+        # Step rows
+        steps_frame = CTkFrame(outer, fg_color="transparent")
+        steps_frame.pack()
+
+        self._add_step(steps_frame, "1", "Choose a folder to scan",
+                       "+ Add Folder", "button.primary", "button.primaryHover",
+                       self._click_add)
+
+        # Spacer between steps
+        CTkFrame(steps_frame, height=Spacing.MD,
+                 fg_color="transparent").pack()
+
+        self._search_btn_row = self._add_step(
+            steps_frame, "2", "Start the search",
+            "▶  Search Now", "feedback.success", "feedback.success",
+            self._click_search)
+
+        # Tagline
+        CTkLabel(
+            outer,
+            text="Cerebro v2  —  fast duplicate finder",
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundMuted"),
+        ).pack(pady=(Spacing.XL if hasattr(Spacing, "XL") else 24, 0))
+
+    def _add_step(self, parent, number: str, label: str,
+                  btn_text: str, color_key: str, hover_key: str,
+                  command) -> CTkFrame:
+        row = CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x")
+
+        # Step number badge
+        badge = CTkLabel(
+            row, text=number, width=28, height=28,
+            font=("", 13, "bold"),
+            text_color="white",
+            fg_color=theme_color(color_key),
+            corner_radius=14,
+        )
+        badge.pack(side="left", padx=(0, Spacing.SM))
+
+        CTkLabel(
+            row, text=label, font=Typography.FONT_MD,
+            text_color=theme_color("base.foreground"),
+        ).pack(side="left", padx=(0, Spacing.MD))
+
+        btn = CTkButton(
+            row, text=btn_text, width=140, height=36,
+            font=Typography.FONT_MD,
+            fg_color=theme_color(color_key),
+            hover_color=theme_color(hover_key),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
+        )
+        btn.pack(side="left")
+        btn.configure(command=command)
+        return row
+
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("results.background"))
+        except Exception:
+            pass
+
+    def _click_add(self) -> None:
+        if self._on_add_folder:
+            self._on_add_folder()
+
+    def _click_search(self) -> None:
+        if self._on_start_search:
+            self._on_start_search()
+
+    def on_add_folder(self, cb: Callable[[], None]) -> None:
+        self._on_add_folder = cb
+
+    def on_start_search(self, cb: Callable[[], None]) -> None:
+        self._on_start_search = cb
 
 
 # Simple logger fallback

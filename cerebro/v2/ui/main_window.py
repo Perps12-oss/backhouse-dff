@@ -238,9 +238,12 @@ class MainWindow(CTk):
         self._folder_panel.on_folders_changed(self._on_folders_changed)
         self._folder_panel.on_protected_changed(self._on_protected_changed)
         self._folder_panel.on_options_changed(self._on_options_changed)
+        self._folder_panel.on_collapse_toggled(self._on_folder_panel_collapse)
 
         # Wire results panel callbacks
         self._results_panel.on_selection_changed(self._on_selection_changed)
+        self._results_panel.on_request_add_folder(self._on_add_path)
+        self._results_panel.on_request_start_search(self._on_start_search)
 
     def _build_selection_bar(self) -> None:
         """Build and install selection bar."""
@@ -366,6 +369,9 @@ class MainWindow(CTk):
         print(f"Protected: {[str(f) for f in protected_folders]}")
         print(f"Options: {scan_options}")
 
+        # Collapse left panel so results get full width
+        self._folder_panel.set_collapsed(True)
+
         # Set mode and start scan
         self._orchestrator.set_mode(scan_mode)
 
@@ -422,6 +428,18 @@ Scan Modes:
 For more information, visit:
 github.com/Perps12-oss/dedup"""
         messagebox.showinfo("Help", help_text)
+
+    def _on_folder_panel_collapse(self, collapsed: bool) -> None:
+        """Resize paned window sash when left panel collapses/expands."""
+        try:
+            if collapsed:
+                self._horizontal_paned.sash_place(
+                    0, self._folder_panel.COLLAPSED_WIDTH, 0)
+            else:
+                self._horizontal_paned.sash_place(
+                    0, Dimensions.LEFT_PANEL_DEFAULT_WIDTH, 0)
+        except Exception:
+            pass  # PanedWindow variant may not support sash_place
 
     def _on_folders_changed(self, folders: List[Path]) -> None:
         """Handle folder list changes."""
@@ -518,6 +536,9 @@ github.com/Perps12-oss/dedup"""
         self._scanning = False
         self._toolbar.set_scanning(False)
         self._status_bar.set_scanning(False)
+
+        # Re-expand left panel so user can adjust folders before next scan
+        self._folder_panel.set_collapsed(False)
 
         # Get results from orchestrator
         self._scan_results = self._orchestrator.get_results()

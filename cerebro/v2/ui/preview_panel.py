@@ -1,8 +1,14 @@
 """
 Preview Panel Widget
 
-Bottom panel with side-by-side comparison viewer.
-Uses two synchronized ZoomCanvas widgets with metadata labels.
+Collapsible bottom panel for file preview.
+
+Behaviour:
+- Collapsed by default (32 px header strip only).
+- Auto-expands when a file is selected from the results panel.
+- Context-sensitive: shows image for image files; metadata-only for others.
+- Side-by-side comparison when two files are loaded.
+- No "Keep A / Keep B" buttons (selection is handled via checkboxes in results).
 """
 
 from __future__ import annotations
@@ -23,721 +29,428 @@ except ImportError:
     CTkButton = tk.Button
     CTkSwitch = tk.Checkbutton
 
-from cerebro.v2.core.design_tokens import (
-    Spacing, Typography, Dimensions
-)
+from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.ui.widgets.zoom_canvas import ZoomCanvas
 
+# Image extensions that should show the canvas
+_IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif",
+    ".webp", ".heic", ".heif", ".cr2", ".cr3", ".nef",
+    ".arw", ".dng", ".orf", ".rw2", ".pef", ".raf", ".sr2",
+}
 
-class PreviewSidePanel(CTkFrame):
+_DEFAULT_HEIGHT = 220  # px when expanded
+
+
+def _format_bytes(n: int) -> str:
+    if n == 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i, s = 0, float(n)
+    while s >= 1024 and i < len(units) - 1:
+        s /= 1024
+        i += 1
+    return f"{int(s)} {units[i]}" if i == 0 else f"{s:.1f} {units[i]}"
+
+
+def _format_date(ts: float) -> str:
+    if not ts:
+        return "—"
+    from datetime import datetime
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Side panel (one half of the comparison)
+# ---------------------------------------------------------------------------
+
+class _SidePanel(CTkFrame):
     """
-    One side of the preview panel with canvas and metadata.
-
-    Features:
-    - ZoomCanvas for image display
-    - Metadata labels (resolution, size, format, date, path)
-    - Keep This button (marks file as keeper)
+    Single-side preview: optional image canvas + compact metadata row.
+    No Keep button.
     """
 
-    def __init__(self, master=None, title: str = "", **kwargs):
+    def __init__(self, master=None, title: str = "A", **kwargs):
         super().__init__(master, **kwargs)
         self._title = title
-
-        # State
         self._current_file: Optional[Dict[str, Any]] = None
 
-        # Widgets
-        self._canvas: Optional[ZoomCanvas] = None
-        self._keep_btn: Optional[CTkButton] = None
-        self._metadata_labels: Dict[str, CTkLabel] = {}
-
-        # Callbacks
-        self._on_keep_clicked: Optional[Callable[[], None]] = None
-
-        # Build UI
-        self._build_ui()
         subscribe_to_theme(self, self._apply_theme)
+        self._build()
+
+    def _build(self) -> None:
+        self.configure(fg_color=theme_color("base.backgroundTertiary"))
+
+        # Title bar
+        title_bar = CTkFrame(self, height=24,
+                             fg_color=theme_color("base.backgroundElevated"))
+        title_bar.pack(fill="x")
+        self._title_lbl = CTkLabel(
+            title_bar, text=self._title,
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundSecondary"))
+        self._title_lbl.pack(side="left", padx=Spacing.SM)
+
+        # Canvas (hidden for non-image files)
+        self._canvas = ZoomCanvas(self, bg_color=theme_color("preview.background"))
+        self._canvas.pack(fill="both", expand=True, padx=Spacing.XS, pady=Spacing.XS)
+
+        # Placeholder for non-image files
+        self._no_preview = CTkLabel(
+            self, text="No preview",
+            font=Typography.FONT_SM,
+            text_color=theme_color("base.foregroundMuted"))
+        # (not packed initially)
+
+        # Metadata bar — single compact line
+        meta_bar = CTkFrame(self, height=28,
+                            fg_color=theme_color("base.backgroundElevated"))
+        meta_bar.pack(fill="x")
+
+        self._meta_lbl = CTkLabel(
+            meta_bar, text="—",
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundSecondary"),
+            anchor="w")
+        self._meta_lbl.pack(side="left", padx=Spacing.SM, fill="x", expand=True)
+
+        self._ext_badge = CTkLabel(
+            meta_bar, text="",
+            font=Typography.FONT_XS,
+            text_color=theme_color("base.foregroundMuted"),
+            width=40)
+        self._ext_badge.pack(side="right", padx=Spacing.SM)
 
     def _apply_theme(self) -> None:
-        """Reconfigure all widget colors when theme changes."""
-        self.configure(fg_color=theme_color("base.backgroundTertiary"))
-        if self._keep_btn:
-            self._keep_btn.configure(
-                fg_color=theme_color("feedback.success"),
-                hover_color=theme_color("feedback.success"),
-            )
-        text_secondary = theme_color("base.foregroundSecondary")
-        text_muted = theme_color("base.foregroundMuted")
-        for key, label in self._metadata_labels.items():
-            if key in ("resolution", "size"):
-                label.configure(text_color=text_secondary)
-            else:
-                label.configure(text_color=text_muted)
+        try:
+            self.configure(fg_color=theme_color("base.backgroundTertiary"))
+            self._meta_lbl.configure(text_color=theme_color("base.foregroundSecondary"))
+            self._ext_badge.configure(text_color=theme_color("base.foregroundMuted"))
+        except Exception:
+            pass
 
-    def _build_ui(self) -> None:
-        """Build preview side panel UI."""
-        self.configure(
-            fg_color=theme_color("base.backgroundTertiary")
-        )
-
-        # Title label
-        if self._title:
-            CTkLabel(
-                self,
-                text=self._title,
-                font=Typography.FONT_SM,
-                text_color=theme_color("base.foregroundSecondary")
-            ).pack(anchor="w", padx=Spacing.SM, pady=(Spacing.SM, 0))
-
-        # Canvas frame (with resolution badge overlay)
-        canvas_frame = CTkFrame(self)
-        canvas_frame.pack(fill="both", expand=True, padx=Spacing.XS)
-
-        # Resolution badge overlay (small label on canvas)
-        self._resolution_badge = CTkLabel(
-            self._canvas,
-            text="-- x --",
-            font=Typography.FONT_XS,
-            text_color="white",
-            background=Colors.ACCENT.hex,
-            corner_radius=4,
-            padx=4,
-            pady=4
-        )
-        # Initially hidden, will show when image loaded
-
-        # ZoomCanvas
-        self._canvas = ZoomCanvas(
-            canvas_frame,
-            bg_color=theme_color("preview.background")
-        )
-        self._canvas.pack(fill="both", expand=True)
-
-        # Resolution badge overlay (small label on canvas)
-        self._resolution_badge = CTkLabel(
-            self._canvas,
-            text="-- x --",
-            font=Typography.FONT_XS,
-            text_color="white",
-            background=Colors.ACCENT.hex,
-            corner_radius=4,
-            padx=4,
-            pady=4
-        )
-        # Initially hidden, will show when image loaded
-
-        # Metadata frame
-        metadata_frame = CTkFrame(
-            self,
-            height=80,
-            fg_color=theme_color("base.backgroundElevated")
-        )
-        metadata_frame.pack(fill="x", padx=Spacing.XS, pady=Spacing.SM)
-
-        # Metadata labels grid
-        self._build_metadata_labels(metadata_frame)
-
-        # Keep This button
-        self._keep_btn = CTkButton(
-            self,
-            text="📌 Keep This",
-            height=28,
-            font=Typography.FONT_SM,
-            fg_color=theme_color("feedback.success"),
-            hover_color=theme_color("feedback.success"),
-            corner_radius=Spacing.BORDER_RADIUS_SM
-        )
-        self._keep_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.SM))
-        self._keep_btn.configure(command=self._on_keep_clicked)
-
-        # Initially disabled
-        self._keep_btn.configure(state="disabled")
-
-    def _build_metadata_labels(self, parent: CTkFrame) -> None:
-        """Build metadata labels grid."""
-        # Resolution label
-        self._metadata_labels["resolution"] = CTkLabel(
-            parent,
-            text="-- x -- px",
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foregroundSecondary")
-        )
-        self._metadata_labels["resolution"].grid(
-            row=0, column=0, padx=Spacing.SM, pady=Spacing.XS, sticky="w"
-        )
-
-        # Size label
-        self._metadata_labels["size"] = CTkLabel(
-            parent,
-            text="0 B",
-            font=Typography.FONT_SM,
-            text_color=theme_color("base.foregroundSecondary")
-        )
-        self._metadata_labels["size"].grid(
-            row=0, column=1, padx=Spacing.SM, pady=Spacing.XS, sticky="w"
-        )
-
-        # Format label
-        self._metadata_labels["format"] = CTkLabel(
-            parent,
-            text="--",
-            font=Typography.FONT_XS,
-            text_color=theme_color("base.foregroundMuted"),
-            width=40
-        )
-        self._metadata_labels["format"].grid(
-            row=0, column=2, padx=Spacing.SM, pady=Spacing.XS, sticky="w"
-        )
-
-        # Date label
-        self._metadata_labels["date"] = CTkLabel(
-            parent,
-            text="----/--/--",
-            font=Typography.FONT_XS,
-            text_color=theme_color("base.foregroundMuted")
-        )
-        self._metadata_labels["date"].grid(
-            row=1, column=0, columnspan=2,
-            padx=Spacing.SM, pady=Spacing.XS, sticky="w"
-        )
-
-        # Path label (truncated)
-        self._metadata_labels["path"] = CTkLabel(
-            parent,
-            text="",
-            font=Typography.FONT_XS,
-            text_color=theme_color("base.foregroundMuted"),
-            anchor="w"
-        )
-        self._metadata_labels["path"].grid(
-            row=1, column=2,
-            padx=Spacing.SM, pady=Spacing.XS, sticky="w"
-        )
-
-    def load_file(self, file_data: Dict[str, Any]) -> None:
-        """
-        Load a file into preview.
-
-        Args:
-            file_data: Dictionary with file info (path, size, modified, etc.).
-        """
+    def load(self, file_data: Dict[str, Any]) -> None:
         self._current_file = file_data
         path_str = file_data.get("path", "")
         path = Path(path_str) if path_str else None
 
-        if not path or not path.exists():
-            self._clear_display()
-            return
+        is_image = (path and path.suffix.lower() in _IMAGE_EXTENSIONS
+                    and path.exists())
 
-        # Load image into canvas
-        self._canvas.load_image(path, fit=True)
-
-        # Show resolution badge if image is loaded and has resolution
-        if self._resolution_badge and path.exists():
-            if file_data.get("width") and file_data.get("height"):
-                width = file_data.get("width")
-                height = file_data.get("height")
-                # Place badge at top-right of canvas
-                self._resolution_badge.place(relx=-90, rely=-4)
-                self._current_resolution = (width, height)
-            else:
-                if self._resolution_badge:
-                    self._resolution_badge.place_forget()
-
-        # Update metadata
-        self._update_metadata(file_data, path)
-
-        # Enable keep button
-        self._keep_btn.configure(state="normal")
-
-    def _update_metadata(self, file_data: Dict[str, Any], path: Path) -> None:
-        """Update metadata labels from file data."""
-        # Resolution (if available)
-        width = file_data.get("width")
-        height = file_data.get("height")
-
-        if width and height:
-            self._current_resolution = (width, height)
-            self._metadata_labels["resolution"].configure(
-                text=f"{width} × {height}"
-            )
+        if is_image:
+            self._no_preview.pack_forget()
+            self._canvas.pack(fill="both", expand=True,
+                              padx=Spacing.XS, pady=Spacing.XS)
+            self._canvas.load_image(path, fit=True)
         else:
-            self._current_resolution = None
-            self._metadata_labels["resolution"].configure(
-                text="-- x -- px"
-            )
+            self._canvas.pack_forget()
+            self._no_preview.pack(expand=True)
 
-    def _clear_display(self) -> None:
-        """Clear the preview display."""
-        self._current_file = None
-
-        # Clear canvas
-        # TODO: Add clear method to ZoomCanvas or just reset
-        self._canvas.reset_view()
-
-        # Hide resolution badge
-        if self._resolution_badge:
-            self._resolution_badge.place_forget()
-
-        # Reset metadata labels
-        self._metadata_labels["resolution"].configure(text="-- x -- px")
-
-        # Hide resolution badge
-        if self._resolution_badge:
-            self._resolution_badge.place_forget()
-        self._metadata_labels["size"].configure(text="0 B")
-        self._metadata_labels["format"].configure(text="--")
-        self._metadata_labels["date"].configure(text="----/--/--")
-        self._metadata_labels["path"].configure(text="")
-
-        # Disable keep button
-        self._keep_btn.configure(state="disabled")
-
-    def _update_metadata(self, file_data: Dict[str, Any], path: Path) -> None:
-        """Update metadata labels from file data."""
-        # Resolution (if available)
-        width = file_data.get("width")
-        height = file_data.get("height")
-        if width and height:
-            self._metadata_labels["resolution"].configure(
-                text=f"{width} × {height} px"
-            )
-        else:
-            self._metadata_labels["resolution"].configure(text="-- x -- px")
-
-        # Size
+        # Compact metadata: "1280 × 720 px  ·  3.2 MB  ·  2024-05-01"
+        parts = []
+        w, h = file_data.get("width"), file_data.get("height")
+        if w and h:
+            parts.append(f"{w} × {h} px")
         size = file_data.get("size", 0)
-        self._metadata_labels["size"].configure(text=self._format_bytes(size))
-
-        # Format (extension)
-        ext = path.suffix.upper().lstrip('.')
-        self._metadata_labels["format"].configure(text=ext if ext else "--")
-
-        # Modified date
+        if size:
+            parts.append(_format_bytes(size))
         modified = file_data.get("modified", 0)
         if modified:
-            self._metadata_labels["date"].configure(
-                text=self._format_date(modified)
-            )
-        else:
-            self._metadata_labels["date"].configure(text="----/--/--")
+            parts.append(_format_date(modified))
+        self._meta_lbl.configure(text="  ·  ".join(parts) if parts else "—")
 
-        # Path (truncated)
-        path_str = str(path)
-        if len(path_str) > 50:
-            path_str = "..." + path_str[-47:]
-        self._metadata_labels["path"].configure(text=path_str)
+        ext = path.suffix.upper().lstrip(".") if path else ""
+        self._ext_badge.configure(text=ext)
 
-    def _format_bytes(self, bytes_count: int) -> str:
-        """Format bytes to human-readable string."""
-        if bytes_count == 0:
-            return "0 B"
+        # Update title to show filename
+        name = path.name if path else "File"
+        if len(name) > 34:
+            name = name[:31] + "..."
+        self._title_lbl.configure(text=name)
 
-        units = ["B", "KB", "MB", "GB", "TB"]
-        unit_index = 0
-        size = float(bytes_count)
-
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-
-        if unit_index == 0:
-            return f"{int(size)} {units[unit_index]}"
-        else:
-            return f"{size:.1f} {units[unit_index]}"
-
-    def _format_date(self, timestamp: float) -> str:
-        """Format timestamp to readable date."""
-        if not timestamp:
-            return "----/--/--"
-
-        from datetime import datetime
-        dt = datetime.fromtimestamp(timestamp)
-        return dt.strftime("%Y-%m-%d")
-
-    def _on_keep_clicked(self) -> None:
-        """Handle Keep This button click."""
-        if self._on_keep_clicked and self._current_file:
-            self._on_keep_clicked()
+    def clear(self) -> None:
+        self._current_file = None
+        self._canvas.reset_view()
+        self._canvas.pack(fill="both", expand=True,
+                          padx=Spacing.XS, pady=Spacing.XS)
+        self._no_preview.pack_forget()
+        self._meta_lbl.configure(text="—")
+        self._ext_badge.configure(text="")
+        self._title_lbl.configure(text=self._title)
 
     def get_canvas(self) -> ZoomCanvas:
-        """Get the ZoomCanvas widget."""
         return self._canvas
 
-    def on_keep_clicked(self, callback: Callable[[], None]) -> None:
-        """Set callback for Keep This button."""
-        self._on_keep_clicked = callback
 
+# ---------------------------------------------------------------------------
+# PreviewPanel — public widget
+# ---------------------------------------------------------------------------
 
 class PreviewPanel(CTkFrame):
     """
-    Bottom panel with side-by-side comparison viewer.
+    Collapsible preview panel.
 
-    Features:
-    - Two synchronized ZoomCanvas widgets
-    - Metadata display for each image
-    - Keep This buttons for each side
-    - Sync zoom/pan between canvases
-    - Collapsible
-    - Diff toggle (visual difference overlay)
+    Collapsed by default (header strip only, 32 px).
+    Auto-expands to _DEFAULT_HEIGHT when load_single() or load_comparison()
+    is called with non-None data.
     """
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
 
-        # State
+        self._collapsed: bool = True
         self._file_a: Optional[Dict[str, Any]] = None
         self._file_b: Optional[Dict[str, Any]] = None
-        self._comparison_mode: bool = False
-        self._diff_enabled: bool = False
-        self._collapsed: bool = False
+        self._sync_enabled: bool = True
 
-        # Widgets
-        self._header_frame: Optional[CTkFrame] = None
-        self._collapse_btn: Optional[CTkButton] = None
-        self._diff_switch: Optional[CTkSwitch] = None
-        self._sync_btn: Optional[CTkButton] = None
-        self._side_a_panel: Optional[PreviewSidePanel] = None
-        self._side_b_panel: Optional[PreviewSidePanel] = None
-        self._content_frame: Optional[CTkFrame] = None
-        self._empty_label: Optional[CTkLabel] = None
-
-        # Callbacks
-        self._on_keep_a: Optional[Callable[[], None]] = None
-        self._on_keep_b: Optional[Callable[[], None]] = None
-
-        # Build UI
-        self._build_ui()
         subscribe_to_theme(self, self._apply_theme)
+        self._build()
 
-    def _apply_theme(self) -> None:
-        """Reconfigure all widget colors when theme changes."""
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
+    def _build(self) -> None:
         self.configure(fg_color=theme_color("preview.background"))
-        if self._header_frame:
-            self._header_frame.configure(fg_color=theme_color("base.backgroundTertiary"))
-        if self._collapse_btn:
-            self._collapse_btn.configure(
-                fg_color=theme_color("base.foregroundSecondary"),
-                hover_color=theme_color("base.foreground"),
-            )
-        if self._sync_btn:
-            self._sync_btn.configure(
-                fg_color=theme_color("base.backgroundElevated"),
-                hover_color=theme_color("base.background"),
-            )
-        if self._empty_label:
-            self._empty_label.configure(text_color=theme_color("base.foregroundMuted"))
 
-    def _build_ui(self) -> None:
-        """Build preview panel UI."""
-        self.configure(
-            fg_color=theme_color("preview.background")
-        )
+        # ── Header (always visible) ────────────────────────────────
+        self._header = CTkFrame(
+            self, height=32,
+            fg_color=theme_color("base.backgroundTertiary"))
+        self._header.pack(fill="x")
+        self._header.pack_propagate(False)
 
-        # Header frame
-        self._build_header()
-
-        # Content frame (holds side panels)
-        self._content_frame = CTkFrame(self)
-        self._content_frame.pack(fill="both", expand=True, padx=Spacing.XS, pady=Spacing.SM)
-
-        # Side-by-side panels
-        self._build_side_panels()
-
-        # Empty state label
-        self._empty_label = CTkLabel(
-            self._content_frame,
-            text="Select a file to preview\nSelect two files for comparison",
-            font=Typography.FONT_MD,
-            text_color=theme_color("base.foregroundMuted")
-        )
-        self._empty_label.pack(expand=True)
-
-        # Initially hide side panels
-        self._side_a_panel.pack_forget()
-        self._side_b_panel.pack_forget()
-
-    def _build_header(self) -> None:
-        """Build panel header with collapse toggle and options."""
-        self._header_frame = CTkFrame(
-            self,
-            height=32,
-            fg_color=theme_color("base.backgroundTertiary")
-        )
-        self._header_frame.pack(fill="x")
-
-        # Title
-        CTkLabel(
-            self._header_frame,
-            text="Preview",
-            font=Typography.FONT_MD,
-            text_color=theme_color("base.foreground")
-        ).pack(side="left", padx=Spacing.MD)
-
-        # Spacer
-        spacer = CTkLabel(self._header_frame, text="")
-        spacer.pack(side="left", expand=True)
-
-        # Diff toggle switch
-        self._diff_switch = CTkSwitch(
-            self._header_frame,
-            text="Diff Overlay",
+        self._expand_btn = CTkButton(
+            self._header, text="▶  Preview",
+            width=100, height=28,
             font=Typography.FONT_SM,
-            onvalue=True,
-            offvalue=False
+            fg_color="transparent",
+            hover_color=theme_color("base.backgroundElevated"),
+            text_color=theme_color("base.foregroundSecondary"),
+            border_width=0, corner_radius=0,
+            anchor="w",
+        )
+        self._expand_btn.pack(side="left", padx=Spacing.XS)
+        self._expand_btn.configure(command=self._toggle)
+
+        # Diff switch (right side of header)
+        self._diff_switch = CTkSwitch(
+            self._header, text="Diff",
+            font=Typography.FONT_XS,
+            width=60,
+            onvalue=True, offvalue=False,
+            command=self._on_diff_toggled,
         )
         self._diff_switch.pack(side="right", padx=Spacing.SM)
-        # TODO: Configure command for diff switch
 
         # Sync button
         self._sync_btn = CTkButton(
-            self._header_frame,
-            text="🔗 Sync",
-            width=60,
-            height=28,
+            self._header, text="🔗", width=36, height=24,
             font=Typography.FONT_SM,
             fg_color=theme_color("base.backgroundElevated"),
             hover_color=theme_color("base.background"),
-            corner_radius=Spacing.BORDER_RADIUS_SM
+            corner_radius=Spacing.BORDER_RADIUS_SM,
         )
-        self._sync_btn.pack(side="right", padx=Spacing.SM)
+        self._sync_btn.pack(side="right", padx=(0, Spacing.XS))
         self._sync_btn.configure(command=self._toggle_sync)
 
-        # Collapse button
-        self._collapse_btn = CTkButton(
-            self._header_frame,
-            text="▼",
-            width=32,
-            height=28,
-            font=Typography.FONT_MD,
-            fg_color=theme_color("base.foregroundSecondary"),
-            hover_color=theme_color("base.foreground"),
-            corner_radius=0
-        )
-        self._collapse_btn.pack(side="right", padx=Spacing.SM)
-        self._collapse_btn.configure(command=self._toggle_collapse)
+        # ── Content (hidden when collapsed) ────────────────────────
+        self._content = CTkFrame(
+            self, fg_color=theme_color("preview.background"))
+        # Not packed — starts collapsed
 
-    def _build_side_panels(self) -> None:
-        """Build side-by-side preview panels."""
-        # Side A panel
-        self._side_a_panel = PreviewSidePanel(
-            self._content_frame,
-            title="Image A"
-        )
-        self._side_a_panel.pack(side="left", fill="both", expand=True, padx=Spacing.XS)
-        self._side_a_panel.on_keep_clicked(self._on_keep_a_clicked)
+        self._side_a = _SidePanel(self._content, title="A")
+        self._side_b = _SidePanel(self._content, title="B")
 
-        # Side B panel
-        self._side_b_panel = PreviewSidePanel(
-            self._content_frame,
-            title="Image B"
-        )
-        self._side_b_panel.pack(side="left", fill="both", expand=True, padx=Spacing.XS)
-        self._side_b_panel.on_keep_clicked(self._on_keep_b_clicked)
+        # Sync canvases by default
+        self._side_a.get_canvas().sync_with(self._side_b.get_canvas())
 
-        # Sync canvases
-        self._side_a_panel.get_canvas().sync_with(self._side_b_panel.get_canvas())
+        # Both sides hidden until data loaded
+        self._side_a.pack_forget()
+        self._side_b.pack_forget()
 
-    def _toggle_collapse(self) -> None:
-        """Toggle panel collapse state."""
-        self._collapsed = not self._collapsed
+        # Empty hint inside content
+        self._hint = CTkLabel(
+            self._content,
+            text="Select a file in the results to preview it here.",
+            font=Typography.FONT_SM,
+            text_color=theme_color("base.foregroundMuted"))
+        self._hint.pack(expand=True)
 
-        if self._collapsed:
-            # Collapse: hide content, show only header
-            self._content_frame.pack_forget()
-            self._collapse_btn.configure(text="▶")
+    # ------------------------------------------------------------------
+    # Collapse / expand
+    # ------------------------------------------------------------------
+
+    def _toggle(self) -> None:
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        if collapsed:
+            self._content.pack_forget()
+            self._expand_btn.configure(text="▶  Preview")
         else:
-            # Expand: show content
-            self._content_frame.pack(fill="both", expand=True, padx=Spacing.XS, pady=Spacing.SM)
-            self._collapse_btn.configure(text="▼")
+            self._content.pack(fill="both", expand=True)
+            self._expand_btn.configure(text="▼  Preview")
 
-            # Show/hide panels based on state
-            self._update_content_visibility()
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def _auto_expand(self) -> None:
+        """Expand if currently collapsed (called when data arrives)."""
+        if self._collapsed:
+            self.set_collapsed(False)
+
+    # ------------------------------------------------------------------
+    # Sync / diff
+    # ------------------------------------------------------------------
 
     def _toggle_sync(self) -> None:
-        """Toggle canvas synchronization."""
-        canvas_a = self._side_a_panel.get_canvas()
-        canvas_b = self._side_b_panel.get_canvas()
-
-        # Toggle sync
-        if canvas_a._sync_partner:
-            # Unsync
-            canvas_a._sync_partner = None
-            canvas_b._sync_partner = None
-            self._sync_btn.configure(text="🔗 Sync")
+        ca = self._side_a.get_canvas()
+        cb = self._side_b.get_canvas()
+        if self._sync_enabled:
+            ca._sync_partner = None
+            cb._sync_partner = None
+            self._sync_enabled = False
+            self._sync_btn.configure(fg_color=theme_color("base.backgroundTertiary"))
         else:
-            # Sync
-            canvas_a.sync_with(canvas_b)
-            self._sync_btn.configure(text="🔗 Synced")
+            ca.sync_with(cb)
+            self._sync_enabled = True
+            self._sync_btn.configure(fg_color=theme_color("base.backgroundElevated"))
 
-    def _update_content_visibility(self) -> None:
-        """Update visibility of side panels based on state."""
-        if self._file_a or self._file_b:
-            # Show panels
-            if self._empty_label.winfo_ismapped():
-                self._empty_label.pack_forget()
-            if not self._side_a_panel.winfo_ismapped():
-                self._side_a_panel.pack(side="left", fill="both", expand=True, padx=Spacing.XS)
-                self._side_b_panel.pack(side="left", fill="both", expand=True, padx=Spacing.XS)
+    def _on_diff_toggled(self) -> None:
+        pass  # TODO: pixel-diff overlay in a future task
+
+    # ------------------------------------------------------------------
+    # Content visibility helpers
+    # ------------------------------------------------------------------
+
+    def _update_layout(self) -> None:
+        """Show correct side panels based on loaded data."""
+        has_a = self._file_a is not None
+        has_b = self._file_b is not None
+
+        self._hint.pack_forget()
+        self._side_a.pack_forget()
+        self._side_b.pack_forget()
+
+        if not has_a and not has_b:
+            self._hint.pack(expand=True)
+            return
+
+        if has_a and has_b:
+            self._side_a.pack(side="left", fill="both", expand=True,
+                              padx=(Spacing.XS, 0), pady=Spacing.XS)
+            self._side_b.pack(side="left", fill="both", expand=True,
+                              padx=(0, Spacing.XS), pady=Spacing.XS)
         else:
-            # Show empty label
-            if self._side_a_panel.winfo_ismapped():
-                self._side_a_panel.pack_forget()
-                self._side_b_panel.pack_forget()
-            if not self._empty_label.winfo_ismapped():
-                self._empty_label.pack(expand=True)
+            # Single file — only side A, full width
+            self._side_a.pack(fill="both", expand=True,
+                              padx=Spacing.XS, pady=Spacing.XS)
 
-    # ===================
-    # PUBLIC API
-    # ===================
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
 
-    def load_file_a(self, file_data: Dict[str, Any]) -> None:
-        """
-        Load a file into panel A.
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("preview.background"))
+            self._header.configure(fg_color=theme_color("base.backgroundTertiary"))
+            self._content.configure(fg_color=theme_color("preview.background"))
+            self._hint.configure(text_color=theme_color("base.foregroundMuted"))
+            self._expand_btn.configure(
+                hover_color=theme_color("base.backgroundElevated"),
+                text_color=theme_color("base.foregroundSecondary"))
+        except Exception:
+            pass
 
-        Args:
-            file_data: Dictionary with file info.
-        """
-        self._file_a = file_data
-        self._comparison_mode = bool(self._file_b)
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-        if file_data:
-            self._side_a_panel.load_file(file_data)
-        else:
-            self._side_a_panel._clear_display()
-
-        self._update_content_visibility()
-
-    def load_file_b(self, file_data: Dict[str, Any]) -> None:
-        """
-        Load a file into panel B.
-
-        Args:
-            file_data: Dictionary with file info.
-        """
-        self._file_b = file_data
-        self._comparison_mode = bool(self._file_a)
-
-        if file_data:
-            self._side_b_panel.load_file(file_data)
-        else:
-            self._side_b_panel._clear_display()
-
-        self._update_content_visibility()
-
-    def load_single(self, file_data: Dict[str, Any]) -> None:
-        """
-        Load a single file (clears side B).
-
-        Args:
-            file_data: Dictionary with file info.
-        """
+    def load_single(self, file_data: Optional[Dict[str, Any]]) -> None:
+        """Load one file (clears side B). Pass None to clear."""
         self._file_a = file_data
         self._file_b = None
-        self._comparison_mode = False
 
-        self._side_a_panel.load_file(file_data)
-        self._side_b_panel._clear_display()
+        if file_data:
+            self._side_a.load(file_data)
+            self._side_b.clear()
+            self._auto_expand()
+        else:
+            self._side_a.clear()
+            self._side_b.clear()
 
-        self._update_content_visibility()
+        self._update_layout()
 
-    def load_comparison(self, file_a: Dict[str, Any], file_b: Dict[str, Any]) -> None:
-        """
-        Load two files for side-by-side comparison.
-
-        Args:
-            file_a: First file to display.
-            file_b: Second file to display.
-        """
+    def load_comparison(
+        self,
+        file_a: Optional[Dict[str, Any]],
+        file_b: Optional[Dict[str, Any]],
+    ) -> None:
+        """Load two files for side-by-side comparison."""
         self._file_a = file_a
         self._file_b = file_b
-        self._comparison_mode = True
 
-        self._side_a_panel.load_file(file_a)
-        self._side_b_panel.load_file(file_b)
+        if file_a:
+            self._side_a.load(file_a)
+        else:
+            self._side_a.clear()
 
-        self._update_content_visibility()
+        if file_b:
+            self._side_b.load(file_b)
+        else:
+            self._side_b.clear()
+
+        if file_a or file_b:
+            self._auto_expand()
+
+        self._update_layout()
+
+    def load_file_a(self, file_data: Optional[Dict[str, Any]]) -> None:
+        self._file_a = file_data
+        if file_data:
+            self._side_a.load(file_data)
+            self._auto_expand()
+        else:
+            self._side_a.clear()
+        self._update_layout()
+
+    def load_file_b(self, file_data: Optional[Dict[str, Any]]) -> None:
+        self._file_b = file_data
+        if file_data:
+            self._side_b.load(file_data)
+            self._auto_expand()
+        else:
+            self._side_b.clear()
+        self._update_layout()
 
     def clear(self) -> None:
-        """Clear all preview panels."""
+        """Clear all previews."""
         self._file_a = None
         self._file_b = None
-        self._comparison_mode = False
-
-        self._side_a_panel._clear_display()
-        self._side_b_panel._clear_display()
-
-        self._update_content_visibility()
-
-    def reset_views(self) -> None:
-        """Reset both canvas views to fit-to-window."""
-        self._side_a_panel.get_canvas().reset_view()
-        self._side_b_panel.get_canvas().reset_view()
-
-    def zoom_in(self) -> None:
-        """Zoom in on both canvases."""
-        self._side_a_panel.get_canvas().zoom_in()
-        # Sync will automatically update B
-
-    def zoom_out(self) -> None:
-        """Zoom out on both canvases."""
-        self._side_a_panel.get_canvas().zoom_out()
+        self._side_a.clear()
+        self._side_b.clear()
+        self._update_layout()
 
     def get_file_a(self) -> Optional[Dict[str, Any]]:
-        """Get file A data."""
         return self._file_a
 
     def get_file_b(self) -> Optional[Dict[str, Any]]:
-        """Get file B data."""
         return self._file_b
 
     def is_comparison_mode(self) -> bool:
-        """Check if showing comparison (two files)."""
-        return self._comparison_mode
+        return self._file_a is not None and self._file_b is not None
 
-    def toggle_diff_overlay(self, enabled: bool) -> None:
-        """
-        Toggle diff overlay mode.
-
-        Args:
-            enabled: Whether to show diff overlay.
-        """
-        self._diff_enabled = enabled
-        # TODO: Implement diff overlay visualization
-
-    def set_collapsed(self, collapsed: bool) -> None:
-        """
-        Set collapsed state.
-
-        Args:
-            collapsed: Whether panel should be collapsed.
-        """
-        if self._collapsed != collapsed:
-            self._toggle_collapse()
-
-    def is_collapsed(self) -> bool:
-        """Check if panel is collapsed."""
-        return self._collapsed
-
+    # Stub kept for API compatibility — no-ops since buttons removed
     def on_keep_a(self, callback: Callable[[], None]) -> None:
-        """Set callback for Keep A button."""
-        self._on_keep_a = callback
+        pass
 
     def on_keep_b(self, callback: Callable[[], None]) -> None:
-        """Set callback for Keep B button."""
-        self._on_keep_b = callback
-
-    def _on_keep_a_clicked(self) -> None:
-        """Handle Keep A button click."""
-        if self._on_keep_a:
-            self._on_keep_a()
-
-    def _on_keep_b_clicked(self) -> None:
-        """Handle Keep B button click."""
-        if self._on_keep_b:
-            self._on_keep_b()
+        pass
 
 
-# Simple logger fallback
 logger = __import__('logging').getLogger(__name__)
