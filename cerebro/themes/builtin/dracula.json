@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by Dracula \u2014 purple accents on deep purple background",
+  "description": "Dark theme inspired by Dracula — purple accents on deep purple background",
   "colors": {
     "base.background": "#282A36",
     "base.backgroundSecondary": "#21222C",
@@ -61,7 +61,7 @@
     "button.primary": "#BD93F9",
     "button.primaryForeground": "#282A36",
     "button.primaryHover": "#A07CD3",
-    "button.secondary": "transparent",
+    "button.secondary": "#343746",
     "button.secondaryForeground": "#F8F8F2",
     "button.secondaryBorder": "#44475A",
     "button.secondaryHover": "#343746",

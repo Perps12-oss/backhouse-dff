@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "light",
-  "description": "Clean light theme with teal accents \u2014 the Cerebro light counterpart",
+  "description": "Clean light theme with teal accents — the Cerebro light counterpart",
   "colors": {
     "base.background": "#FFFFFF",
     "base.backgroundSecondary": "#F6F8FA",
@@ -61,7 +61,7 @@
     "button.primary": "#0891B2",
     "button.primaryForeground": "#FFFFFF",
     "button.primaryHover": "#067B97",
-    "button.secondary": "transparent",
+    "button.secondary": "#EBEEF1",
     "button.secondaryForeground": "#1F2328",
     "button.secondaryBorder": "#D0D7DE",
     "button.secondaryHover": "#EBEEF1",

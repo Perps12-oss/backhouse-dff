@@ -306,7 +306,7 @@ DEFAULT_FEEDBACK: Dict[str, str] = {
 # Default values for slots that have no derive_fn and no fallback
 # (these are the hardcoded constants in the schema)
 HARDCODED_DEFAULTS: Dict[str, str] = {
-    "button.secondary":          "transparent",
+    "button.secondary":          "#1E2533",   # subtle elevated bg; never transparent
     "button.dangerForeground":   "#FFFFFF",
     "dialog.overlay":            "#000000",
 }

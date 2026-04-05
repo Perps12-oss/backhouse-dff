@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Maximum-contrast accessibility theme \u2014 yellow accents on pure black for readability",
+  "description": "Maximum-contrast accessibility theme — yellow accents on pure black for readability",
   "colors": {
     "base.background": "#000000",
     "base.backgroundSecondary": "#000000",
@@ -61,7 +61,7 @@
     "button.primary": "#FFD700",
     "button.primaryForeground": "#000000",
     "button.primaryHover": "#FFED4E",
-    "button.secondary": "transparent",
+    "button.secondary": "#1A1A1A",
     "button.secondaryForeground": "#FFFFFF",
     "button.secondaryBorder": "#FFD700",
     "button.secondaryHover": "#1A1A1A",

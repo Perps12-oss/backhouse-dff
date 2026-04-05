@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by GitHub's dark mode \u2014 blue accents on GitHub dark",
+  "description": "Dark theme inspired by GitHub's dark mode — blue accents on GitHub dark",
   "colors": {
     "base.background": "#0D1117",
     "base.backgroundSecondary": "#010409",
@@ -61,7 +61,7 @@
     "button.primary": "#58A6FF",
     "button.primaryForeground": "#0D1117",
     "button.primaryHover": "#4A8DD8",
-    "button.secondary": "transparent",
+    "button.secondary": "#161B22",
     "button.secondaryForeground": "#E6EDF3",
     "button.secondaryBorder": "#30363D",
     "button.secondaryHover": "#161B22",

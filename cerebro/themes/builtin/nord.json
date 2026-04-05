@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by Nord \u2014 frost blue accents on arctic blue-gray",
+  "description": "Dark theme inspired by Nord — frost blue accents on arctic blue-gray",
   "colors": {
     "base.background": "#2E3440",
     "base.backgroundSecondary": "#292E39",
@@ -61,7 +61,7 @@
     "button.primary": "#88C0D0",
     "button.primaryForeground": "#2E3440",
     "button.primaryHover": "#73A3B0",
-    "button.secondary": "transparent",
+    "button.secondary": "#3B4252",
     "button.secondaryForeground": "#ECEFF4",
     "button.secondaryBorder": "#434C5E",
     "button.secondaryHover": "#3B4252",

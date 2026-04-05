@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by Atom One Dark \u2014 blue accents on slate gray",
+  "description": "Dark theme inspired by Atom One Dark — blue accents on slate gray",
   "colors": {
     "base.background": "#282C34",
     "base.backgroundSecondary": "#21252B",
@@ -61,7 +61,7 @@
     "button.primary": "#61AFEF",
     "button.primaryForeground": "#282C34",
     "button.primaryHover": "#5294CB",
-    "button.secondary": "transparent",
+    "button.secondary": "#2C313A",
     "button.secondaryForeground": "#ABB2BF",
     "button.secondaryBorder": "#3E4451",
     "button.secondaryHover": "#2C313A",

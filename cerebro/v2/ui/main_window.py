@@ -33,7 +33,6 @@ from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme, set
 from cerebro.v2.ui.toolbar import Toolbar
 from cerebro.v2.ui.mode_tabs import ModeTabs
 from cerebro.v2.ui.status_bar import StatusBar, StatusBarMetrics
-from cerebro.v2.ui.selection_bar import SelectionBar
 from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings
 from cerebro.v2.ui.folder_panel import FolderPanel
 from cerebro.v2.ui.results_panel import ResultsPanel, DuplicateGroup as ResultsDuplicateGroup
@@ -146,7 +145,6 @@ class MainWindow(CTk):
         self._build_toolbar()
         self._build_mode_tabs()
         self._build_horizontal_paned()
-        self._build_selection_bar()
         self._build_preview_panel()
         self._build_status_bar()
 
@@ -252,21 +250,6 @@ class MainWindow(CTk):
         self._results_panel.on_selection_changed(self._on_selection_changed)
         self._results_panel.on_request_add_folder(self._on_add_path)
         self._results_panel.on_request_start_search(self._on_start_search)
-
-    def _build_selection_bar(self) -> None:
-        """Build and install selection bar."""
-        self._selection_bar = SelectionBar(
-            self._content_container,
-            height=Dimensions.BUTTON_HEIGHT_LG
-        )
-        self._selection_bar.pack(fill="x", padx=Spacing.MD, pady=Spacing.SM)
-
-        # Wire callbacks
-        self._selection_bar.on_apply_rule(self._on_apply_rule)
-        self._selection_bar.on_select_all(self._on_select_all)
-        self._selection_bar.on_deselect_all(self._on_deselect_all)
-        self._selection_bar.on_invert(self._on_invert_selection)
-        self._selection_bar.on_delete_selected(self._on_delete_selected)
 
     def _build_preview_panel(self) -> None:
         """Build and install collapsible preview panel."""
@@ -753,7 +736,6 @@ github.com/Perps12-oss/dedup"""
         """Handle Auto Mark dropdown selection from toolbar."""
         self._results_panel.apply_selection_rule(rule)
         count = self._results_panel.get_selected_count()
-        self._selection_bar.set_selected_count(count)
         self._toolbar.set_has_selection(count > 0)
 
     def _on_move_to(self) -> None:
@@ -789,30 +771,18 @@ github.com/Perps12-oss/dedup"""
     def _on_apply_rule(self, rule: str) -> None:
         """Handle apply selection rule."""
         self._results_panel.apply_selection_rule(rule)
-        # Update selection bar counter
-        self._selection_bar.set_selected_count(self._results_panel.get_selected_count())
 
     def _on_select_all(self) -> None:
         """Handle select all action."""
-        # Use treeview's check_all method
         self._results_panel._treeview.check_all()
-        # Update selection bar counter
-        self._selection_bar.set_selected_count(self._results_panel.get_total_count())
 
     def _on_deselect_all(self) -> None:
         """Handle deselect all action."""
-        # Use treeview's uncheck_all method
         self._results_panel._treeview.uncheck_all()
-        # Update selection bar counter
-        self._selection_bar.set_selected_count(0)
 
     def _on_invert_selection(self) -> None:
         """Handle invert selection action."""
-        # Use treeview's invert_checks method
         self._results_panel._treeview.invert_checks()
-        # Update selection bar counter
-        selected_count = self._results_panel._treeview.get_checked_count()
-        self._selection_bar.set_selected_count(selected_count)
 
     def _on_delete_selected(self) -> None:
         """Handle delete selected action."""
@@ -928,10 +898,6 @@ github.com/Perps12-oss/dedup"""
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""
         has_sel = len(checked_items) > 0
-        # Update selection bar counter
-        self._selection_bar.set_selected_count(len(checked_items))
-        self._selection_bar.set_delete_enabled(has_sel)
-        # Keep toolbar Delete / Move To in sync
         self._toolbar.set_has_selection(has_sel)
 
         # Update preview panel
@@ -1129,10 +1095,6 @@ github.com/Perps12-oss/dedup"""
     def get_status_bar(self) -> StatusBar:
         """Get status bar widget reference."""
         return self._status_bar
-
-    def get_selection_bar(self) -> SelectionBar:
-        """Get selection bar widget reference."""
-        return self._selection_bar
 
     def get_folder_panel(self) -> FolderPanel:
         """Get folder panel widget reference."""

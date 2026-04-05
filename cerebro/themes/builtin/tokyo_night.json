@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by Tokyo Night \u2014 blue-purple accents on deep indigo",
+  "description": "Dark theme inspired by Tokyo Night — blue-purple accents on deep indigo",
   "colors": {
     "base.background": "#1A1B26",
     "base.backgroundSecondary": "#16161E",
@@ -61,7 +61,7 @@
     "button.primary": "#7AA2F7",
     "button.primaryForeground": "#1A1B26",
     "button.primaryHover": "#6789D1",
-    "button.secondary": "transparent",
+    "button.secondary": "#24283B",
     "button.secondaryForeground": "#C0CAF5",
     "button.secondaryBorder": "#3B4261",
     "button.secondaryHover": "#24283B",

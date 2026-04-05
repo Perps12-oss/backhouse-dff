@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "light",
-  "description": "Light theme inspired by Solarized \u2014 orange accents on warm cream",
+  "description": "Light theme inspired by Solarized — orange accents on warm cream",
   "colors": {
     "base.background": "#FDF6E3",
     "base.backgroundSecondary": "#F5EED7",
@@ -61,7 +61,7 @@
     "button.primary": "#CB4B16",
     "button.primaryForeground": "#FFFFFF",
     "button.primaryHover": "#AC3F12",
-    "button.secondary": "transparent",
+    "button.secondary": "#EEE8D5",
     "button.secondaryForeground": "#073642",
     "button.secondaryBorder": "#D3CBB7",
     "button.secondaryHover": "#EEE8D5",

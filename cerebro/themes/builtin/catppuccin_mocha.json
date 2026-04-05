@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Dark theme inspired by Catppuccin Mocha \u2014 lavender accents on warm dark",
+  "description": "Dark theme inspired by Catppuccin Mocha — lavender accents on warm dark",
   "colors": {
     "base.background": "#1E1E2E",
     "base.backgroundSecondary": "#181825",
@@ -61,7 +61,7 @@
     "button.primary": "#B4BEFE",
     "button.primaryForeground": "#1E1E2E",
     "button.primaryHover": "#99A1D7",
-    "button.secondary": "transparent",
+    "button.secondary": "#313244",
     "button.secondaryForeground": "#CDD6F4",
     "button.secondaryBorder": "#45475A",
     "button.secondaryHover": "#313244",

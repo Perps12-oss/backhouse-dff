@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "light",
-  "description": "Light theme inspired by GitHub's light mode \u2014 blue accents on clean white",
+  "description": "Light theme inspired by GitHub's light mode — blue accents on clean white",
   "colors": {
     "base.background": "#FFFFFF",
     "base.backgroundSecondary": "#F6F8FA",
@@ -61,7 +61,7 @@
     "button.primary": "#0969DA",
     "button.primaryForeground": "#FFFFFF",
     "button.primaryHover": "#0759B9",
-    "button.secondary": "transparent",
+    "button.secondary": "#EAEFF5",
     "button.secondaryForeground": "#1F2328",
     "button.secondaryBorder": "#D0D7DE",
     "button.secondaryHover": "#EAEFF5",

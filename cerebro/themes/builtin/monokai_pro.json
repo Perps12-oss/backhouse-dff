@@ -3,7 +3,7 @@
   "author": "Cerebro Team",
   "version": "1.0.0",
   "type": "dark",
-  "description": "Warm dark theme inspired by Monokai Pro \u2014 orange accents on charcoal",
+  "description": "Warm dark theme inspired by Monokai Pro — orange accents on charcoal",
   "colors": {
     "base.background": "#2D2A2E",
     "base.backgroundSecondary": "#232024",
@@ -61,7 +61,7 @@
     "button.primary": "#FC9867",
     "button.primaryForeground": "#2D2A2E",
     "button.primaryHover": "#D68157",
-    "button.secondary": "transparent",
+    "button.secondary": "#38343A",
     "button.secondaryForeground": "#FCFCFA",
     "button.secondaryBorder": "#403D42",
     "button.secondaryHover": "#38343A",
