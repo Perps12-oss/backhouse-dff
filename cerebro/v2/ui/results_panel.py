@@ -15,11 +15,9 @@ try:
     import customtkinter as ctk
     CTkFrame = ctk.CTkFrame
     CTkLabel = ctk.CTkLabel
-    CTkSegmentedButton = ctk.CTkSegmentedButton
 except ImportError:
     CTkFrame = tk.Frame
     CTkLabel = tk.Label
-    CTkSegmentedButton = tk.Frame
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
@@ -148,7 +146,7 @@ class ResultsPanel(CTkFrame):
         self._selected_count: int = 0
 
         # Widgets
-        self._filter_tabs: Optional[CTkSegmentedButton] = None
+        self._filter_bar: Optional[_FilterBar] = None
         self._treeview: Optional[CheckTreeview] = None
         self._empty_label: Optional[CTkLabel] = None
         self._status_frame: Optional[CTkFrame] = None
@@ -169,8 +167,9 @@ class ResultsPanel(CTkFrame):
             fg_color=theme_color("results.background")
         )
 
-        # Filter tabs bar
-        self._build_filter_tabs()
+        # Filter tab bar — hidden until load_results() is called with data
+        self._filter_bar = _FilterBar(self, on_filter_changed=self._on_filter_changed)
+        # NOT packed here — shown only post-scan
 
         # Status bar (results count)
         self._build_status_bar()
@@ -212,28 +211,6 @@ class ResultsPanel(CTkFrame):
             self._status_frame.configure(fg_color=theme_color("base.backgroundTertiary"))
         if self._results_count_label:
             self._results_count_label.configure(text_color=theme_color("results.foreground"))
-
-    def _build_filter_tabs(self) -> None:
-        """Build filter tabs bar."""
-        filter_frame = CTkFrame(
-            self,
-            height=Dimensions.MODE_TABS_HEIGHT
-        )
-        filter_frame.pack(fill="x", padx=Spacing.XS, pady=(Spacing.SM, 0))
-
-        self._filter_tabs = CTkSegmentedButton(
-            filter_frame,
-            values=FilterType.display_names(),
-            font=Typography.FONT_SM
-        )
-        self._filter_tabs.pack(fill="x", padx=Spacing.SM, pady=Spacing.XS)
-
-        # Configure filter tabs callback
-        try:
-            self._filter_tabs.configure(command=self._on_filter_changed)
-        except AttributeError:
-            # Fallback for non-CustomTkinter
-            pass
 
     def _build_status_bar(self) -> None:
         """Build results count status bar."""
@@ -394,21 +371,10 @@ class ResultsPanel(CTkFrame):
     # EVENT HANDLERS
     # ===================
 
-    def _on_filter_changed(self, value: str) -> None:
-        """Handle filter tab change."""
-        # Convert display name back to filter type
-        filter_map = {
-            "All": FilterType.ALL,
-            "Images": FilterType.IMAGES,
-            "Videos": FilterType.VIDEOS,
-            "Docs": FilterType.DOCUMENTS,
-            "Audio": FilterType.AUDIO,
-            "Other": FilterType.OTHER
-        }
-
-        new_filter = filter_map.get(value, FilterType.ALL)
-        if new_filter != self._current_filter:
-            self._current_filter = new_filter
+    def _on_filter_changed(self, filter_key: str) -> None:
+        """Handle filter tab change — receives a FilterType key directly."""
+        if filter_key != self._current_filter:
+            self._current_filter = filter_key
             self._apply_filter()
 
     def _on_check_changed(self, item_id: str, checked: bool) -> None:
@@ -459,8 +425,39 @@ class ResultsPanel(CTkFrame):
         """
         self._groups = groups
         self._total_items = sum(g.file_count for g in groups)
+
+        # Show filter bar with per-type counts (only when there are results)
+        if groups:
+            counts = self._compute_filter_counts(groups)
+            self._filter_bar.update_counts(counts)
+            if not self._filter_bar.winfo_ismapped():
+                self._filter_bar.pack(
+                    fill="x", padx=Spacing.XS,
+                    pady=(Spacing.XS, 0),
+                    before=self._status_frame,
+                )
+
         self._apply_filter()
         self._update_status()
+
+    def _compute_filter_counts(self, groups: List[DuplicateGroup]) -> Dict[str, int]:
+        """Count files per filter type across all groups."""
+        counts: Dict[str, int] = {ft: 0 for ft in FilterType.all_filters()}
+        for group in groups:
+            for file_data in group.files:
+                ext = Path(file_data.get("path", "")).suffix.lower()
+                matched = False
+                for ft in (FilterType.IMAGES, FilterType.VIDEOS,
+                           FilterType.DOCUMENTS, FilterType.AUDIO):
+                    if ext in FilterType.extensions_for_filter(ft):
+                        counts[ft] += 1
+                        counts[FilterType.ALL] += 1
+                        matched = True
+                        break
+                if not matched:
+                    counts[FilterType.OTHER] += 1
+                    counts[FilterType.ALL] += 1
+        return counts
 
     def _apply_filter(self) -> None:
         """Apply current filter to groups and refresh treeview."""
@@ -605,6 +602,9 @@ class ResultsPanel(CTkFrame):
         self._total_items = 0
         self._selected_count = 0
         self._treeview.clear()
+        # Hide filter bar — only shown post-scan
+        if self._filter_bar.winfo_ismapped():
+            self._filter_bar.pack_forget()
         self._show_empty_state()
         self._update_status()
 
@@ -879,6 +879,107 @@ class _GettingStartedView(CTkFrame):
 
     def on_start_search(self, cb: Callable[[], None]) -> None:
         self._on_start_search = cb
+
+
+class _FilterBar(CTkFrame):
+    """
+    Post-scan result filter tab row.
+
+    Hidden by default; shown by ResultsPanel.load_results() once results arrive.
+    Displays per-type counts:  All (347) | Images (120) | Videos (45) | Audio (89) | Docs (93) | Other (0)
+
+    Emits the FilterType key (not display name) via on_filter_changed callback.
+    """
+
+    _TABS = [
+        (FilterType.ALL,       "All"),
+        (FilterType.IMAGES,    "Images"),
+        (FilterType.VIDEOS,    "Videos"),
+        (FilterType.AUDIO,     "Audio"),
+        (FilterType.DOCUMENTS, "Docs"),
+        (FilterType.OTHER,     "Other"),
+    ]
+
+    def __init__(self, master, on_filter_changed: Callable[[str], None], **kwargs):
+        super().__init__(master, **kwargs)
+        self._on_filter_changed = on_filter_changed
+        self._current: str = FilterType.ALL
+        self._counts: Dict[str, int] = {ft: 0 for ft, _ in self._TABS}
+        self._btn_widgets: Dict[str, tk.Button] = {}
+        subscribe_to_theme(self, self._apply_theme)
+        self._build()
+
+    def _build(self) -> None:
+        self.configure(
+            fg_color=theme_color("tabs.background"),
+            height=32,
+        )
+        inner = tk.Frame(self, bg=theme_color("tabs.background"))
+        inner.pack(side="left", padx=Spacing.XS, pady=2)
+        self._inner = inner
+
+        for ft, label in self._TABS:
+            btn = tk.Button(
+                inner,
+                text=self._tab_text(label, 0),
+                relief="flat",
+                padx=Spacing.MD,
+                pady=3,
+                cursor="hand2",
+                font=Typography.FONT_SM,
+                command=lambda k=ft: self._select(k),
+            )
+            btn.pack(side="left")
+            self._btn_widgets[ft] = btn
+
+        self._refresh_styles()
+
+    def _tab_text(self, label: str, count: int) -> str:
+        return f"{label} ({count})"
+
+    def update_counts(self, counts: Dict[str, int]) -> None:
+        """Update displayed counts on each tab button."""
+        self._counts = counts
+        for ft, label in self._TABS:
+            btn = self._btn_widgets.get(ft)
+            if btn:
+                btn.configure(text=self._tab_text(label, counts.get(ft, 0)))
+        self._refresh_styles()
+
+    def _select(self, filter_key: str) -> None:
+        if filter_key == self._current:
+            return
+        self._current = filter_key
+        self._refresh_styles()
+        self._on_filter_changed(filter_key)
+
+    def _refresh_styles(self) -> None:
+        for ft, _ in self._TABS:
+            btn = self._btn_widgets.get(ft)
+            if not btn:
+                continue
+            if ft == self._current:
+                btn.configure(
+                    bg=theme_color("tabs.activeBackground"),
+                    fg=theme_color("tabs.activeForeground"),
+                    relief="solid",
+                    bd=0,
+                )
+            else:
+                btn.configure(
+                    bg=theme_color("tabs.inactiveBackground"),
+                    fg=theme_color("tabs.inactiveForeground"),
+                    relief="flat",
+                    bd=0,
+                )
+
+    def _apply_theme(self) -> None:
+        try:
+            self.configure(fg_color=theme_color("tabs.background"))
+            self._inner.configure(bg=theme_color("tabs.background"))
+        except Exception:
+            pass
+        self._refresh_styles()
 
 
 # Simple logger fallback

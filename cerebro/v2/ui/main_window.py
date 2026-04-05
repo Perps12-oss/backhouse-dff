@@ -162,6 +162,9 @@ class MainWindow(CTk):
         self._toolbar.on_remove_selected(self._on_remove_path)
         self._toolbar.on_start_search(self._on_start_search)
         self._toolbar.on_stop_search(self._on_stop_search)
+        self._toolbar.on_auto_mark(self._on_auto_mark)
+        self._toolbar.on_delete_selected(self._on_delete_selected)
+        self._toolbar.on_move_to(self._on_move_to)
         self._toolbar.on_settings(self._on_settings)
         self._toolbar.on_help(self._on_help)
 
@@ -727,6 +730,43 @@ github.com/Perps12-oss/dedup"""
         if hasattr(self, '_results_panel') and self._results_panel:
             self._results_panel.set_mode(new_mode)
 
+    def _on_auto_mark(self, rule: str) -> None:
+        """Handle Auto Mark dropdown selection from toolbar."""
+        self._results_panel.apply_selection_rule(rule)
+        count = self._results_panel.get_selected_count()
+        self._selection_bar.set_selected_count(count)
+        self._toolbar.set_has_selection(count > 0)
+
+    def _on_move_to(self) -> None:
+        """Handle Move To toolbar button — ask for destination, move checked files."""
+        from tkinter import filedialog
+        selected_files = self._results_panel.get_selected_files()
+        if not selected_files:
+            return
+        dest = filedialog.askdirectory(title="Move files to…")
+        if not dest:
+            return
+        import shutil
+        dest_path = Path(dest)
+        moved, errors = 0, []
+        for f in selected_files:
+            src = Path(f.get("path", ""))
+            if src.exists():
+                try:
+                    shutil.move(str(src), str(dest_path / src.name))
+                    moved += 1
+                except Exception as exc:
+                    errors.append(str(exc))
+        msg = f"Moved {moved} file(s) to {dest_path}"
+        if errors:
+            msg += f"\n{len(errors)} error(s) — check console."
+            for e in errors:
+                print(f"Move error: {e}")
+        from tkinter import messagebox
+        messagebox.showinfo("Move Complete", msg)
+        # Refresh results
+        self._on_refresh()
+
     def _on_apply_rule(self, rule: str) -> None:
         """Handle apply selection rule."""
         self._results_panel.apply_selection_rule(rule)
@@ -870,10 +910,12 @@ github.com/Perps12-oss/dedup"""
 
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""
+        has_sel = len(checked_items) > 0
         # Update selection bar counter
         self._selection_bar.set_selected_count(len(checked_items))
-        # Enable/disable delete button based on selection
-        self._selection_bar.set_delete_enabled(len(checked_items) > 0)
+        self._selection_bar.set_delete_enabled(has_sel)
+        # Keep toolbar Delete / Move To in sync
+        self._toolbar.set_has_selection(has_sel)
 
         # Update preview panel
         self._update_preview_panel(checked_items)
