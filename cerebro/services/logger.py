@@ -207,7 +207,6 @@ def get_logger(name: Optional[str] = None, level: Optional[int] = None) -> loggi
         else:
             lg.setLevel(logging.INFO)
 
-    lg.propagate = False
     return lg
 
 

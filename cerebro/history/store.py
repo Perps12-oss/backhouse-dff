@@ -99,8 +99,8 @@ class HistoryStore:
         self._ensure_dirs()
         self._logger = None
         try:
-            from ..services.logger import Logger  # type: ignore
-            self._logger = Logger()
+            from ..services.logger import get_logger
+            self._logger = get_logger("history.store")
         except Exception:
             self._logger = None
 
@@ -128,9 +128,10 @@ class HistoryStore:
         details: Optional[List[Dict[str, Any]]] = None,
     ) -> DeletionAuditRecord:
         """Record a deletion operation to audit trail."""
+        now = datetime.now()
         record = DeletionAuditRecord(
             scan_id=str(scan_id),
-            timestamp=datetime.now().timestamp(),
+            timestamp=now.timestamp(),
             mode=str(mode),
             groups=int(groups or 0),
             deleted=int(deleted or 0),
@@ -141,7 +142,7 @@ class HistoryStore:
             details=list(details or []),
         )
 
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = now.strftime("%Y-%m-%d")
         audit_file = self._audit_dir / f"deletions_{date_str}.jsonl"
 
         try:

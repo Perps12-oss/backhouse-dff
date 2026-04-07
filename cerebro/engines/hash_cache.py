@@ -27,12 +27,13 @@ class HashCache:
 
     SCHEMA = """
     CREATE TABLE IF NOT EXISTS file_hashes (
-        path TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
         mtime REAL NOT NULL,
         size INTEGER NOT NULL,
         hash_type TEXT NOT NULL,
         hash_value TEXT NOT NULL,
-        cached_at REAL NOT NULL
+        cached_at REAL NOT NULL,
+        PRIMARY KEY (path, hash_type)
     );
 
     CREATE INDEX IF NOT EXISTS idx_hash ON file_hashes(hash_type, hash_value);
@@ -62,6 +63,12 @@ class HashCache:
                 isolation_level=None  # Autocommit mode
             )
             self._connection.row_factory = sqlite3.Row
+            # Migrate old schema: if table exists with path as sole PK, drop it
+            row = self._connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='file_hashes'"
+            ).fetchone()
+            if row and "PRIMARY KEY (path, hash_type)" not in row[0]:
+                self._connection.execute("DROP TABLE IF EXISTS file_hashes")
             self._connection.executescript(self.SCHEMA)
             logger.info(f"Hash cache initialized at {self._cache_path}")
         except sqlite3.Error as e:
@@ -142,18 +149,35 @@ class HashCache:
         if not paths:
             return {}
 
+        # Collect mtime/size for each path from disk
+        path_meta: dict = {}
+        for p in paths:
+            try:
+                st = p.stat()
+                path_meta[str(p)] = (st.st_mtime, st.st_size)
+            except OSError:
+                pass
+
+        if not path_meta:
+            return {}
+
         with self._lock:
             try:
-                path_strs = [str(p) for p in paths]
+                path_strs = list(path_meta.keys())
                 placeholders = ','.join('?' * len(path_strs))
                 cursor = self._connection.execute(
                     f"""
-                    SELECT path, hash_value FROM file_hashes
+                    SELECT path, mtime, size, hash_value FROM file_hashes
                     WHERE path IN ({placeholders}) AND hash_type = ?
                     """,
                     path_strs + [hash_type]
                 )
-                return {row['path']: row['hash_value'] for row in cursor.fetchall()}
+                result = {}
+                for row in cursor.fetchall():
+                    meta = path_meta.get(row['path'])
+                    if meta and row['mtime'] == meta[0] and row['size'] == meta[1]:
+                        result[row['path']] = row['hash_value']
+                return result
             except sqlite3.Error as e:
                 logger.error(f"Cache get_many error: {e}")
                 return {}
