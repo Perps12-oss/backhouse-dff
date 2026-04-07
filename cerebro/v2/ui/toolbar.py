@@ -11,7 +11,6 @@ Full Ashisoft-style toolbar:
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog
 from typing import Optional, Callable, List
 from pathlib import Path
 

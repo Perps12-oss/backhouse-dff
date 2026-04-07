@@ -29,8 +29,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Set
 from dataclasses import dataclass
 import asyncio
+import json
 import socket
-import pickle
 
 # GPU Computing
 try:
@@ -192,10 +192,10 @@ class DistributedScanner:
             work = directories[start:end]
             
             # Send work to node
-            self.socket.send(pickle.dumps({
+            self.socket.send(json.dumps({
                 'command': 'scan',
-                'directories': work
-            }))
+                'directories': [str(d) for d in work]
+            }).encode())
         
         print(f"[Distributed] Work distributed to {len(self.nodes)} nodes")
     
@@ -205,12 +205,12 @@ class DistributedScanner:
             return []
         
         results = []
-        
+
         # Collect from all workers
         for _ in self.nodes:
             result = self.socket.recv()
-            results.extend(pickle.loads(result))
-        
+            results.extend(json.loads(result))
+
         return results
 
 

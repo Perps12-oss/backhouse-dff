@@ -231,9 +231,6 @@ class ResultsPanel(CTkFrame):
 
     def _configure_columns(self) -> None:
         """Configure treeview columns."""
-        # Column settings
-        columns = self._treeview["columns"]
-
         # Name column (wider)
         self._treeview.column("name", width=250, anchor="w")
         self._treeview.heading("name", text="Name", command=lambda: self._sort_by("name"))

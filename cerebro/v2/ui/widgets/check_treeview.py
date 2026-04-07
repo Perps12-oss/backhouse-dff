@@ -170,8 +170,6 @@ class CheckTreeview(ttk.Treeview):
 
     def _get_row_tags(self, parent: str) -> List[str]:
         """Get tags for a row (alternating colors)."""
-        # Count children of parent
-        children = self.get_children(parent)
         if parent in self._group_rows:
             # For group header, no alternating color
             return ["group_header"]
@@ -232,9 +230,9 @@ class CheckTreeview(ttk.Treeview):
 
     def uncheck_all(self) -> None:
         """Uncheck all items (not group headers)."""
-        for item_id in self._item_states.items():
-            if item_id[1] and item_id[0] not in self._group_rows:
-                self.set_check(item_id[0], False)
+        for item_id, state in self._item_states.items():
+            if state and item_id not in self._group_rows:
+                self.set_check(item_id, False)
 
     def invert_checks(self) -> None:
         """Invert checkbox state for all items (not group headers)."""
@@ -364,8 +362,7 @@ class CheckTreeview(ttk.Treeview):
 
     def _on_select(self, event) -> None:
         """Handle selection event."""
-        selection = self.selection()
-        # Could emit a selection changed event here
+        pass
 
     def _on_double_click(self, event) -> None:
         """Handle double-click (expand/collapse groups)."""

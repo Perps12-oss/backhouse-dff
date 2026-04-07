@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
 
-from cerebro.core.pipeline import PipelineRequest
+from cerebro.core.pipeline import CancelToken, PipelineRequest
 
 
 # ---------------------------------------------------------------------

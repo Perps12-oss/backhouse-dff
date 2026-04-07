@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple
-from collections import deque
 import threading
 
 
@@ -234,83 +233,60 @@ class OptimizedFileDiscovery:
         """
         all_files = []
         processed_dirs = set()
-        
-        # Work queue: directories to process
-        work_queue = deque(roots)
+
         queue_lock = threading.Lock()
         results_lock = threading.Lock()
         
-        def worker():
-            """Worker function that processes directories."""
-            local_files = []
-            local_dirs = []
-            
-            while True:
-                # Get next directory from queue
-                with queue_lock:
-                    if not work_queue:
-                        break
-                    directory = work_queue.popleft()
-                
-                # Check if already processed (avoid duplicates)
-                dir_str = str(directory)
-                with queue_lock:
-                    if dir_str in processed_dirs:
-                        continue
-                    processed_dirs.add(dir_str)
-                
-                # Check cancellation
-                if filters.get('cancel_check') and filters['cancel_check']():
-                    break
-                
-                # Check cache if enabled
-                if self.cache and not self.cache.has_changed(directory):
-                    with results_lock:
-                        self.stats['dirs_skipped_cache'] += 1
-                    # TODO: Load files from persistent cache
-                    continue
-                
-                # Process this directory
-                try:
-                    files, subdirs = self._scan_directory(directory, **filters)
-                    local_files.extend(files)
-                    local_dirs.extend(subdirs)
-                    
-                    # Update cache
-                    if self.cache:
-                        stats = DiscoveryCache._compute_stats(directory)
-                        if stats:
-                            self.cache.put(stats)
-                    
-                except Exception:
-                    continue
-            
-            # Add work back to queue
-            if local_dirs:
-                with queue_lock:
-                    work_queue.extend(local_dirs)
-            
-            # Add results
-            if local_files:
+        def scan_one(directory: Path) -> tuple[list[DiscoveredFile], list[Path]]:
+            dir_str = str(directory)
+            with queue_lock:
+                if dir_str in processed_dirs:
+                    return [], []
+                processed_dirs.add(dir_str)
+
+            if filters.get('cancel_check') and filters['cancel_check']():
+                return [], []
+
+            if self.cache and not self.cache.has_changed(directory):
                 with results_lock:
-                    all_files.extend(local_files)
-                    self.stats['dirs_scanned'] += 1
-        
-        # Create worker threads
-        workers = min(self.max_workers, len(roots) * 2)  # Adaptive worker count
-        
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            # Submit initial batch of workers
-            futures = [executor.submit(worker) for _ in range(workers)]
-            
-            # Wait for all workers to complete
-            # Workers will keep pulling from queue until empty
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    pass
-        
+                    self.stats['dirs_skipped_cache'] += 1
+                return [], []
+
+            try:
+                files, subdirs = self._scan_directory(directory, **filters)
+
+                if self.cache:
+                    stats = DiscoveryCache._compute_stats(directory)
+                    if stats:
+                        self.cache.put(stats)
+
+                return files, subdirs
+            except Exception:
+                return [], []
+
+        num_workers = min(self.max_workers, max(len(roots) * 2, 4))
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            pending = {executor.submit(scan_one, d) for d in roots}
+
+            while pending:
+                new_futures = set()
+                for future in as_completed(pending):
+                    try:
+                        files, subdirs = future.result()
+                    except Exception:
+                        continue
+
+                    if files:
+                        with results_lock:
+                            all_files.extend(files)
+                            self.stats['dirs_scanned'] += 1
+
+                    for sub in subdirs:
+                        new_futures.add(executor.submit(scan_one, sub))
+
+                pending = new_futures
+
         return all_files
     
     def _scan_directory(

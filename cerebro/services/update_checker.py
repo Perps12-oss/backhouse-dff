@@ -450,6 +450,10 @@ class UpdateChecker(QObject):
             self.signals.install_progress.emit(10.0, "Extracting update...")
             
             with zipfile.ZipFile(update_path, 'r') as zip_ref:
+                for member in zip_ref.namelist():
+                    member_path = os.path.realpath(os.path.join(temp_dir, member))
+                    if not member_path.startswith(os.path.realpath(temp_dir) + os.sep) and member_path != os.path.realpath(temp_dir):
+                        raise ValueError(f"Zip path traversal detected: {member}")
                 zip_ref.extractall(temp_dir)
                 
             self.signals.install_progress.emit(30.0, "Verifying files...")

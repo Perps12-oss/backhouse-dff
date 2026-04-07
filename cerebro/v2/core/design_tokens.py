@@ -5,7 +5,6 @@ Single source of truth for the Cerebro v2 design system.
 Contains all colors, typography, spacing, and visual constants.
 """
 
-from dataclasses import dataclass
 from typing import NamedTuple
 
 

@@ -1212,7 +1212,7 @@ class _UndoToast:
         if sys.platform == "win32":
             # On Windows, open the Recycle Bin so the user can restore manually
             try:
-                subprocess.Popen("explorer.exe shell:RecycleBinFolder")
+                subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])
                 restored = -1  # sentinel = opened folder, not auto-restored
             except Exception:
                 pass
