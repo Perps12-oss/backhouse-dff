@@ -445,12 +445,6 @@ class PreviewPanel(CTkFrame):
     def is_comparison_mode(self) -> bool:
         return self._file_a is not None and self._file_b is not None
 
-    # Stub kept for API compatibility — no-ops since buttons removed
-    def on_keep_a(self, callback: Callable[[], None]) -> None:
-        pass
-
-    def on_keep_b(self, callback: Callable[[], None]) -> None:
-        pass
 
 
 logger = __import__('logging').getLogger(__name__)

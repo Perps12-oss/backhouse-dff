@@ -31,7 +31,6 @@ from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 
 # Auto-mark rule labels → rule keys (same keys used by results_panel.apply_selection_rule)
 _AUTO_MARK_RULES = [
-    ("Select All Duplicates",              "select_all"),
     ("Keep Largest — mark others",         "select_except_largest"),
     ("Keep Smallest — mark others",        "select_except_smallest"),
     ("Keep Newest — mark others",          "select_except_newest"),

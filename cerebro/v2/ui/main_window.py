@@ -262,7 +262,6 @@ class MainWindow(CTk):
         self._selection_bar.pack(fill="x", padx=Spacing.MD, pady=Spacing.SM)
 
         # Wire callbacks
-        self._selection_bar.on_apply_rule(self._on_apply_rule)
         self._selection_bar.on_select_all(self._on_select_all)
         self._selection_bar.on_deselect_all(self._on_deselect_all)
         self._selection_bar.on_invert(self._on_invert_selection)
@@ -280,10 +279,6 @@ class MainWindow(CTk):
         # Create and pack actual preview panel
         self._preview_panel = PreviewPanel(self._preview_frame)
         self._preview_panel.pack(fill="both", expand=True)
-
-        # Wire preview panel callbacks
-        self._preview_panel.on_keep_a(self._on_keep_a)
-        self._preview_panel.on_keep_b(self._on_keep_b)
 
     def _build_status_bar(self) -> None:
         """Build and install status bar."""
@@ -804,12 +799,6 @@ class MainWindow(CTk):
         messagebox.showinfo("Move Complete", msg)
         # Refresh results
         self._on_refresh()
-
-    def _on_apply_rule(self, rule: str) -> None:
-        """Handle apply selection rule."""
-        self._results_panel.apply_selection_rule(rule)
-        # Update selection bar counter
-        self._selection_bar.set_selected_count(self._results_panel.get_selected_count())
 
     def _on_select_all(self) -> None:
         """Handle select all action."""

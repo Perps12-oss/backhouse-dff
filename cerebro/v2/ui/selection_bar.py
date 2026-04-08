@@ -15,13 +15,11 @@ try:
     CTkFrame = ctk.CTkFrame
     CTkButton = ctk.CTkButton
     CTkLabel = ctk.CTkLabel
-    CTkOptionMenu = ctk.CTkOptionMenu
 except ImportError:
     # Fallback to standard tkinter
     CTkFrame = tk.Frame
     CTkButton = tk.Button
     CTkLabel = tk.Label
-    CTkOptionMenu = tk.OptionMenu
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
@@ -80,8 +78,6 @@ class SelectionBar(CTkFrame):
     Selection assistant strip below results.
 
     Features:
-    - Rule dropdown (CTkOptionMenu) with 8+ auto-mark rules
-    - Apply button to execute selected rule
     - Selected counter (X of Y selected)
     - Select All / Deselect All / Invert buttons
     - Delete Selected button (danger color)
@@ -94,11 +90,8 @@ class SelectionBar(CTkFrame):
         # State
         self._total_items: int = 0
         self._selected_items: int = 0
-        self._current_rule: str = SelectionRule.SELECT_ALL_EXCEPT_LARGEST
 
         # Widgets
-        self._rule_menu: Optional[CTkOptionMenu] = None
-        self._apply_btn: Optional[CTkButton] = None
         self._selected_label: Optional[CTkLabel] = None
         self._select_all_btn: Optional[CTkButton] = None
         self._deselect_all_btn: Optional[CTkButton] = None
@@ -106,7 +99,6 @@ class SelectionBar(CTkFrame):
         self._delete_btn: Optional[CTkButton] = None
 
         # Callbacks
-        self._on_apply_rule: Optional[Callable[[str], None]] = None
         self._on_select_all: Optional[Callable[[], None]] = None
         self._on_deselect_all: Optional[Callable[[], None]] = None
         self._on_invert: Optional[Callable[[], None]] = None
@@ -121,34 +113,6 @@ class SelectionBar(CTkFrame):
 
     def _build_widgets(self) -> None:
         """Build all selection bar widgets."""
-        # Rule dropdown
-        rule_names = [SelectionRule.display_name(r) for r in SelectionRule.all_rules()]
-        self._rule_menu = CTkOptionMenu(
-            self,
-            values=rule_names,
-            default_value=SelectionRule.display_name(self._current_rule),
-            width=200,
-            height=Dimensions.BUTTON_HEIGHT_MD,
-            font=Typography.FONT_MD,
-            fg_color=theme_color("input.background"),
-            button_color=theme_color("button.secondary"),
-            button_hover_color=theme_color("button.secondaryHover"),
-            dropdown_fg_color=theme_color("input.background"),
-            dropdown_hover_color=theme_color("button.primary")
-        )
-
-        # Apply button
-        self._apply_btn = CTkButton(
-            self,
-            text="Apply",
-            width=80,
-            height=Dimensions.BUTTON_HEIGHT_MD,
-            font=Typography.FONT_MD,
-            fg_color=theme_color("button.primary"),
-            hover_color=theme_color("button.primaryHover"),
-            command=self.trigger_apply_rule
-        )
-
         # Selected counter
         self._selected_label = CTkLabel(
             self,
@@ -218,21 +182,9 @@ class SelectionBar(CTkFrame):
             fg_color=theme_color("selection.background")
         )
 
-        self._rule_menu.pack(
-            side="left",
-            padx=Spacing.MD,
-            pady=(Spacing.SM, Spacing.SM)
-        )
-
-        self._apply_btn.pack(
-            side="left",
-            padx=Spacing.SM,
-            pady=(Spacing.SM, Spacing.SM)
-        )
-
         self._selected_label.pack(
             side="left",
-            padx=Spacing.LG,
+            padx=Spacing.MD,
             pady=(Spacing.SM, Spacing.SM)
         )
 
@@ -270,19 +222,6 @@ class SelectionBar(CTkFrame):
         """Reconfigure all widgets with current theme colors."""
         try:
             self.configure(fg_color=theme_color("selection.background"))
-
-            self._rule_menu.configure(
-                fg_color=theme_color("input.background"),
-                button_color=theme_color("button.secondary"),
-                button_hover_color=theme_color("button.secondaryHover"),
-                dropdown_fg_color=theme_color("input.background"),
-                dropdown_hover_color=theme_color("button.primary"),
-            )
-
-            self._apply_btn.configure(
-                fg_color=theme_color("button.primary"),
-                hover_color=theme_color("button.primaryHover"),
-            )
 
             self._selected_label.configure(
                 text_color=theme_color("selection.foreground"),
@@ -372,40 +311,6 @@ class SelectionBar(CTkFrame):
         """Get the total items count."""
         return self._total_items
 
-    def set_rule(self, rule: str) -> None:
-        """
-        Set the current selection rule.
-
-        Args:
-            rule: The rule identifier (from SelectionRule class).
-        """
-        if rule not in SelectionRule.all_rules() and rule not in [
-            SelectionRule.INVERT_SELECTION,
-            SelectionRule.CLEAR_SELECTION,
-            SelectionRule.SELECT_ALL
-        ]:
-            raise ValueError(f"Invalid selection rule: {rule}")
-
-        self._current_rule = rule
-        display_name = SelectionRule.display_name(rule)
-
-        try:
-            self._rule_menu.set(display_name)
-        except AttributeError:
-            pass
-
-    def get_rule(self) -> str:
-        """Get the current selection rule."""
-        return self._current_rule
-
-    def on_apply_rule(self, callback: Callable[[str], None]) -> None:
-        """
-        Set callback for Apply button.
-
-        Args:
-            callback: Function called with (rule_id).
-        """
-        self._on_apply_rule = callback
 
     def on_select_all(self, callback: Callable[[], None]) -> None:
         """
@@ -442,11 +347,6 @@ class SelectionBar(CTkFrame):
             callback: Function to call when Delete Selected is clicked.
         """
         self._on_delete_selected = callback
-
-    def trigger_apply_rule(self) -> None:
-        """Trigger the apply rule callback."""
-        if self._on_apply_rule and self._current_rule:
-            self._on_apply_rule(self._current_rule)
 
     def trigger_select_all(self) -> None:
         """Trigger the select all callback."""
