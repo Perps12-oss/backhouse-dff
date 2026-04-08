@@ -395,6 +395,10 @@ class ImageDedupEngine(BaseEngine):
                     # Mark largest as keeper
                     is_keeper = (f.stat().st_size == max_size)
 
+                    # Get image dimensions for preview
+                    img_dims = self._get_image_resolution(f)
+                    width, height = img_dims if img_dims else (None, None)
+
                     files_list.append(DuplicateFile(
                         path=f,
                         size=f.stat().st_size,
@@ -402,7 +406,10 @@ class ImageDedupEngine(BaseEngine):
                         extension=f.suffix.lower(),
                         is_keeper=is_keeper,
                         similarity=1.0,  # Will be refined later
-                        metadata={}
+                        metadata={
+                            "width": width,
+                            "height": height
+                        }
                     ))
 
                 group = DuplicateGroup(

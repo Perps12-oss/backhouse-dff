@@ -613,13 +613,19 @@ class MainWindow(CTk):
             # Transform files
             files_list = []
             for file_obj in core_group.files:
+                # Extract image dimensions from metadata if available
+                width = file_obj.metadata.get("width") if file_obj.metadata else None
+                height = file_obj.metadata.get("height") if file_obj.metadata else None
+
                 files_list.append({
                     "path": str(file_obj.path),
                     "size": file_obj.size,
                     "modified": file_obj.modified,
                     "similarity": file_obj.similarity,
                     "checked": False,  # Will be marked by selection rule
-                    "extension": file_obj.extension or Path(file_obj.path).suffix.lower()
+                    "extension": file_obj.extension or Path(file_obj.path).suffix.lower(),
+                    "width": width,
+                    "height": height
                 })
 
             # Create results panel group
@@ -1200,6 +1206,7 @@ class _UndoToast:
         self._parent = parent
         self._deleted = deleted_paths
         self._after_id = None
+        self._remaining = self.TIMEOUT_S
 
         self._win = tk.Toplevel(parent)
         self._win.overrideredirect(True)
@@ -1220,12 +1227,13 @@ class _UndoToast:
             font=("", 10),
         ).pack(side="left", padx=(0, 16))
 
-        tk.Button(
-            frame, text="Undo", bg=self.ACCENT, fg="#000",
+        self._undo_btn = tk.Button(
+            frame, text=f"Undo ({self._remaining}s)", bg=self.ACCENT, fg="#000",
             relief="flat", padx=8, pady=2, font=("", 10, "bold"),
             cursor="hand2",
             command=self._undo,
-        ).pack(side="left")
+        )
+        self._undo_btn.pack(side="left")
 
         tk.Button(
             frame, text="✕", bg=self.BG, fg=self.FG,
@@ -1240,8 +1248,36 @@ class _UndoToast:
         py = parent.winfo_rooty() + parent.winfo_height() - self._win.winfo_height() - 40
         self._win.geometry(f"+{px}+{py}")
 
-        # Auto-dismiss
-        self._after_id = parent.after(self.TIMEOUT_S * 1000, self._dismiss)
+        # Start countdown timer
+        self._start_countdown()
+
+    def _start_countdown(self) -> None:
+        """Start the 30-second countdown timer."""
+        self._after_id = self._parent.after(1000, self._tick)
+
+    def _tick(self) -> None:
+        """Decrement countdown and update button text."""
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._disable_undo()
+            self._after_id = self._parent.after(1000, self._dismiss)
+        else:
+            self._undo_btn.configure(text=f"Undo ({self._remaining}s)")
+            self._after_id = self._parent.after(1000, self._tick)
+
+    def _disable_undo(self) -> None:
+        """Disable the undo button after timeout."""
+        try:
+            self._undo_btn.configure(
+                text="Undo (expired)",
+                state="disabled",
+                bg="#555",
+                fg="#888",
+                cursor=""
+            )
+            self._undo_btn.configure(command=None)
+        except Exception:
+            pass
 
     def _dismiss(self) -> None:
         try:
