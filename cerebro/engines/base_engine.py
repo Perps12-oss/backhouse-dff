@@ -70,6 +70,20 @@ class DuplicateGroup:
                 keeper_size = max(f.size for f in self.files)
             self.reclaimable = self.total_size - keeper_size
 
+    @property
+    def file_count(self) -> int:
+        """Number of files in this group."""
+        return len(self.files)
+
+    def get_keeper_index(self) -> int:
+        """Return the index of the keeper file (largest by size, or flagged is_keeper)."""
+        if not self.files:
+            return 0
+        keepers = [i for i, f in enumerate(self.files) if f.is_keeper]
+        if keepers:
+            return keepers[0]
+        return max(range(len(self.files)), key=lambda i: self.files[i].size)
+
 
 @dataclass
 class EngineOption:
