@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget  # noqa: F401 - used in findChildren
 
 from cerebro.ui.theme_engine import current_colors, ThemeEngine
 
@@ -25,6 +25,7 @@ class BaseStation(QWidget):
 
    def __init__(self, parent: Optional[QWidget] = None, theme_engine: Optional[ThemeEngine] = None) -> None:
        super().__init__(parent)
+       self.setObjectName("BaseStation")
        self._is_active: bool = False
        self._theme_engine = theme_engine
        self._theme_colors: Dict[str, str] = {}
@@ -41,7 +42,7 @@ class BaseStation(QWidget):
        text = self._theme_colors.get('text', '#e7ecf2')
        
        self.setStyleSheet(f"""
-           BaseStation {{
+           QWidget#BaseStation {{
                background-color: {bg};
                color: {text};
            }}
@@ -59,8 +60,23 @@ class BaseStation(QWidget):
        pass
    
    def refresh_theme(self) -> None:
-       """Force theme refresh."""
+       """Force theme refresh and propagate to children that support it."""
        self._apply_theme()
+       for child in self.findChildren(QWidget):
+           if child is self:
+               continue
+           if hasattr(child, 'refresh_theme') and callable(getattr(child, 'refresh_theme')):
+               try:
+                   child.refresh_theme()
+               except Exception:
+                   pass
+           elif hasattr(child, 'update_theme') and callable(getattr(child, 'update_theme')):
+               try:
+                   child.update_theme()
+               except Exception:
+                   pass
+       self.update()
+       self.repaint()
    
    def get_color(self, key: str, fallback: str = "#7aa2ff") -> str:
        """Get theme color by key."""

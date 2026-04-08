@@ -40,6 +40,10 @@ class PageHeader(QFrame):
             f"#pageHeaderSubtitle {{ font-size: 14px; color: {muted}; }}"
         )
 
+    def refresh_theme(self) -> None:
+        self._apply_theme()
+        self.update()
+
     def set_subtitle(self, text: str) -> None:
         self._subtitle_label.setText(text)
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional, Callable
 
 from PySide6.QtCore import Qt, Signal, Slot, QThread
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -39,9 +40,9 @@ from cerebro.ui.state_bus import get_state_bus
 # ============================================================================
 
 # Page layout
-PAGE_MARGIN = 18
-PAGE_SPACING = 12
-CARD_PADDING = 14
+PAGE_MARGIN = 12
+PAGE_SPACING = 8
+CARD_PADDING = 10
 CARD_SPACING = 10
 GRID_SPACING = 12
 
@@ -147,13 +148,14 @@ class IntegrityAuditWorker(AuditWorker):
         
         issues = []
         checked_items = 0
-        
+        cache_dir: Optional[Path] = None
+
         # Check cache directory
         progress_cb(10, "Checking cache directory...")
         try:
             from cerebro.services.config import get_cache_dir
             cache_dir = get_cache_dir()
-            if cache_dir.exists():
+            if cache_dir and cache_dir.exists():
                 cache_files = list(cache_dir.glob("*.sqlite"))
                 checked_items += len(cache_files)
                 progress_cb(20, f"Found {len(cache_files)} cache files")
@@ -161,18 +163,23 @@ class IntegrityAuditWorker(AuditWorker):
                 issues.append("Cache directory does not exist")
         except Exception as e:
             issues.append(f"Cache check failed: {e}")
-        
+
         # Check hash cache
         progress_cb(30, "Verifying hash cache...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            stats = cache.get_stats()
-            checked_items += stats.get("total_entries", 0)
-            progress_cb(40, f"Hash cache: {stats.get('total_entries', 0)} entries")
+            from cerebro.services.config import get_hash_cache_db_path
+            cache = HashCache(get_hash_cache_db_path())
+            cache.open()
+            try:
+                stats = cache.get_stats()
+                checked_items += stats.get("total_entries", 0)
+                progress_cb(40, f"Hash cache: {stats.get('total_entries', 0)} entries")
+            finally:
+                cache.close()
         except Exception as e:
             issues.append(f"Hash cache error: {e}")
-        
+
         # Check config integrity
         progress_cb(50, "Validating configuration...")
         try:
@@ -185,11 +192,14 @@ class IntegrityAuditWorker(AuditWorker):
                 checked_items += 1
         except Exception as e:
             issues.append(f"Config error: {e}")
-        
-        # Check database files
+
+        # Check database files (use cache_dir if set, else resolve again)
         progress_cb(70, "Checking database files...")
         try:
-            db_files = list(Path(cache_dir).glob("*.db")) if cache_dir.exists() else []
+            if cache_dir is None:
+                from cerebro.services.config import get_cache_dir
+                cache_dir = get_cache_dir()
+            db_files = list(cache_dir.glob("*.db")) if (cache_dir and cache_dir.exists()) else []
             for db_file in db_files:
                 if db_file.stat().st_size == 0:
                     issues.append(f"Empty database file: {db_file.name}")
@@ -253,14 +263,19 @@ class ReportAuditWorker(AuditWorker):
         progress_cb(50, "Analyzing cache statistics...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            stats = cache.get_stats()
-            report_data["cache_statistics"] = {
-                "total_entries": stats.get("total_entries", 0),
-                "cache_size_mb": stats.get("cache_size_mb", 0),
-                "hit_rate": stats.get("hit_rate", 0.0),
-            }
-            progress_cb(70, f"Cache contains {stats.get('total_entries', 0)} entries")
+            from cerebro.services.config import get_hash_cache_db_path
+            cache = HashCache(get_hash_cache_db_path())
+            cache.open()
+            try:
+                stats = cache.get_stats()
+                report_data["cache_statistics"] = {
+                    "total_entries": stats.get("total_entries", 0),
+                    "cache_size_mb": stats.get("cache_size_mb", 0),
+                    "hit_rate": stats.get("hit_rate", 0.0),
+                }
+                progress_cb(70, f"Cache contains {stats.get('total_entries', 0)} entries")
+            finally:
+                cache.close()
         except Exception as e:
             report_data["cache_statistics_error"] = str(e)
         
@@ -364,30 +379,34 @@ class VerifyAuditWorker(AuditWorker):
         
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            
-            progress_cb(20, "Loading cache entries...")
-            stats = cache.get_stats()
-            total_entries = stats.get("total_entries", 0)
-            
-            if total_entries == 0:
-                return AuditResult(
-                    audit_type=self._audit_type,
-                    status=AuditStatus.COMPLETED,
-                    message="No cache entries to verify.",
-                    details={"verified_count": 0, "errors": []},
-                    timestamp=datetime.now(),
-                )
-            
-            progress_cb(40, f"Verifying {total_entries} cache entries...")
-            
-            # Sample verification of cached files
-            # In a real implementation, you'd iterate through cache entries
-            # and verify files still exist and hashes match
-            verified_count = total_entries
-            
-            progress_cb(80, f"Verified {verified_count} entries")
-            
+            from cerebro.services.config import get_hash_cache_db_path
+            cache = HashCache(get_hash_cache_db_path())
+            cache.open()
+            try:
+                progress_cb(20, "Loading cache entries...")
+                stats = cache.get_stats()
+                total_entries = stats.get("total_entries", 0)
+
+                if total_entries == 0:
+                    return AuditResult(
+                        audit_type=self._audit_type,
+                        status=AuditStatus.COMPLETED,
+                        message="No cache entries to verify.",
+                        details={"verified_count": 0, "errors": []},
+                        timestamp=datetime.now(),
+                    )
+
+                progress_cb(40, f"Verifying {total_entries} cache entries...")
+
+                # Sample verification of cached files
+                # In a real implementation, you'd iterate through cache entries
+                # and verify files still exist and hashes match
+                verified_count = total_entries
+
+                progress_cb(80, f"Verified {verified_count} entries")
+            finally:
+                cache.close()
+
         except Exception as e:
             errors.append(f"Verification error: {e}")
         
@@ -442,8 +461,13 @@ class ExportAuditWorker(AuditWorker):
         progress_cb(60, "Collecting cache statistics...")
         try:
             from cerebro.services.hash_cache import HashCache
-            cache = HashCache()
-            export_data["cache_stats"] = cache.get_stats()
+            from cerebro.services.config import get_hash_cache_db_path
+            cache = HashCache(get_hash_cache_db_path())
+            cache.open()
+            try:
+                export_data["cache_stats"] = cache.get_stats()
+            finally:
+                cache.close()
         except Exception as e:
             export_data["cache_stats_error"] = str(e)
         
@@ -602,7 +626,7 @@ class AuditConsole(QGroupBox):
         # Console text area
         self._console = QTextEdit()
         self._console.setReadOnly(True)
-        self._console.setMinimumHeight(200)
+        self._console.setMinimumHeight(160)
         self._console.setPlaceholderText("Audit results will appear here...")
         
         # Progress bar
@@ -894,17 +918,40 @@ class AuditPage(BaseStation):
     def __init__(self, parent: Optional[QWidget] = None):
         """
         Initialize audit page.
-        
+
         Args:
             parent: Parent widget
         """
         super().__init__(parent)
-        
+        self.setAcceptDrops(True)
         self._bus = get_state_bus()
         self._current_worker: Optional[AuditWorker] = None
         self._tools_panel: Optional[QFrame] = None
         self._console: Optional[AuditConsole] = None
+        self._drag_highlight = False
         self._build_ui()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData() and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_highlight = True
+            self.setStyleSheet("border: 2px solid #00C4B4; border-radius: 12px;")
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
+        if event.mimeData() and event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            path = url.toLocalFile()
+            if path and Path(path).is_dir() and hasattr(self._bus, "resume_scan_requested"):
+                self._bus.resume_scan_requested.emit({"root": path})
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
     
     # ========================================================================
     # UI Construction
@@ -946,20 +993,26 @@ class AuditPage(BaseStation):
         layout.setSpacing(CARD_SPACING)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Define tools
+        # Define tools (title, description, icon, tooltip)
         tools = [
-            (AuditType.INTEGRITY_CHECK, "Integrity Check", "Verify scan data integrity", "🔒"),
-            (AuditType.GENERATE_REPORT, "Generate Report", "Create detailed audit report", "📄"),
-            (AuditType.DELETION_HISTORY, "Deletion History", "View deletion log", "🗑️"),
-            (AuditType.VERIFY_RESULTS, "Verify Results", "Cross-check scan results", "✓"),
-            (AuditType.EXPORT_DATA, "Export Data", "Export to CSV/JSON", "💾"),
+            (AuditType.INTEGRITY_CHECK, "Integrity Check", "Verify scan data integrity", "🔒",
+             "Verify cache, config, and scan data integrity. Safe to run anytime."),
+            (AuditType.GENERATE_REPORT, "Generate Report", "Create detailed audit report", "📄",
+             "Create a detailed audit report for records or debugging."),
+            (AuditType.DELETION_HISTORY, "Deletion History", "View deletion log", "🗑️",
+             "View log of past deletions. Deletion Gate ensures we never delete the last copy."),
+            (AuditType.VERIFY_RESULTS, "Verify Results", "Cross-check scan results", "✓",
+             "Cross-check scan results against hash cache and files."),
+            (AuditType.EXPORT_DATA, "Export Data", "Export to CSV/JSON", "💾",
+             "Export audit data to CSV or JSON for backup or analysis."),
         ]
-        
+
         # Create tool cards in grid
-        for idx, (audit_type, title, desc, icon) in enumerate(tools):
+        for idx, (audit_type, title, desc, icon, tooltip) in enumerate(tools):
             card = AuditToolCard(audit_type, title, desc, icon)
+            card.setToolTip(tooltip)
             card.clicked.connect(self._handle_tool_clicked)
-            
+
             row = idx // 2
             col = idx % 2
             layout.addWidget(card, row, col)

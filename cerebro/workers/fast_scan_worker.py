@@ -10,9 +10,32 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal, QObject
 
+from collections import defaultdict
+
 from cerebro.core.fast_pipeline import FastPipeline
 from cerebro.core.models import ScanProgress
 from cerebro.ui.state_bus import StateBus
+
+
+def _meta_path(meta: Any) -> str:
+    """Path from scanner result (dict or object)."""
+    if hasattr(meta, "path"):
+        return str(meta.path)
+    return str(meta.get("path", "")) if isinstance(meta, dict) else ""
+
+
+def _meta_size(meta: Any) -> int:
+    """Size from scanner result (dict or object)."""
+    if hasattr(meta, "size"):
+        return int(meta.size)
+    return int(meta.get("size", 0)) if isinstance(meta, dict) else 0
+
+
+def _meta_hash(meta: Any) -> Any:
+    """Hash from scanner result (dict or object)."""
+    if hasattr(meta, "hash"):
+        return meta.hash
+    return meta.get("hash") if isinstance(meta, dict) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,14 +289,14 @@ class FastScanWorker(QThread):
             processed_count = 0
             total_size = 0
             
-            # Scan files
+            # Scan files (file_meta can be dict or object with path/hash/size)
             for file_meta in scanner.scan([root]):
                 if self._cancelled:
                     self.cancelled.emit()
                     return
                 
                 processed_count += 1
-                total_size += getattr(file_meta, 'size', 0)
+                total_size += _meta_size(file_meta)
                 
                 # Update progress every 100 files
                 if processed_count % 100 == 0:
@@ -285,10 +308,10 @@ class FastScanWorker(QThread):
                         scanned_files=processed_count,
                         scanned_bytes=total_size,
                         elapsed_seconds=elapsed,
-                        current_path=str(getattr(file_meta, 'path', '')),
+                        current_path=_meta_path(file_meta),
                     )
                     self.progress_updated.emit(progress)
-                    self.file_changed.emit(str(getattr(file_meta, 'path', '')))
+                    self.file_changed.emit(_meta_path(file_meta))
                 
                 files_found.append(file_meta)
             
@@ -296,7 +319,28 @@ class FastScanWorker(QThread):
             elapsed = time.perf_counter() - self._start_ts
             self.phase_changed.emit(f"{scanner_name}: Completed")
             
-            # Build result
+            # Build result: use scanner's last_groups so Review page has duplicate groups
+            groups_list = getattr(scanner, "last_groups", None) or []
+            if not groups_list and hasattr(scanner, "scanner"):
+                groups_list = getattr(scanner.scanner, "last_groups", None) or []
+            # Quantum/Ultra return flat file list: build duplicate groups by hash for Review
+            if not groups_list and files_found:
+                by_hash = defaultdict(list)
+                for meta in files_found:
+                    h = _meta_hash(meta)
+                    if h is not None:
+                        by_hash[h].append(meta)
+                for h, metas in by_hash.items():
+                    if len(metas) < 2:
+                        continue
+                    paths = [_meta_path(m) for m in metas]
+                    sizes = [_meta_size(m) for m in metas]
+                    groups_list.append({
+                        "paths": paths,
+                        "hash": str(h),
+                        "count": len(paths),
+                        "recoverable_bytes": sum(sizes),
+                    })
             result = {
                 "scan_root": str(root),
                 "scan_name": self._cfg.scan_name or f"Scan of {root}",
@@ -305,7 +349,9 @@ class FastScanWorker(QThread):
                 "scan_duration": elapsed,
                 "scanner_tier": tier,
                 "scanner_name": scanner_name,
-                "groups": groups_found,  # TODO: Group duplicates
+                "groups": groups_list,
+                "group_count": len(groups_list),
+                "duplicate_count": sum(g.get("count", len(g.get("paths", []))) for g in groups_list),
                 "cancelled": False,
             }
             

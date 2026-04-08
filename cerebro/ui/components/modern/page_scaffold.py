@@ -100,17 +100,26 @@ class PageScaffold(QFrame):
     def _apply_theme(self) -> None:
         line = token("line")
         panel = token("panel")
+        bg = token("bg")
         sheet = (
             f"#pageScaffoldHeader {{ border-bottom: 1px solid {line}; background: {panel}; }}"
             f"#pageScaffoldSidebar {{ border-right: 1px solid {line}; background: {panel}; }}"
-            f"#pageScaffoldContent {{ background: transparent; }}"
+            f"#pageScaffoldContent {{ background: {bg}; }}"
             f"#pageScaffoldSticky {{ border-top: 1px solid {line}; background: {panel}; }}"
         )
         self._header_placeholder.setStyleSheet(sheet)
         if self._sidebar_placeholder:
             self._sidebar_placeholder.setStyleSheet(sheet)
+        self._content_placeholder.setStyleSheet(f"#pageScaffoldContent {{ background: {bg}; }}")
         if self._sticky_placeholder:
             self._sticky_placeholder.setStyleSheet(sheet)
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme so scaffold and placeholders update."""
+        bg = token("bg")
+        self.setStyleSheet(f"PageScaffold {{ background: {bg}; }}")
+        self._apply_theme()
+        self.update()
 
     def set_header(self, widget: QWidget) -> None:
         self._clear_layout(self._header_layout)

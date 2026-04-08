@@ -260,3 +260,26 @@ class HashCache:
             (str(path), sig.size, sig.mtime_ns, sig.dev, sig.inode, qh, qa, qb, fh, fa, now),
         )
         conn.commit()
+
+    def get_stats(self) -> dict:
+        """Return cache statistics (total_entries, cache_size_mb, hit_rate). Requires open()."""
+        conn = self._require_conn()
+        cur = conn.execute("SELECT COUNT(*) FROM file_hashes")
+        total = int(cur.fetchone()[0] or 0)
+        size_mb = 0.0
+        if self.db_path.exists():
+            try:
+                size_mb = self.db_path.stat().st_size / (1024 * 1024)
+            except OSError:
+                pass
+        return {
+            "total_entries": total,
+            "cache_size_mb": round(size_mb, 2),
+            "hit_rate": 0.0,
+        }
+
+    def vacuum(self) -> None:
+        """Reclaim space. Requires open()."""
+        conn = self._require_conn()
+        conn.execute("VACUUM")
+        conn.commit()

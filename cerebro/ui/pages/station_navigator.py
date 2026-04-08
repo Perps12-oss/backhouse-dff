@@ -58,7 +58,7 @@ class SpineButton(QPushButton):
         self._pulse_timer.start(50)  # 20 FPS
         
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(52 if not collapsed else 48)
+        self.setMinimumHeight(40 if not collapsed else 36)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
         self._apply_text()
@@ -66,7 +66,7 @@ class SpineButton(QPushButton):
     
     def set_collapsed(self, collapsed: bool) -> None:
         self._collapsed = bool(collapsed)
-        self.setMinimumHeight(48 if collapsed else 52)
+        self.setMinimumHeight(36 if collapsed else 40)
         self._apply_text()
         self.update()
     
@@ -428,22 +428,22 @@ class StationNavigator(QWidget):
         self._apply_guided_mode_locks()
     
     def _build_ui(self) -> None:
-        self.setMinimumWidth(240)
-        self.setMaximumWidth(320)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(260)
         
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 14, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
         
         # Brand header
         brand = QHBoxLayout()
         brand.setContentsMargins(0, 0, 0, 0)
         
         self._brand_label = QLabel("CEREBRO")
-        self._brand_label.setFont(QFont("Segoe UI", 12, QFont.Black))
+        self._brand_label.setFont(QFont("Segoe UI", 11, QFont.Black))
         
         self._collapse_btn = QPushButton("⟷")
-        self._collapse_btn.setFixedSize(QSize(36, 36))
+        self._collapse_btn.setFixedSize(QSize(28, 28))
         self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._collapse_btn.clicked.connect(self.toggle_collapsed)
         
@@ -471,7 +471,7 @@ class StationNavigator(QWidget):
         # Mode selector
         self._mode_btn = QPushButton("🧠  Mode: Guided")
         self._mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._mode_btn.setMinimumHeight(40)
+        self._mode_btn.setMinimumHeight(32)
         self._mode_btn.clicked.connect(self._toggle_mode)
         root.addWidget(self._mode_btn)
         
@@ -488,12 +488,12 @@ class StationNavigator(QWidget):
             }}
             QPushButton {{
                 text-align: left;
-                padding: 12px 14px;
-                border-radius: 12px;
+                padding: 8px 10px;
+                border-radius: 8px;
                 border: 1px solid {colors.get('border', 'rgba(120,140,180,0.18)')};
                 background: {colors.get('card', 'rgba(20, 26, 38, 0.35)')};
                 color: {colors.get('text', '#e7ecf2')};
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
@@ -678,7 +678,7 @@ class StationNavigator(QWidget):
     def set_collapsed(self, collapsed: bool) -> None:
         self._collapsed = bool(collapsed)
         
-        target = 72 if self._collapsed else 240
+        target = 64 if self._collapsed else 200
         self._anim.stop()
         self._anim.setStartValue(self.minimumWidth())
         self._anim.setEndValue(target)

@@ -24,8 +24,8 @@ class IntentCard(QFrame):
         self._update_style()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         self.icon = QLabel(icon)
         self.icon.setAlignment(Qt.AlignCenter)

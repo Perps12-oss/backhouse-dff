@@ -68,6 +68,11 @@ class StatCard(QFrame):
             QLabel#statCardDelta {{ font-size: 12px; color: {token('ok')}; }}
         """)
 
+    def refresh_theme(self) -> None:
+        """Re-apply theme so card colors update."""
+        self._apply_theme()
+        self.update()
+
     def set_value(self, value: str) -> None:
         self._value_label.setText(value)
 

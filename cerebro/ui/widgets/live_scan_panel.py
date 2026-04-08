@@ -195,8 +195,8 @@ class LiveScanPanel(QFrame):
     def _build_ui(self) -> None:
         """Build the UI layout."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         
         # Header with phase and live indicator
         header = QHBoxLayout()
@@ -223,7 +223,7 @@ class LiveScanPanel(QFrame):
         # Progress bar
         self._progress_bar = QProgressBar()
         self._progress_bar.setTextVisible(False)
-        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setFixedHeight(4)
         self._progress_bar.setObjectName("ProgressBar") # For stylesheet
         layout.addWidget(self._progress_bar)
         
@@ -238,6 +238,13 @@ class LiveScanPanel(QFrame):
         progress_layout.addWidget(self._eta_label, 0, Qt.AlignmentFlag.AlignRight)
         
         layout.addLayout(progress_layout)
+        
+        # Advanced details section (Files/Speed/Size/Throughput, Current file, Warnings) — hidden in Simple mode
+        self._advanced_details_section = QWidget()
+        self._advanced_details_section.setObjectName("AdvancedDetailsSection")
+        adv_layout = QVBoxLayout(self._advanced_details_section)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(8)
         
         # Statistics grid
         stats_grid = QGridLayout()
@@ -257,25 +264,52 @@ class LiveScanPanel(QFrame):
         stats_grid.addWidget(QLabel("Throughput:"), 1, 2)
         stats_grid.addWidget(self._throughput_label, 1, 3)
         
-        layout.addLayout(stats_grid)
+        stats_widget = QWidget()
+        stats_widget.setLayout(stats_grid)
+        adv_layout.addWidget(stats_widget)
         
         # Current file section
-        layout.addWidget(QLabel("Current file:"))
+        adv_layout.addWidget(QLabel("Current file:"))
         
         self._current_file_frame = QFrame()
         self._current_file_frame.setObjectName("CurrentFileFrame")
         
         file_layout = QVBoxLayout(self._current_file_frame)
-        file_layout.setContentsMargins(10, 8, 10, 8)
+        file_layout.setContentsMargins(8, 6, 8, 6)
         
         self._current_file_label = QLabel("—")
         self._current_file_label.setWordWrap(True)
         self._current_file_label.setObjectName("CurrentFileLabel")
+        self._current_file_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         
         file_layout.addWidget(self._current_file_label)
-        layout.addWidget(self._current_file_frame)
+        adv_layout.addWidget(self._current_file_frame)
         
-        # Results section
+        # Warnings section
+        adv_layout.addWidget(QLabel("Warnings:"))
+        
+        warning_scroll = QScrollArea()
+        warning_scroll.setWidgetResizable(True)
+        warning_scroll.setMinimumHeight(56)
+        warning_scroll.setMaximumHeight(140)
+        warning_scroll.setObjectName("WarningScrollArea")
+
+        warning_container = QWidget()
+        self._warning_layout = QVBoxLayout(warning_container)
+        self._warning_layout.setContentsMargins(8, 8, 8, 8)
+        self._warning_layout.setSpacing(4)
+
+        self._warning_placeholder = QLabel("No warnings")
+        self._warning_placeholder.setObjectName("WarningPlaceholder")
+        self._warning_placeholder.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._warning_layout.addWidget(self._warning_placeholder)
+
+        warning_scroll.setWidget(warning_container)
+        adv_layout.addWidget(warning_scroll)
+        
+        layout.addWidget(self._advanced_details_section)
+        
+        # Results section (Groups found, Duplicates) — always visible on main view
         results_layout = QHBoxLayout()
         results_layout.setSpacing(16)
         
@@ -286,28 +320,6 @@ class LiveScanPanel(QFrame):
         results_layout.addWidget(self._dupes_frame)
         
         layout.addLayout(results_layout)
-        
-        # Warnings section
-        layout.addWidget(QLabel("Warnings:"))
-        
-        warning_scroll = QScrollArea()
-        warning_scroll.setWidgetResizable(True)
-        warning_scroll.setFixedHeight(80)
-        warning_scroll.setObjectName("WarningScrollArea")
-        
-        warning_container = QWidget()
-        self._warning_layout = QVBoxLayout(warning_container)
-        self._warning_layout.setContentsMargins(8, 8, 8, 8)
-        self._warning_layout.setSpacing(4)
-        
-        self._warning_placeholder = QLabel("No warnings")
-        self._warning_placeholder.setObjectName("WarningPlaceholder")
-        self._warning_layout.addWidget(self._warning_placeholder)
-        
-        warning_scroll.setWidget(warning_container)
-        layout.addWidget(warning_scroll)
-        
-        layout.addStretch()
 
     def _on_live_blink(self) -> None:
         """Toggle live indicator dot for animation."""
@@ -333,7 +345,7 @@ class LiveScanPanel(QFrame):
         frame.setObjectName("ResultFrame")
         
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setContentsMargins(8, 6, 8, 6)
         
         layout.addWidget(QLabel(title))
         value_label = QLabel(value)
@@ -347,6 +359,11 @@ class LiveScanPanel(QFrame):
             self._dupes_label = value_label
             
         return frame
+
+    def set_show_advanced_details(self, show: bool) -> None:
+        """Show or hide Files/Speed/Size/Throughput, Current file, and Warnings (Advanced mode only)."""
+        if hasattr(self, "_advanced_details_section") and self._advanced_details_section is not None:
+            self._advanced_details_section.setVisible(show)
 
     def _apply_theme(self) -> None:
         """Apply theme colors via stylesheet."""
@@ -425,7 +442,12 @@ class LiveScanPanel(QFrame):
                 padding: 2px 0px;
             }}
         """)
-    
+
+    def refresh_theme(self) -> None:
+        """Re-apply theme so panel colors update on light/dark switch."""
+        self._apply_theme()
+        self.update()
+
     # ------------------------------------------------------------------------
     # Public API - Single update method from snapshot (Preferred)
     # ------------------------------------------------------------------------
@@ -516,6 +538,7 @@ class LiveScanPanel(QFrame):
                 warning_label = QLabel(warning)
                 warning_label.setObjectName("WarningLabel")
                 warning_label.setWordWrap(True)
+                warning_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 self._warning_layout.addWidget(warning_label)
         else:
             self._warning_placeholder.show()
@@ -566,8 +589,9 @@ class LiveScanPanel(QFrame):
             self._warning_placeholder.hide()
         
         warning_label = QLabel(message)
-        warning_label.setObjectName("WarningLabel") # Use same style
+        warning_label.setObjectName("WarningLabel")  # Use same style
         warning_label.setWordWrap(True)
+        warning_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._warning_layout.addWidget(warning_label)
 
     def reset(self) -> None:

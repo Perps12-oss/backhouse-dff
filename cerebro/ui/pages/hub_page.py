@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -41,9 +42,9 @@ from cerebro.ui.state_bus import get_state_bus
 # ============================================================================
 
 # Page layout
-PAGE_MARGIN = 18
-PAGE_SPACING = 12
-CARD_PADDING = 14
+PAGE_MARGIN = 12
+PAGE_SPACING = 8
+CARD_PADDING = 10
 CARD_SPACING = 10
 GRID_SPACING = 12
 
@@ -373,15 +374,18 @@ class PerformanceMonitor(QGroupBox):
             # Update cache stats
             try:
                 from cerebro.services.hash_cache import HashCache
-                cache = HashCache()
-                cache_stats = cache.get_stats()
-                
-                cache_size_mb = cache_stats.get("cache_size_mb", 0)
-                cache_entries = cache_stats.get("total_entries", 0)
-                
-                self._cache_size_label.setText(f"{cache_size_mb:.1f} MB")
-                self._cache_entries_label.setText(f"{cache_entries:,}")
-            except:
+                from cerebro.services.config import get_hash_cache_db_path
+                cache = HashCache(get_hash_cache_db_path())
+                cache.open()
+                try:
+                    cache_stats = cache.get_stats()
+                    cache_size_mb = cache_stats.get("cache_size_mb", 0)
+                    cache_entries = cache_stats.get("total_entries", 0)
+                    self._cache_size_label.setText(f"{cache_size_mb:.1f} MB")
+                    self._cache_entries_label.setText(f"{cache_entries:,}")
+                finally:
+                    cache.close()
+            except Exception:
                 self._cache_size_label.setText("—")
                 self._cache_entries_label.setText("—")
             
@@ -418,7 +422,7 @@ class LogViewer(QGroupBox):
         # Log text area
         self._log_text = QTextEdit()
         self._log_text.setReadOnly(True)
-        self._log_text.setMinimumHeight(300)
+        self._log_text.setMinimumHeight(200)
         
         # Action buttons
         actions = QHBoxLayout()
@@ -684,16 +688,38 @@ class HubPage(BaseStation):
     def __init__(self, parent: Optional[QWidget] = None):
         """
         Initialize hub page.
-        
+
         Args:
             parent: Parent widget
         """
         super().__init__(parent)
-        
+        self.setAcceptDrops(True)
         self._bus = get_state_bus()
         self._current_view = HubTool.PERFORMANCE
-        
+        self._drag_highlight = False
         self._build_ui()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData() and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_highlight = True
+            self.setStyleSheet("border: 2px solid #00C4B4; border-radius: 12px;")
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
+        if event.mimeData() and event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            path = url.toLocalFile()
+            if path and Path(path).is_dir() and hasattr(self._bus, "resume_scan_requested"):
+                self._bus.resume_scan_requested.emit({"root": path})
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
     
     # ========================================================================
     # UI Construction
@@ -727,17 +753,22 @@ class HubPage(BaseStation):
         layout.setSpacing(CARD_SPACING)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Define tools
+        # Define tools (tool, title, desc, icon, enabled, tooltip)
         tools = [
-            (HubTool.PERFORMANCE, "Performance", "Monitor system resources", "📈", True),
-            (HubTool.LOGS, "Logs", "View application logs", "🗂️", True),
-            (HubTool.UPDATES, "Updates", "Check for updates", "⬆️", True),
-            (HubTool.ABOUT, "About", "Application information", "ℹ️", True),
+            (HubTool.PERFORMANCE, "Performance", "Monitor system resources", "📈", True,
+             "Monitor CPU, memory, and disk usage. Useful during long scans."),
+            (HubTool.LOGS, "Logs", "View application logs", "🗂️", True,
+             "View and export application logs for debugging."),
+            (HubTool.UPDATES, "Updates", "Check for updates", "⬆️", True,
+             "Check for application updates."),
+            (HubTool.ABOUT, "About", "Application information", "ℹ️", True,
+             "Application version and information."),
         ]
-        
+
         # Create cards
-        for idx, (tool, title, desc, icon, enabled) in enumerate(tools):
+        for idx, (tool, title, desc, icon, enabled, tooltip) in enumerate(tools):
             card = HubToolCard(tool, title, desc, icon, enabled)
+            card.setToolTip(tooltip)
             card.clicked.connect(self._show_tool)
             
             row = idx // 2
@@ -931,15 +962,19 @@ class HubPage(BaseStation):
         """Optimize cache databases"""
         try:
             from cerebro.services.hash_cache import HashCache
-            
-            cache = HashCache()
-            cache.vacuum()
-            
-            self._bus.notify(
-                "Optimization complete",
-                "Cache database optimized successfully",
-                2000
-            )
+            from cerebro.services.config import get_hash_cache_db_path
+
+            cache = HashCache(get_hash_cache_db_path())
+            cache.open()
+            try:
+                cache.vacuum()
+                self._bus.notify(
+                    "Optimization complete",
+                    "Cache database optimized successfully",
+                    2000
+                )
+            finally:
+                cache.close()
         except Exception as e:
             self._bus.notify("Error", f"Optimization failed: {e}", 3000)
     

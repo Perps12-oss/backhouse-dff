@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QFileDialog, QMessageBox, QProgressBar,
@@ -89,10 +90,12 @@ class HistoryPage(BaseStation):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self._bus = get_state_bus()
         self._items: List[Dict[str, Any]] = []
         self._export_worker: Optional[ExportWorker] = None
         self._verify_worker: Optional[VerifyWorker] = None
+        self._drag_highlight = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -120,9 +123,11 @@ class HistoryPage(BaseStation):
         tb_layout = QHBoxLayout(toolbar_wrap)
         tb_layout.setContentsMargins(0, 0, 0, 0)
         self._refresh_btn = QPushButton("↻ Refresh")
+        self._refresh_btn.setToolTip("Reload deletion history from store. Shows timeline of past cleanups.")
         self._refresh_btn.setCursor(Qt.PointingHandCursor)
         self._refresh_btn.clicked.connect(self.refresh)
         self._export_btn = QPushButton("Export…")
+        self._export_btn.setToolTip("Export history to JSON or CSV for backup or analysis.")
         self._export_btn.setCursor(Qt.PointingHandCursor)
         self._export_btn.clicked.connect(self._start_export)
         tb_layout.addWidget(self._refresh_btn)
@@ -131,7 +136,7 @@ class HistoryPage(BaseStation):
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 18, 18, 18)
+        content_layout.setContentsMargins(12, 12, 12, 12)
         content_layout.setSpacing(12)
         content_layout.addLayout(stat_row)
         content_layout.addWidget(toolbar_wrap)
@@ -160,6 +165,28 @@ class HistoryPage(BaseStation):
 
         self._scaffold.set_content(content)
         self.refresh()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData() and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._drag_highlight = True
+            self.setStyleSheet(f"border: 2px solid {theme_token('accent')}; border-radius: 12px;")
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
+        if event.mimeData() and event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            path = url.toLocalFile()
+            if path and Path(path).is_dir():
+                self._bus.resume_scan_requested.emit({"root": path})
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_highlight = False
+        self.setStyleSheet("")
 
     def ingest_scan_result(self, result: Dict[str, Any]) -> None:
         # Called by MainWindow best-effort

@@ -891,3 +891,24 @@ def reload_config() -> AppConfig:
         
     _config_instance = _config_manager.load_config()
     return _config_instance
+
+
+def get_cache_dir() -> Path:
+    """
+    Return a valid writable cache directory path (Windows-safe).
+    Uses the existing config system; falls back to ~/.cerebro/cache if config unavailable.
+    """
+    try:
+        cfg = load_config()
+        cache_dir = Path(cfg.cache_dir or "").resolve()
+    except Exception:
+        cache_dir = Path.home() / ".cerebro" / "cache"
+    if not cache_dir.is_absolute():
+        cache_dir = Path.home() / ".cerebro" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def get_hash_cache_db_path() -> Path:
+    """Return the path to the hash cache SQLite database (<cache_dir>/hash_cache.sqlite)."""
+    return get_cache_dir() / "hash_cache.sqlite"

@@ -21,10 +21,12 @@ from __future__ import annotations
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QTimer, Qt, QThread, Signal, Slot, QSize
+from PySide6.QtGui import QKeySequence, QShortcut, QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget,
-    QMessageBox, QFrame, QLabel
+    QMessageBox, QFrame, QLabel, QPushButton, QComboBox, QMenuBar, QMenu,
+    QDialog, QDialogButtonBox, QSizePolicy,
 )
 
 from cerebro.services.logger import log_info, log_error, log_debug
@@ -48,11 +50,27 @@ from cerebro.core.pipeline import CerebroPipeline, ExecutableDeletePlan, Deletio
 
 
 class ThemedStack(QStackedWidget):
-    """Stacked widget that propagates theme changes to all children."""
+    """Stacked widget whose size hint never changes when pages switch.
+
+    QStackedWidget normally returns the *current* page's sizeHint, which
+    causes the parent layout (and therefore the window) to resize every
+    time the user navigates. We override sizeHint/minimumSizeHint to
+    return a small constant so the layout gives us all remaining stretch
+    space without ever requesting more.
+    """
+
+    _FIXED_HINT = QSize(200, 200)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("pageStack")
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
+    def sizeHint(self) -> QSize:
+        return self._FIXED_HINT
+
+    def minimumSizeHint(self) -> QSize:
+        return self._FIXED_HINT
 
     def propagate_theme(self) -> None:
         """Force theme refresh on all pages."""
@@ -71,6 +89,24 @@ class ThemedStack(QStackedWidget):
                             background-color: {bg};
                         }}
                     """)
+
+
+class PlanBuilderThread(QThread):
+    """Builds ExecutableDeletePlan off the main thread so path.exists()/stat() don't freeze the UI."""
+    plan_ready = Signal(object)   # ExecutableDeletePlan
+    plan_failed = Signal(str)
+
+    def __init__(self, pipeline: CerebroPipeline, deletion_plan: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self._pipeline = pipeline
+        self._deletion_plan = deletion_plan
+
+    def run(self) -> None:
+        try:
+            plan = self._pipeline.build_delete_plan(self._deletion_plan)
+            self.plan_ready.emit(plan)
+        except Exception as e:
+            self.plan_failed.emit(str(e))
 
 
 class PipelineCleanupWorker(QThread):
@@ -143,22 +179,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setObjectName("MainWindow")
-        self.setWindowTitle("CEREBRO v5.0")
+        self.setWindowTitle("Cerebro — Gemini Duplicate Finder")
         
-        # Enable window resizing and standard controls (minimize, maximize, close)
-        self.setWindowFlags(
-            Qt.WindowType.Window |                    # Standard window
-            Qt.WindowType.WindowMinMaxButtonsHint |  # Enable min/max buttons
-            Qt.WindowType.WindowCloseButtonHint |    # Enable close button
-            Qt.WindowType.WindowSystemMenuHint       # Enable system menu (context menu on title bar)
-        )
+        # Use default window flags so the OS title bar (min/max/close) is always visible.
+        # Do not set custom WindowFlags that can hide or break native controls on Windows.
         
-        # Set initial size (resizable, not fixed)
-        self.resize(1400, 900)
-        
-        # Set minimum and maximum sizes (reasonable bounds)
-        self.setMinimumSize(800, 600)    # Minimum usable size
-        # Don't set maximum size - let it scale to screen size
+        # Default size and bounds (resizable, no max limit)
+        self.resize(800, 600)
+        self.setMinimumSize(800, 600)
         
         self._bus = get_state_bus()
         self._theme = get_theme_manager()
@@ -181,12 +209,15 @@ class MainWindow(QMainWindow):
 
         # New: pipeline-driven cleanup worker
         self._cleanup_worker: Optional[PipelineCleanupWorker] = None
+        self._plan_builder: Optional[PlanBuilderThread] = None
         self._geometry_restored = False
 
         self._build_layout()
         self._build_pages()
         self._wire_bus()
         self._wire_theme()
+        self._setup_shortcuts()
+        self._setup_help_menu()
 
         # Apply theme and propagate to all pages
         self._theme.apply_theme(self._theme.current_theme_key)
@@ -222,13 +253,62 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # Global toolbar: compact for small window; expands when maximized
+        self._toolbar = QFrame()
+        self._toolbar.setObjectName("GlobalToolbar")
+        self._toolbar.setFixedHeight(36)
+        tb_layout = QHBoxLayout(self._toolbar)
+        tb_layout.setContentsMargins(12, 4, 12, 4)
+        tb_layout.setSpacing(8)
+        self._scanner_mode_combo = QComboBox()
+        self._scanner_mode_combo.setToolTip("Scanner mode: Turbo (12x), Ultra (60x), or Quantum (180x+)")
+        self._scanner_mode_combo.addItems([
+            "Turbo (12x)",
+            "Ultra (60x)",
+            "Quantum (180x+)",
+        ])
+        self._scanner_mode_combo.currentIndexChanged.connect(self._on_toolbar_scanner_mode_changed)
+        tb_layout.addWidget(QLabel("Scanner:"))
+        tb_layout.addWidget(self._scanner_mode_combo)
+        self._scanner_badge = QLabel("Turbo")
+        self._scanner_badge.setObjectName("ScannerBadge")
+        self._scanner_badge.setStyleSheet("""
+            QLabel#ScannerBadge {
+                background: #22c55e;
+                color: white;
+                border-radius: 6px;
+                padding: 1px 6px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+        """)
+        self._scanner_badge.setToolTip("Turbo = green, Ultra = blue, Quantum = purple")
+        tb_layout.addWidget(self._scanner_badge)
+        self._on_toolbar_scanner_mode_changed(self._scanner_mode_combo.currentIndex())
+        tb_layout.addSpacing(8)
+        new_scan_btn = QPushButton("New Scan")
+        new_scan_btn.setToolTip("Start a new duplicate scan")
+        new_scan_btn.clicked.connect(lambda: self.navigate_to("scan"))
+        tb_layout.addWidget(new_scan_btn)
+        for label, station in [("History", "history"), ("Audit", "audit"), ("Hub", "hub"), ("Settings", "settings")]:
+            btn = QPushButton(label)
+            btn.setToolTip(f"Open {label} page")
+            btn.clicked.connect(lambda checked, s=station: self.navigate_to(s))
+            tb_layout.addWidget(btn)
+        self._theme_toggle_btn = QPushButton("Theme: Light")
+        self._theme_toggle_btn.setToolTip("Toggle between Gemini dark and light")
+        self._theme_toggle_btn.clicked.connect(self._on_toolbar_theme_toggle)
+        tb_layout.addWidget(self._theme_toggle_btn)
+        tb_layout.addStretch(1)
+        outer.addWidget(self._toolbar)
+
         # Background scan banner (hidden by default)
         self._scan_banner = QFrame()
         self._scan_banner.setObjectName("ScanBanner")
         self._scan_banner.setVisible(False)
         banner_layout = QHBoxLayout(self._scan_banner)
-        banner_layout.setContentsMargins(16, 6, 16, 6)
-        banner_layout.setSpacing(8)
+        banner_layout.setContentsMargins(12, 4, 12, 4)
+        banner_layout.setSpacing(6)
 
         self._scan_banner_label = QLabel("Scan running in background…")
         banner_layout.addWidget(self._scan_banner_label, 1)
@@ -251,18 +331,36 @@ class MainWindow(QMainWindow):
         """Apply theme to root widgets."""
         colors = current_colors()
         bg = colors.get('bg', '#0f1115')
+        panel = colors.get('panel', '#151922')
+        line = colors.get('line', '#262c3a')
+        text = colors.get('text', '#e7ecf2')
+        accent = colors.get('accent', '#00C4B4')
         banner_bg = colors.get('warning_bg', 'rgba(234,179,8,0.12)')
         banner_text = colors.get('warning_text', '#facc15')
+        if self._theme.current_theme_key == "gemini_light":
+            self._theme_toggle_btn.setText("Theme: Dark")
+        else:
+            self._theme_toggle_btn.setText("Theme: Light")
 
         self.setStyleSheet(f"""
-            QMainWindow {{
+            QMainWindow, QWidget#rootWidget, QWidget#MainWindow {{
                 background-color: {bg};
             }}
-            QWidget#rootWidget {{
-                background-color: {bg};
+            QFrame#GlobalToolbar {{
+                background-color: {panel};
+                border-bottom: 1px solid {line};
             }}
-            QWidget#MainWindow {{
-                background-color: {bg};
+            QFrame#GlobalToolbar QLabel {{
+                color: {text};
+                font-family: "Segoe UI", sans-serif;
+            }}
+            QFrame#GlobalToolbar QPushButton {{
+                border-radius: 12px;
+                padding: 8px 16px;
+            }}
+            QFrame#GlobalToolbar QPushButton:hover {{
+                background-color: rgba(0,196,180,0.3);
+                color: #0f1115;
             }}
             QFrame#ScanBanner {{
                 background-color: {banner_bg};
@@ -286,8 +384,10 @@ class MainWindow(QMainWindow):
         start.navigate_requested.connect(self.navigate_to)
         self._register("mission", start)
 
-        # Scan page
-        self._register("scan", ScanPage())
+        # Scan page (Gemini 2 complete state; Review Duplicates CTA navigates to review)
+        scan_page = ScanPage()
+        scan_page.navigate_requested.connect(self.navigate_to)
+        self._register("scan", scan_page)
 
         # Review page - cleanup wiring (intent only)
         review = ReviewPage()
@@ -312,22 +412,51 @@ class MainWindow(QMainWindow):
         """Handle theme changes."""
         log_info(f"[UI] Theme changed: {theme_key}")
 
-        # Update root styling
+        # Update root styling and content area background
         self._apply_root_theme()
 
-        # Propagate to all pages
+        # Force central content area to use theme bg
+        self._refresh_content_area_theme()
+
+        # Refresh every page in the stack so content/cards/panels update
+        self._refresh_all_pages_theme()
+
+        # Propagate to stack and navigator
         self._force_theme_refresh()
 
-        # Notify current page specifically
+        # Notify current page again so it repaints
         current = self._page_stack.currentWidget()
         if current and hasattr(current, 'refresh_theme'):
             current.refresh_theme()
         if current and hasattr(current, 'on_theme_changed'):
             current.on_theme_changed()
 
+    def _refresh_content_area_theme(self) -> None:
+        """Apply theme background to central widget and page stack."""
+        colors = current_colors()
+        bg = colors.get('bg', '#0f1115')
+        self._page_stack.setStyleSheet(f"QStackedWidget#pageStack {{ background: {bg}; }}")
+        cw = self.centralWidget()
+        if cw:
+            cw.setStyleSheet(f"QWidget#rootWidget {{ background: {bg}; }}")
+
+    def _refresh_all_pages_theme(self) -> None:
+        """Iterate all pages and call refresh_theme() so content/cards/panels update."""
+        for page in self._pages.values():
+            if hasattr(page, 'refresh_theme') and callable(page.refresh_theme):
+                try:
+                    page.refresh_theme()
+                except Exception as e:
+                    log_error(f"[UI] refresh_theme failed on {type(page).__name__}: {e}")
+            if hasattr(page, 'on_theme_changed') and callable(page.on_theme_changed):
+                try:
+                    page.on_theme_changed()
+                except Exception as e:
+                    log_error(f"[UI] on_theme_changed failed on {type(page).__name__}: {e}")
+
     def _force_theme_refresh(self) -> None:
         """Force theme refresh across all components."""
-        # Update page stack
+        # Update page stack propagation
         self._page_stack.propagate_theme()
 
         # Update navigator
@@ -341,6 +470,96 @@ class MainWindow(QMainWindow):
                     color: {colors.get('text', '#e7ecf2')};
                 }}
             """)
+
+    def _on_toolbar_scanner_mode_changed(self, index: int) -> None:
+        """Persist scanner mode to bus and update colored badge."""
+        try:
+            opts = self._bus.get_scan_options() or {}
+            opts["scanner_tier"] = ("turbo", "ultra", "quantum")[min(index, 2)]
+            self._bus.set_scan_options(opts)
+        except Exception:
+            pass
+        if hasattr(self, "_scanner_badge"):
+            labels = ["Turbo", "Ultra", "Quantum"]
+            colors = ["#22c55e", "#3b82f6", "#a855f7"]
+            idx = min(index, 2)
+            self._scanner_badge.setText(labels[idx])
+            self._scanner_badge.setStyleSheet(f"""
+                QLabel#ScannerBadge {{
+                    background: {colors[idx]};
+                    color: white;
+                    border-radius: 10px;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }}
+            """)
+
+    def _on_toolbar_theme_toggle(self) -> None:
+        """Toggle between Gemini dark and light."""
+        if self._theme.current_theme_key == "gemini_light":
+            self._theme.apply_theme("gemini")
+            self._theme_toggle_btn.setText("Theme: Light")
+        else:
+            self._theme.apply_theme("gemini_light")
+            self._theme_toggle_btn.setText("Theme: Dark")
+
+    def _setup_shortcuts(self) -> None:
+        """Global keyboard shortcuts."""
+        QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(lambda: self.navigate_to("scan"))
+        QShortcut(QKeySequence("F5"), self).activated.connect(self._on_f5_refresh)
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._on_ctrl_s_smart_select)
+        QShortcut(QKeySequence("Delete"), self).activated.connect(self._on_delete_key)
+
+    def _on_f5_refresh(self) -> None:
+        current = self._page_stack.currentWidget()
+        if hasattr(current, "refresh"):
+            current.refresh()
+        elif hasattr(current, "on_enter"):
+            current.on_enter()
+
+    def _on_ctrl_s_smart_select(self) -> None:
+        current = self._page_stack.currentWidget()
+        if hasattr(current, "focus_smart_select") and callable(getattr(current, "focus_smart_select")):
+            current.focus_smart_select()
+        elif self._page_stack.currentWidget() == self._pages.get("review"):
+            self.navigate_to("review")
+
+    def _on_delete_key(self) -> None:
+        current = self._page_stack.currentWidget()
+        if hasattr(current, "confirm_delete_selected") and callable(getattr(current, "confirm_delete_selected")):
+            current.confirm_delete_selected()
+
+    def _setup_help_menu(self) -> None:
+        """Help menu with About."""
+        menubar = QMenuBar(self)
+        help_menu = menubar.addMenu("Help")
+        about_act = QAction("About", self)
+        about_act.triggered.connect(self._show_about)
+        help_menu.addAction(about_act)
+        self.setMenuBar(menubar)
+
+    def _show_about(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        ver_str = QApplication.applicationVersion() or "5.0.0"
+        d = QDialog(self)
+        d.setWindowTitle("About Cerebro")
+        layout = QVBoxLayout(d)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        title = QLabel("Cerebro — Gemini Duplicate Finder")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(title)
+        ver = QLabel(f"Version {ver_str}")
+        layout.addWidget(ver)
+        engines = QLabel("Powered by Turbo / Ultra / Quantum scan engines.")
+        engines.setWordWrap(True)
+        engines.setStyleSheet("color: #888;")
+        layout.addWidget(engines)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        bb.accepted.connect(d.accept)
+        layout.addWidget(bb)
+        d.exec()
 
     def navigate_to(self, station_id: str) -> None:
         """Navigate to a station without gating."""
@@ -416,18 +635,15 @@ class MainWindow(QMainWindow):
         self._toast.show_toast(title, msg, duration_ms=duration, action=toast_action)
 
     def _on_scan_completed(self, result: Dict[str, Any]) -> None:
-        """Handle scan completion - navigate to review."""
+        """Handle scan completion - load result into review; user clicks Review Duplicates on Scan page to open."""
         self._toast.show_toast(
             "Results ready ✅",
-            "Scan finished. Opening Review…",
+            "Review duplicates when ready.",
             duration_ms=1400,
-            action=ToastAction(text="Open now", callback_name="open_review"),
+            action=ToastAction(text="Open Review", callback_name="open_review"),
         )
-        # Hide scan banner now that the scan is complete
         if self._scan_banner:
             self._scan_banner.setVisible(False)
-
-        QTimer.singleShot(650, lambda: self.navigate_to("review"))
 
         review = self._pages.get("review")
         if hasattr(review, "load_scan_result"):
@@ -443,6 +659,16 @@ class MainWindow(QMainWindow):
                 hist.ingest_scan_result(result)
         except Exception as e:
             log_error(f"[UI] History ingest failed: {e}")
+
+        # Add scan root to Start page Locations (persistent)
+        try:
+            root_path = (result or {}).get("root") or (result or {}).get("root_path") or ((result or {}).get("metadata") or {}).get("root")
+            if root_path and isinstance(root_path, str):
+                start = self._pages.get("mission")
+                if hasattr(start, "add_location"):
+                    start.add_location(root_path)
+        except Exception:
+            pass
 
     def _on_scan_failed(self, err: str) -> None:
         """Handle scan failure."""
@@ -529,6 +755,16 @@ class MainWindow(QMainWindow):
         Pipeline owns validation, execution, and audit write-through.
         """
         try:
+            # Coerce payload (Signal(object) may pass non-dict or wrapped dict in some Qt versions)
+            if payload is None or not isinstance(payload, dict):
+                payload = getattr(payload, "__dict__", None) or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            groups_in = payload.get("groups")
+            if not groups_in or not isinstance(groups_in, list):
+                log_debug("[Delete] MainWindow: payload empty or no groups")
+                self._toast.show_toast("Nothing to delete", "No files marked for deletion.", duration_ms=2200)
+                return
             # Normalize and validate payload shape (no guessing)
             deletion_plan = self._normalize_deletion_plan(payload)
 
@@ -551,20 +787,6 @@ class MainWindow(QMainWindow):
                 self._toast.show_toast("Nothing to delete", "No delete candidates were selected.", duration_ms=2200)
                 return
 
-            # Build executable plan (authoritative validation in pipeline)
-            executable_plan = self._pipeline.build_delete_plan(deletion_plan)
-
-            # Temporary debug: log executable plan summary
-            try:
-                log_debug(
-                    f"[DEBUG] MainWindow._on_cleanup_confirmed executable "
-                    f"ops_len={len(getattr(executable_plan, 'operations', []))} "
-                    f"total_files={executable_plan.total_files} "
-                    f"stats_files={getattr(executable_plan, 'stats', {}).get('files')}"
-                )
-            except Exception:
-                pass
-
             # Prevent parallel cleanups
             if self._cleanup_worker is not None:
                 try:
@@ -575,10 +797,25 @@ class MainWindow(QMainWindow):
 
             self._toast.show_toast(
                 "Cleanup started 🧹",
-                f"Deleting {executable_plan.total_files} file(s) ({mode})…",
+                f"Preparing to delete {total_files} file(s)…",
                 duration_ms=1800,
             )
 
+            # Build plan off the main thread so path.exists()/stat() don't freeze the UI
+            self._plan_builder = PlanBuilderThread(self._pipeline, deletion_plan, self)
+            self._plan_builder.plan_ready.connect(self._on_delete_plan_ready)
+            self._plan_builder.plan_failed.connect(self._on_delete_plan_failed)
+            self._plan_builder.start()
+
+        except Exception as e:
+            log_error(f"[UI] Cleanup start failed: {e}")
+            self._toast.show_toast("Cleanup blocked ❌", str(e), duration_ms=4200)
+
+    @Slot(object)
+    def _on_delete_plan_ready(self, executable_plan: ExecutableDeletePlan) -> None:
+        """Plan built successfully off-thread; start the cleanup worker."""
+        self._plan_builder = None
+        try:
             w = PipelineCleanupWorker(self._pipeline, executable_plan, self)
             self._cleanup_worker = w
             w.progress.connect(self._on_cleanup_progress)
@@ -586,10 +823,32 @@ class MainWindow(QMainWindow):
             w.error.connect(self._on_cleanup_error)
             w.cancelled.connect(self._on_cleanup_cancelled)
             w.start()
-
         except Exception as e:
-            log_error(f"[UI] Cleanup start failed: {e}")
-            self._toast.show_toast("Cleanup blocked ❌", str(e), duration_ms=4200)
+            log_error(f"[UI] Cleanup worker start failed: {e}")
+            self._toast.show_toast("Cleanup failed ❌", str(e), duration_ms=4200)
+            self._close_cleanup_progress_dialog()
+
+    @Slot(str)
+    def _on_delete_plan_failed(self, error_message: str) -> None:
+        """Plan building failed (e.g. validation); show error and close progress dialog."""
+        self._plan_builder = None
+        log_error(f"[UI] Delete plan build failed: {error_message}")
+        self._toast.show_toast("Cleanup blocked ❌", error_message, duration_ms=4200)
+        self._close_cleanup_progress_dialog()
+
+    def _close_cleanup_progress_dialog(self) -> None:
+        """Close the Review page's progress dialog if open."""
+        try:
+            review = self._pages.get("review")
+            dialog = getattr(review, "_progress_dialog", None)
+            if dialog is not None:
+                try:
+                    dialog.reject()
+                except Exception:
+                    pass
+                setattr(review, "_progress_dialog", None)
+        except Exception:
+            pass
 
     @Slot(int, int, str)
     def _on_cleanup_progress(self, current: int, total: int, current_file: str) -> None:
@@ -638,21 +897,35 @@ class MainWindow(QMainWindow):
                 # Defensive: show something but don't crash
                 self._toast.show_toast("Cleanup complete ✅", "Cleanup finished.", duration_ms=2600)
             else:
+                deleted_count = len(result.deleted)
+                log_info(f"[Delete] deletion_completed: deleted_count={deleted_count} scan_id={result.scan_id}")
                 self._toast.show_toast(
                     "Cleanup complete ✅",
-                    f"Deleted: {len(result.deleted)} · Failed: {len(result.failed)}",
+                    f"Deleted: {deleted_count} · Failed: {len(result.failed)}",
                     duration_ms=3200,
                 )
-
-            # Refresh review page to show updated state (if supported)
-            review = self._pages.get("review")
-            if review and hasattr(review, "refresh_after_deletion") and isinstance(result, DeletionResult):
+                payload = {
+                    "deleted_paths": [str(p) for p in result.deleted],
+                    "scan_id": getattr(result, "scan_id", "") or "",
+                    "deleted_count": deleted_count,
+                }
+                # Direct refresh first: ensure review UI always updates even if deletion_completed signal
+                # is not connected or fails (e.g. hasattr check in ReviewPage._wire() or connection error).
+                review = self._pages.get("review")
+                if review and hasattr(review, "refresh_after_deletion") and hasattr(review, "_show_post_delete_banner"):
+                    try:
+                        review.refresh_after_deletion(payload.get("deleted_paths") or [])
+                        review._show_post_delete_banner(deleted_count)
+                    except Exception as e:
+                        log_error(f"[UI] Review direct refresh after deletion failed: {e}")
                 try:
-                    review.refresh_after_deletion(result.deleted)
+                    self._bus.deletion_completed.emit(payload)
                 except Exception as e:
-                    log_error(f"[UI] Review refresh_after_deletion failed: {e}")
-            elif review and hasattr(review, "load_scan_result") and hasattr(review, "_result"):
-                # fallback: reload last result
+                    log_error(f"[UI] deletion_completed emit failed: {e}")
+
+            review = self._pages.get("review")
+            if review and not isinstance(result, DeletionResult) and hasattr(review, "load_scan_result") and hasattr(review, "_result"):
+                # fallback when result shape is unexpected
                 try:
                     review.load_scan_result(review._result)  # type: ignore[attr-defined]
                 except Exception as e:

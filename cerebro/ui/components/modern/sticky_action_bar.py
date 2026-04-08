@@ -57,6 +57,10 @@ class StickyActionBar(QFrame):
         """)
         self._primary_btn.setStyleSheet(f"background: {accent}; color: white;")
 
+    def refresh_theme(self) -> None:
+        self._apply_theme()
+        self.update()
+
     def set_summary(self, text: str, subtext: str = "") -> None:
         self._summary.setText(text)
         self._subtext.setText(subtext)
