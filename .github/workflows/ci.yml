@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, HOUSE-KEEPING]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy pytest
+
+      - name: Ruff (scoped)
+        run: |
+          python -m ruff check \
+            cerebro/engines/orchestrator.py \
+            cerebro/engines/turbo_file_engine.py \
+            main.py
+
+      - name: Mypy (scoped)
+        run: |
+          python -m mypy --follow-imports=skip --ignore-missing-imports main.py
+
+      - name: Pytest
+        run: |
+          python -m pytest -q
+
+      - name: Runtime smoke
+        run: |
+          python -c "import main; print('import main OK')"
+          python -c "from cerebro.engines.orchestrator import ScanOrchestrator; o=ScanOrchestrator(); print(type(o._engines['files']).__name__); print('files_classic' in o.get_available_modes())"

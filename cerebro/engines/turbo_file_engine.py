@@ -20,6 +20,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from cerebro.core.scanners.turbo_scanner import TurboScanConfig, TurboScanner
 from cerebro.engines.base_engine import (
     BaseEngine,
     DuplicateFile,
@@ -28,7 +29,6 @@ from cerebro.engines.base_engine import (
     ScanProgress,
     ScanState,
 )
-from cerebro.core.scanners.turbo_scanner import TurboScanConfig, TurboScanner
 
 logger = logging.getLogger(__name__)
 
