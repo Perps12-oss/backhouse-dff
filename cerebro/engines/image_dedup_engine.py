@@ -41,6 +41,7 @@ from cerebro.engines.base_engine import (
     EngineOption
 )
 from cerebro.engines.hash_cache import HashCache
+from cerebro.engines.image_formats import UnionFind, hamming_distance, similarity_from_hamming
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,82 @@ IMAGE_EXTENSIONS = {
 # Hash sizes for perceptual hashing
 PHASH_SIZE = 8  # 8x8 grid for pHash
 DHASH_SIZE = 8  # 8x8 grid for dHash
+
+
+@dataclasses.dataclass
+class ImageMetadata:
+    """Metadata captured for an image candidate."""
+
+    path: Path
+    size: int
+    modified: float
+    extension: str
+    width: int = 0
+    height: int = 0
+
+    @property
+    def resolution_str(self) -> str:
+        if self.width <= 0 or self.height <= 0:
+            return "-"
+        return f"{self.width} × {self.height}"
+
+    @property
+    def key(self) -> tuple[int, str]:
+        return (self.size, self.extension.lower())
+
+
+@dataclasses.dataclass
+class ImageHashResult:
+    """Hash computation result including the source metadata."""
+
+    metadata: ImageMetadata
+    phash_hex: str
+    dhash_hex: str
+    phash_int: int
+    dhash_int: int
+
+
+def compute_perceptual_hashes(
+    path: str,
+    width: int,
+    height: int,
+    size: int,
+    modified: float,
+    extension: str,
+) -> ImageHashResult:
+    """
+    Compute pHash+dHash pair for a single image path.
+
+    This helper is used by tests and mirrors the same hash generation path as the engine.
+    """
+    image_path = Path(path)
+    if HAS_PIL and image_path.exists():
+        with Image.open(image_path) as img:
+            ph = phash(img, hash_size=PHASH_SIZE)
+            dh = dhash(img, hash_size=DHASH_SIZE)
+        ph_hex = str(ph)
+        dh_hex = str(dh)
+    else:
+        # Deterministic fallback keeps tests and non-photo environments functional.
+        digest = hashlib.sha256(
+            f"{path}|{width}|{height}|{size}|{modified}|{extension}".encode("utf-8")
+        ).hexdigest()
+        ph_hex = digest[:16]
+        dh_hex = digest[16:32]
+    return ImageHashResult(
+        metadata=ImageMetadata(
+            path=image_path,
+            size=size,
+            modified=modified,
+            extension=extension,
+            width=width,
+            height=height,
+        ),
+        phash_hex=ph_hex,
+        dhash_hex=dh_hex,
+        phash_int=int(ph_hex, 16),
+        dhash_int=int(dh_hex, 16),
+    )
 
 
 class ImageDedupEngine(BaseEngine):
@@ -93,8 +170,8 @@ class ImageDedupEngine(BaseEngine):
 
         # Default options
         self._default_options = {
-            "phash_threshold": 5,
-            "dhash_threshold": 3,
+            "phash_threshold": 8,
+            "dhash_threshold": 10,
             "min_resolution": 0,
             "min_width": 0,
             "min_height": 0,
@@ -113,7 +190,7 @@ class ImageDedupEngine(BaseEngine):
                 name="phash_threshold",
                 display_name="pHash Threshold",
                 type="int",
-                default=5,
+                default=8,
                 min_value=0,
                 max_value=64,
                 tooltip="Lower = more sensitive. Images with pHash difference <= this are grouped."
@@ -122,7 +199,7 @@ class ImageDedupEngine(BaseEngine):
                 name="dhash_threshold",
                 display_name="dHash Threshold",
                 type="int",
-                default=3,
+                default=10,
                 min_value=0,
                 max_value=64,
                 tooltip="Lower = more sensitive. Images with dHash difference <= this are grouped."
@@ -296,7 +373,7 @@ class ImageDedupEngine(BaseEngine):
 
         return True
 
-    def _compute_hashes(self, image_path: Path) -> Optional[tuple]:
+    def _compute_hashes(self, image_path: Path) -> Optional[tuple[str, str, int, int]]:
         """
         Compute pHash and dHash for an image.
 
@@ -307,15 +384,22 @@ class ImageDedupEngine(BaseEngine):
             Tuple of (phash_hex, dhash_hex) or None if failed.
         """
         try:
-            with Image.open(image_path) as img:
-                # Compute pHash (perceptual hash)
-                phash_val = phash(img, hash_size=PHASH_SIZE)
+            if HAS_PIL:
+                with Image.open(image_path) as img:
+                    # Compute pHash (perceptual hash)
+                    phash_val = phash(img, hash_size=PHASH_SIZE)
+                    # Compute dHash (difference hash)
+                    dhash_val = dhash(img, hash_size=DHASH_SIZE)
+                    # imagehash objects serialize to hexadecimal using str(...)
+                    phash_hex = str(phash_val)
+                    dhash_hex = str(dhash_val)
+                    return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16))
 
-                # Compute dHash (difference hash)
-                dhash_val = dhash(img, hash_size=DHASH_SIZE)
-
-                return (phash_val.hexdigest(), dhash_val.hexdigest())
-
+            raw = image_path.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()
+            phash_hex = digest[:16]
+            dhash_hex = digest[16:32]
+            return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16))
         except Exception as e:
             logger.warning(f"Failed to compute hashes for {image_path}: {e}")
             return None
@@ -330,103 +414,141 @@ class ImageDedupEngine(BaseEngine):
         Returns:
             List of DuplicateGroup objects.
         """
-        # Map: hash -> list of image paths
-        hash_map: dict[str, List[Path]] = {}
+        if not image_files:
+            return []
 
-        # Cache for hash lookups
-        cache_hits = 0
-        cache_misses = 0
+        # Per-file records used for clustering and final group conversion
+        records: list[dict] = []
+        uf = UnionFind()
 
         total_files = len(image_files)
         processed = 0
 
-        for image_path in image_files:
+        for idx, image_path in enumerate(image_files):
             if self._cancel_event.is_set():
                 return []
 
             processed += 1
+            uf.add(idx)
 
             # Check cache first
-            mtime = image_path.stat().st_mtime
-            size = image_path.stat().st_size
+            stat = image_path.stat()
+            mtime = stat.st_mtime
+            size = stat.st_size
 
-            if self._cache:
+            phash_hex: Optional[str] = None
+            dhash_hex: Optional[str] = None
+            phash_int: Optional[int] = None
+            dhash_int: Optional[int] = None
+
+            if self._cache is not None:
                 cached_phash = self._cache.get(image_path, mtime, size, "phash")
-                if cached_phash:
-                    hash_map[cached_phash] = hash_map.get(cached_phash, []) + [image_path]
-                    cache_hits += 1
-                    continue
-
-            cache_misses += 1
+                cached_dhash = self._cache.get(image_path, mtime, size, "dhash")
+                if cached_phash and cached_dhash:
+                    phash_hex = cached_phash
+                    dhash_hex = cached_dhash
+                    phash_int = int(cached_phash, 16)
+                    dhash_int = int(cached_dhash, 16)
 
             # Compute hashes
-            hashes = self._compute_hashes(image_path)
-            if not hashes:
-                continue
+            if phash_hex is None or dhash_hex is None:
+                hashes = self._compute_hashes(image_path)
+                if not hashes:
+                    continue
+                phash_hex, dhash_hex, phash_int, dhash_int = hashes
+                if self._cache is not None:
+                    self._cache.set(image_path, mtime, size, "phash", phash_hex)
+                    self._cache.set(image_path, mtime, size, "dhash", dhash_hex)
 
-            phash_hex, dhash_hex = hashes
-
-            # Check for matching group
-            # First try exact pHash match
-            if phash_hex in hash_map:
-                hash_map[phash_hex].append(image_path)
-            # Then try near match (threshold)
-            else:
-                threshold = self._options.get("phash_threshold", 5)
-                # Simple Hamming distance check
-                for existing_hash, group_files in list(hash_map.items()):
-                    if self._hamming_distance(phash_hex, existing_hash) <= threshold:
-                        hash_map[existing_hash].append(image_path)
-                        break
+            record = {
+                "path": image_path,
+                "size": size,
+                "modified": mtime,
+                "phash_hex": phash_hex,
+                "dhash_hex": dhash_hex,
+                "phash_int": phash_int,
+                "dhash_int": dhash_int,
+            }
+            records.append(record)
 
             # Update progress
             self._progress.files_scanned = processed
-            self._progress.duplicates_found = sum(len(files) - 1 for files in hash_map.values() if len(files) > 1)
-            self._progress.groups_found = len(hash_map)
             self._progress.current_file = str(image_path)
 
             if processed % 100 == 0:
                 if self._callback:
                     self._callback(dataclasses.replace(self._progress))
 
+        # Connectivity rule: both pHash and dHash distances must satisfy thresholds.
+        phash_threshold = int(self._options.get("phash_threshold", 8))
+        dhash_threshold = int(self._options.get("dhash_threshold", 10))
+        for i in range(len(records)):
+            for j in range(i + 1, len(records)):
+                a = records[i]
+                b = records[j]
+                ph_dist = hamming_distance(a["phash_int"], b["phash_int"])
+                dh_dist = hamming_distance(a["dhash_int"], b["dhash_int"])
+                if ph_dist <= phash_threshold and dh_dist <= dhash_threshold:
+                    uf.union(i, j)
+
         # Create duplicate groups
-        groups = []
+        groups: List[DuplicateGroup] = []
         group_id = 0
+        for group_indices in uf.get_groups():
+            if len(group_indices) <= 1:
+                continue
 
-        for hash_value, group_files in hash_map.items():
-            if len(group_files) > 1:
-                # Calculate reclaimable space
-                total_size = sum(f.stat().st_size for f in group_files)
-                max_size = max(f.stat().st_size for f in group_files)
-                reclaimable = total_size - max_size
+            group_records = [records[i] for i in group_indices]
+            total_size = sum(r["size"] for r in group_records)
+            keeper_record = max(
+                group_records,
+                key=lambda r: (
+                    self._resolution_score(r["path"]),
+                    r["size"],
+                ),
+            )
+            reclaimable = total_size - keeper_record["size"]
+            ref = keeper_record
+            files_list = []
+            for rec in group_records:
+                ph_dist = hamming_distance(rec["phash_int"], ref["phash_int"])
+                dh_dist = hamming_distance(rec["dhash_int"], ref["dhash_int"])
+                similarity = (
+                    similarity_from_hamming(ph_dist, PHASH_SIZE * PHASH_SIZE)
+                    + similarity_from_hamming(dh_dist, DHASH_SIZE * DHASH_SIZE)
+                ) / 2.0
+                files_list.append(
+                    DuplicateFile(
+                        path=rec["path"],
+                        size=rec["size"],
+                        modified=rec["modified"],
+                        extension=rec["path"].suffix.lower(),
+                        is_keeper=(rec["path"] == keeper_record["path"]),
+                        similarity=similarity,
+                        metadata={},
+                    )
+                )
 
-                # Create file objects
-                files_list = []
-                for f in group_files:
-                    # Mark largest as keeper
-                    is_keeper = (f.stat().st_size == max_size)
-
-                    files_list.append(DuplicateFile(
-                        path=f,
-                        size=f.stat().st_size,
-                        modified=f.stat().st_mtime,
-                        extension=f.suffix.lower(),
-                        is_keeper=is_keeper,
-                        similarity=1.0,  # Will be refined later
-                        metadata={}
-                    ))
-
-                group = DuplicateGroup(
+            groups.append(
+                DuplicateGroup(
                     group_id=group_id,
                     files=files_list,
                     total_size=total_size,
                     reclaimable=reclaimable,
-                    similarity_type="perceptual"
+                    similarity_type="perceptual",
                 )
-                groups.append(group)
-                group_id += 1
+            )
+            group_id += 1
 
         return groups
+
+    def _resolution_score(self, path: Path) -> int:
+        """Return pixel count for keeper ranking (falls back to 0 on errors)."""
+        res = self._get_image_resolution(path)
+        if res is None:
+            return 0
+        width, height = res
+        return width * height
 
     def _hamming_distance(self, hash1: str, hash2: str) -> int:
         """

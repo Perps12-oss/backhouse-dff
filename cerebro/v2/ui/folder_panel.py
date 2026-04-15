@@ -279,8 +279,10 @@ class ScanOptionsPanel(CTkScrollableFrame):
         self._slider("max_size", 0, 10240, 0)
 
     def _build_photos_options(self) -> None:
-        self._lbl("Similarity (Hamming Distance)")
-        self._slider("phash_threshold", 1, 20, 10)
+        self._lbl("pHash Threshold (bits)")
+        self._slider("phash_threshold", 0, 64, 8)
+        self._lbl("dHash Threshold (bits)")
+        self._slider("dhash_threshold", 0, 64, 10)
         self._lbl("Include Formats")
         self._check("format_jpg", "JPG / JPEG", True)
         self._check("format_png", "PNG", True)
@@ -320,7 +322,21 @@ class ScanOptionsPanel(CTkScrollableFrame):
         self._set_mode_options(mode)
 
     def get_options(self) -> Dict:
-        return {"mode": self._current_mode}
+        options: Dict[str, object] = {"mode": self._current_mode}
+        for key, widget in self._option_widgets.items():
+            if isinstance(widget, CTkSlider):
+                options[key] = int(float(widget.get()))
+            elif isinstance(widget, CTkCheckBox):
+                try:
+                    options[key] = bool(widget.get())
+                except Exception:
+                    options[key] = False
+            elif isinstance(widget, CTkOptionMenu):
+                try:
+                    options[key] = widget.get()
+                except Exception:
+                    options[key] = ""
+        return options
 
     def on_options_changed(self, cb: Callable[[Dict], None]) -> None:
         self._on_options_changed = cb
