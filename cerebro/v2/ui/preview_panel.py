@@ -33,6 +33,7 @@ from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.ui.widgets.zoom_canvas import ZoomCanvas
 from cerebro.v2.ui.widgets.metadata_table import MetadataTable
+from cerebro.utils.formatting import format_bytes
 
 # Image extensions that should show the canvas
 _IMAGE_EXTENSIONS = {
@@ -45,14 +46,7 @@ _DEFAULT_HEIGHT = 220  # px when expanded
 
 
 def _format_bytes(n: int) -> str:
-    if n == 0:
-        return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB"]
-    i, s = 0, float(n)
-    while s >= 1024 and i < len(units) - 1:
-        s /= 1024
-        i += 1
-    return f"{int(s)} {units[i]}" if i == 0 else f"{s:.1f} {units[i]}"
+    return format_bytes(n, decimals=1)
 
 
 def _format_date(ts: float) -> str:
