@@ -10,6 +10,14 @@ import os
 import traceback
 from pathlib import Path
 
+# Windows consoles often use cp1252; UTF-8 avoids UnicodeEncodeError on status symbols.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ============================================================================
 # WINDOWS-ONLY PLATFORM GUARD
 # ============================================================================

@@ -4,8 +4,7 @@ import json
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
-import dataclasses as _dc
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from enum import Enum
 import sys
 import os
@@ -65,8 +64,7 @@ class PathFilter:
         """Create from dictionary."""
         if not isinstance(data, dict):
             data = {}
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -86,8 +84,7 @@ class PerformanceSettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'PerformanceSettings':
         """Create from dictionary."""
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -111,8 +108,7 @@ class UISettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'UISettings':
         """Create from dictionary."""
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -142,8 +138,7 @@ class ScanSettings:
         filters_data = data.pop('default_filters', {})
         if not isinstance(filters_data, dict):
             filters_data = {}
-        valid = {f.name for f in _dc.fields(cls)}
-        instance = cls(**{k: v for k, v in data.items() if k in valid})
+        instance = cls(**data)
         instance.default_filters = PathFilter.from_dict(filters_data)
         return instance
 
@@ -167,8 +162,7 @@ class NotificationSettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'NotificationSettings':
         """Create from dictionary."""
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -193,8 +187,7 @@ class UpdateSettings:
         last_check_str = data.pop('last_check_time', None)
         if last_check_str:
             data['last_check_time'] = datetime.fromisoformat(last_check_str)
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -216,8 +209,7 @@ class BackupSettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BackupSettings':
         """Create from dictionary."""
-        valid = {f.name for f in _dc.fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in valid})
+        return cls(**data)
 
 
 @dataclass
@@ -298,10 +290,12 @@ class AppConfig:
         geometry_hex = data.pop('window_geometry', None)
         state_hex = data.pop('window_state', None)
         
+        known = {f.name for f in fields(cls)}
+        data = {k: v for k, v in data.items() if k in known}
+        
         # Create instance
-        valid = {f.name for f in _dc.fields(cls)}
-        instance = cls(**{k: v for k, v in data.items() if k in valid})
-
+        instance = cls(**data)
+        
         # Set nested dataclasses
         instance.ui = UISettings.from_dict(ui_data)
         instance.scan = ScanSettings.from_dict(scan_data)
@@ -891,24 +885,3 @@ def reload_config() -> AppConfig:
         
     _config_instance = _config_manager.load_config()
     return _config_instance
-
-
-def get_cache_dir() -> Path:
-    """
-    Return a valid writable cache directory path (Windows-safe).
-    Uses the existing config system; falls back to ~/.cerebro/cache if config unavailable.
-    """
-    try:
-        cfg = load_config()
-        cache_dir = Path(cfg.cache_dir or "").resolve()
-    except Exception:
-        cache_dir = Path.home() / ".cerebro" / "cache"
-    if not cache_dir.is_absolute():
-        cache_dir = Path.home() / ".cerebro" / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
-def get_hash_cache_db_path() -> Path:
-    """Return the path to the hash cache SQLite database (<cache_dir>/hash_cache.sqlite)."""
-    return get_cache_dir() / "hash_cache.sqlite"

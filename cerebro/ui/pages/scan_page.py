@@ -73,7 +73,7 @@ class LayoutMetrics:
     PAGE_MARGIN = 18
     PAGE_SPACING = 12
     MIN_LIVE_WIDTH = 420
-    COMBO_MIN_WIDTH = 120
+    COMBO_MIN_WIDTH = 160
     BUTTON_MIN_HEIGHT = 32
 
 
