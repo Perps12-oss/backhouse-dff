@@ -21,6 +21,7 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.v2.ui.feedback import FeedbackPanel, show_text_panel
 from cerebro.v2.ui.widgets.check_treeview import CheckTreeview
 from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
 
@@ -449,8 +450,7 @@ class ResultsPanel(CTkFrame):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception as exc:
-            from tkinter import messagebox
-            messagebox.showerror("Open File", f"Could not open file:\n{exc}")
+            FeedbackPanel(self, "Open File", f"Could not open file:\n{exc}", type="error")
 
     def _open_folder(self, path: str) -> None:
         import sys, subprocess
@@ -463,8 +463,7 @@ class ResultsPanel(CTkFrame):
             else:
                 subprocess.Popen(["xdg-open", folder])
         except Exception as exc:
-            from tkinter import messagebox
-            messagebox.showerror("Open Folder", f"Could not open folder:\n{exc}")
+            FeedbackPanel(self, "Open Folder", f"Could not open folder:\n{exc}", type="error")
 
     def _copy_path(self, path: str) -> None:
         try:
@@ -494,7 +493,6 @@ class ResultsPanel(CTkFrame):
             self._on_selection_changed(self._treeview.get_checked())
 
     def _show_properties(self, file_data: Dict[str, Any]) -> None:
-        from tkinter import messagebox
         from datetime import datetime
         path = file_data.get("path", "—")
         size = file_data.get("size", 0)
@@ -503,7 +501,8 @@ class ResultsPanel(CTkFrame):
         size_str = self._format_bytes(size)
         mod_str = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S") if modified else "—"
         sim_str = f"{int(similarity * 100)}%"
-        messagebox.showinfo(
+        show_text_panel(
+            self,
             "File Properties",
             f"Path:       {path}\n"
             f"Size:       {size_str}\n"

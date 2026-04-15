@@ -8,7 +8,46 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QThread, Signal, QObject
+try:
+    from PySide6.QtCore import QThread, Signal, QObject
+except ImportError:
+    import threading
+
+    class _SignalShim:
+        def __init__(self):
+            self._callbacks = []
+
+        def connect(self, callback):
+            self._callbacks.append(callback)
+
+        def emit(self, *args, **kwargs):
+            for callback in list(self._callbacks):
+                callback(*args, **kwargs)
+
+    class _SignalDescriptor:
+        def __set_name__(self, owner, name):
+            self._slot_name = f"__signal_{name}"
+
+        def __get__(self, instance, owner):
+            if instance is None:
+                return self
+            if not hasattr(instance, self._slot_name):
+                setattr(instance, self._slot_name, _SignalShim())
+            return getattr(instance, self._slot_name)
+
+    class QObject:
+        pass
+
+    def Signal(*_args, **_kwargs):
+        return _SignalDescriptor()
+
+    class QThread(threading.Thread):
+        def __init__(self, parent: Optional[QObject] = None):
+            super().__init__(daemon=True)
+            self._parent = parent
+
+        def wait(self, timeout: Optional[float] = None) -> None:
+            self.join(timeout=timeout)
 
 from collections import defaultdict
 

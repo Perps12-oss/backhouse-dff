@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
-from tkinter import colorchooser, messagebox, simpledialog
+from tkinter import colorchooser, simpledialog
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,6 +37,7 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.v2.ui.feedback import FeedbackPanel, confirm_yes_no, show_text_panel
 
 # Slots users can edit (subset — most important ones)
 _EDITABLE_GROUPS = [
@@ -282,8 +283,7 @@ class ThemeEditorDialog:
         """Save the theme to ~/.cerebro/themes/ and apply it."""
         name = self._name_var.get().strip().replace(" ", "_")
         if not name:
-            messagebox.showerror("Save Theme", "Please enter a theme name.",
-                                 parent=self._win)
+            FeedbackPanel(self._win, "Save Theme", "Please enter a theme name.", type="error")
             return
         theme_data = {
             "name":         name,
@@ -297,14 +297,16 @@ class ThemeEditorDialog:
         try:
             out.write_text(json.dumps(theme_data, indent=2))
         except Exception as exc:
-            messagebox.showerror("Save Theme", f"Could not save:\n{exc}", parent=self._win)
+            FeedbackPanel(self._win, "Save Theme", f"Could not save:\n{exc}", type="error")
             return
 
         self._apply_to_engine(preview=False)
         self._dirty = False
-        messagebox.showinfo("Theme Saved",
-                            f"Theme '{name}' saved and applied.\n"
-                            f"Location: {out}", parent=self._win)
+        show_text_panel(
+            self._win,
+            "Theme Saved",
+            f"Theme '{name}' saved and applied.\nLocation: {out}",
+        )
         self._win.destroy()
 
     def _apply_to_engine(self, preview: bool = False) -> None:
@@ -326,9 +328,7 @@ class ThemeEditorDialog:
 
     def _on_close(self) -> None:
         if self._dirty:
-            if not messagebox.askyesno("Discard Changes",
-                                       "Discard unsaved theme changes?",
-                                       parent=self._win):
+            if not confirm_yes_no(self._win, "Discard Changes", "Discard unsaved theme changes?"):
                 return
         self._win.destroy()
 

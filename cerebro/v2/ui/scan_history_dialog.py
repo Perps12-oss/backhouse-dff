@@ -36,6 +36,7 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.v2.ui.feedback import confirm_yes_no
 
 
 _HISTORY_FILE = Path.home() / ".cerebro" / "scan_history.json"
@@ -202,9 +203,7 @@ class ScanHistoryDialog:
         self._count_lbl.configure(text=f"{count} scan{'s' if count != 1 else ''} recorded")
 
     def _clear_history(self) -> None:
-        from tkinter import messagebox
-        if messagebox.askyesno("Clear History", "Delete all scan history entries?",
-                               parent=self._win):
+        if confirm_yes_no(self._win, "Clear History", "Delete all scan history entries?"):
             _save_history([])
             self._load()
 
