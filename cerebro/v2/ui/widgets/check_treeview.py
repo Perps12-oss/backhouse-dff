@@ -7,9 +7,10 @@ Supports grouped/hierarchical rows with expand/collapse functionality.
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Optional, Callable, Any
+from typing import Iterable, List, Optional, Callable, Any
 
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
@@ -66,7 +67,12 @@ class CheckTreeview(ttk.Treeview):
         # State
         self._item_states: dict[str, bool] = {}
         self._group_rows: dict[str, str] = {}  # parent_id -> group_id
+        self._group_child_counts: dict[str, int] = {}
         self._check_callback: Optional[Callable[[str, bool], None]] = None
+        self._load_job: Optional[str] = None
+        self._pending_data: List[dict] = []
+        self._load_cursor: int = 0
+        self._items_per_tick: int = 180
 
         # Tags for styling
         self._setup_tags()
@@ -144,6 +150,7 @@ class CheckTreeview(ttk.Treeview):
             **kwargs
         )
         self._group_rows[group_id] = group_id
+        self._group_child_counts[group_id] = 0
         return item_id
 
     def insert_item(self, parent: str, item_id: str, checked: bool = False,
@@ -186,10 +193,9 @@ class CheckTreeview(ttk.Treeview):
             # For group header, no alternating color
             return ["group_header"]
         elif parent:
-            # For file rows, get index for alternating color
-            parent_children = self.get_children(parent)
-            index = parent_children.index(parent) if parent in parent_children else 0
-            tags = ["row_even" if index % 2 == 0 else "row_odd"]
+            index = self._group_child_counts.get(parent, 0)
+            self._group_child_counts[parent] = index + 1
+            tags = ["row_even" if (index % 2 == 0) else "row_odd"]
             return tags
         else:
             return []
@@ -320,9 +326,18 @@ class CheckTreeview(ttk.Treeview):
 
     def clear(self) -> None:
         """Clear all items from the treeview."""
+        if self._load_job:
+            try:
+                self.after_cancel(self._load_job)
+            except Exception:
+                pass
+            self._load_job = None
         self.delete(*self.get_children())
         self._item_states.clear()
         self._group_rows.clear()
+        self._group_child_counts.clear()
+        self._pending_data = []
+        self._load_cursor = 0
 
     def load_data(self, data: List[dict]) -> None:
         """
@@ -334,24 +349,54 @@ class CheckTreeview(ttk.Treeview):
                    - 'group_text': str
                    - 'items': List of dicts with 'item_id', 'values', 'tags'
         """
+        self.load_data_chunked(data)
+
+    def load_data_chunked(self, data: Iterable[dict]) -> None:
+        """Load data in chunks to keep UI responsive."""
         self.clear()
+        self._pending_data = list(data)
+        self._load_cursor = 0
+        self._schedule_chunk()
 
-        for group_data in data:
-            group_id = group_data['group_id']
-            group_text = group_data['group_text']
+    def _schedule_chunk(self) -> None:
+        self._load_job = self.after(10, self._process_load_chunk)
 
-            # Insert group header
+    def _process_load_chunk(self) -> None:
+        self._load_job = None
+        if self._load_cursor >= len(self._pending_data):
+            self._pending_data = []
+            return
+
+        start = time.perf_counter()
+        budget = self._items_per_tick
+        while self._load_cursor < len(self._pending_data) and budget > 0:
+            group_data = self._pending_data[self._load_cursor]
+            group_id = str(group_data["group_id"])
+            group_text = str(group_data["group_text"])
             self.insert_group("", group_id, group_text)
-
-            # Insert items
-            for item_data in group_data['items']:
+            for item_data in group_data.get("items", []):
                 self.insert_item(
                     group_id,
-                    item_data['item_id'],
-                    checked=item_data.get('checked', False),
-                    values=item_data.get('values', ()),
-                    tags=item_data.get('tags', ())
+                    item_data["item_id"],
+                    checked=item_data.get("checked", False),
+                    values=item_data.get("values", ()),
+                    tags=item_data.get("tags", ()),
                 )
+                budget -= 1
+                if budget <= 0:
+                    break
+            self._load_cursor += 1
+
+            if (time.perf_counter() - start) > 0.02:
+                break
+
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        if self._load_cursor < len(self._pending_data):
+            self._schedule_chunk()
 
     def on_check_changed(self, callback: Callable[[str, bool], None]) -> None:
         """
@@ -365,7 +410,10 @@ class CheckTreeview(ttk.Treeview):
     def _on_click(self, event) -> None:
         """Handle left-click — toggle checkbox if clicking on a file row."""
         region = self.identify_region(event.x, event.y)
-        if region not in ("cell", "tree"):
+        if region != "cell":
+            return
+        column = self.identify_column(event.x)
+        if column != "#1":
             return
         item_id = self.identify_row(event.y)
         if not item_id or item_id in self._group_rows:

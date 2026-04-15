@@ -1,12 +1,13 @@
-"""
-MetadataTable — Ashisoft-style two-column Name/Description metadata block.
-"""
+"""Metadata table with async metadata extraction and caching."""
 
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import Future, ThreadPoolExecutor
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 import tkinter as tk
 
@@ -49,6 +50,10 @@ _IMAGE_EXTENSIONS = {
 
 _EXIF_DATETIME_ORIGINAL = 36867
 _EXIF_DATETIME = 306
+_META_CACHE_MAX = 256
+_META_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="meta-table")
+_META_CACHE: "OrderedDict[str, Dict[str, str]]" = OrderedDict()
+_META_LOCK = threading.Lock()
 
 
 def _format_bytes(n: int) -> str:
@@ -107,7 +112,7 @@ def _gather_metadata(path: Path) -> Dict[str, str]:
                 if dpi and isinstance(dpi, tuple) and len(dpi) >= 2:
                     out["resolution"] = f"{int(dpi[0])} x {int(dpi[1])}"
                 exif = None
-                getexif = getattr(im, "_getexif", None)
+                getexif = getattr(im, "getexif", None)
                 if callable(getexif):
                     try:
                         exif = getexif()
@@ -129,6 +134,9 @@ class MetadataTable(CTkFrame):
         super().__init__(master, **kwargs)
         self._value_labels: Dict[str, CTkLabel] = {}
         self._key_labels: Dict[str, CTkLabel] = {}
+        self._request_token: int = 0
+        self._current_future: Optional[Future] = None
+        self._current_path: Optional[Path] = None
         subscribe_to_theme(self, self._apply_theme)
         self._build()
 
@@ -171,7 +179,55 @@ class MetadataTable(CTkFrame):
         except (TypeError, ValueError):
             self.clear()
             return
-        meta = _gather_metadata(p)
+        self._current_path = p
+        token = self._request_token = self._request_token + 1
+
+        cached = self._cache_get(p)
+        if cached is not None:
+            self._apply_metadata(cached, token)
+            return
+
+        self._set_loading()
+        self._current_future = _META_EXECUTOR.submit(_gather_metadata, p)
+        self.after(0, lambda: self._poll_metadata_future(token, p))
+
+    def clear(self) -> None:
+        self._current_path = None
+        self._request_token += 1
+        for lbl in self._value_labels.values():
+            try:
+                lbl.configure(text="—")
+            except tk.TclError:
+                pass
+
+    def _set_loading(self) -> None:
+        for key, lbl in self._value_labels.items():
+            text = "Loading..." if key in {"name", "path", "size", "type"} else "—"
+            try:
+                lbl.configure(text=text)
+            except tk.TclError:
+                pass
+
+    def _poll_metadata_future(self, token: int, path: Path) -> None:
+        fut = self._current_future
+        if fut is None:
+            return
+        if token != self._request_token:
+            return
+        if not fut.done():
+            self.after(40, lambda: self._poll_metadata_future(token, path))
+            return
+        try:
+            meta = fut.result()
+        except Exception as e:
+            logger.debug("metadata background task failed for %s: %s", path, e)
+            meta = {k: "—" for k, _ in _FIELDS}
+        self._cache_put(path, meta)
+        self._apply_metadata(meta, token)
+
+    def _apply_metadata(self, meta: Dict[str, str], token: int) -> None:
+        if token != self._request_token:
+            return
         for key, value in meta.items():
             lbl = self._value_labels.get(key)
             if lbl is not None:
@@ -180,9 +236,19 @@ class MetadataTable(CTkFrame):
                 except tk.TclError:
                     pass
 
-    def clear(self) -> None:
-        for lbl in self._value_labels.values():
-            try:
-                lbl.configure(text="—")
-            except tk.TclError:
-                pass
+    def _cache_get(self, path: Path) -> Optional[Dict[str, str]]:
+        key = str(path.resolve())
+        with _META_LOCK:
+            value = _META_CACHE.get(key)
+            if value is None:
+                return None
+            _META_CACHE.move_to_end(key)
+            return dict(value)
+
+    def _cache_put(self, path: Path, meta: Dict[str, str]) -> None:
+        key = str(path.resolve())
+        with _META_LOCK:
+            _META_CACHE[key] = dict(meta)
+            _META_CACHE.move_to_end(key)
+            while len(_META_CACHE) > _META_CACHE_MAX:
+                _META_CACHE.popitem(last=False)
