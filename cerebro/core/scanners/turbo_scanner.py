@@ -121,7 +121,8 @@ class TurboScanConfig:
     # Parallelism
     dir_workers: int = DEFAULT_DIR_WORKERS
     hash_workers: int = DEFAULT_HASH_WORKERS
-    use_multiprocessing: bool = True  # Use processes for directory traversal
+    # True only helps on multi-disk setups; threads are faster for typical single-disk
+    use_multiprocessing: bool = False
     
     # Caching
     use_cache: bool = True
@@ -347,45 +348,59 @@ def compute_hash_cached(
 # ============================================================================
 
 def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
-    """
-    Worker function for parallel directory traversal.
+    """Worker function for parallel directory traversal.
+
+    Uses os.scandir to avoid redundant stat() calls — DirEntry.stat()
+    reuses the data returned by the underlying directory enumeration
+    syscall, which is materially faster on Windows (FindFirstFile)
+    and on SMB/network mounts.
+
     Returns list of (path, size, mtime) tuples.
     """
     directory, skip_hidden, exclude_dirs, min_size, max_size = args
-    results = []
-    
-    try:
-        for root, dirs, files in os.walk(directory):
-            # Filter directories in-place
-            dirs[:] = [
-                d for d in dirs
-                if not (skip_hidden and d.startswith('.')) and d not in exclude_dirs
-            ]
-            
-            root_path = Path(root)
-            
-            for name in files:
-                if skip_hidden and name.startswith('.'):
-                    continue
-                
-                try:
-                    file_path = root_path / name
-                    stat = file_path.stat()
-                    size = stat.st_size
-                    
-                    # Apply filters
-                    if size < min_size:
+    results: List[Tuple[Path, int, float]] = []
+
+    # Iterative DFS with an explicit stack. Avoids recursion-depth limits
+    # on pathological trees and gives us tight control over symlink/junction
+    # behaviour.
+    stack: List[str] = [str(directory)]
+
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    name = entry.name
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if skip_hidden and name.startswith('.'):
+                                continue
+                            if name in exclude_dirs:
+                                continue
+                            stack.append(entry.path)
+                            continue
+
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        if skip_hidden and name.startswith('.'):
+                            continue
+
+                        st = entry.stat(follow_symlinks=False)
+                        size = st.st_size
+                        if size < min_size:
+                            continue
+                        if max_size > 0 and size > max_size:
+                            continue
+
+                        results.append((Path(entry.path), size, st.st_mtime))
+                    except OSError:
+                        # Permission denied, dangling symlink, etc.
+                        # Skip the individual entry and keep going.
                         continue
-                    if max_size > 0 and size > max_size:
-                        continue
-                    
-                    results.append((file_path, size, stat.st_mtime))
-                except (sqlite3.Error, OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                    continue
-        
-    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-        pass
-    
+        except OSError:
+            # Directory unreadable as a whole — skip and continue.
+            continue
+
     return results
 
 
@@ -573,59 +588,51 @@ class TurboScanner:
         
         Uses multiprocessing to scan multiple directories simultaneously.
         """
-        all_files = []
+        all_files: List[Tuple[Path, int, float]] = []
         discovered_so_far = 0
-        
-        # Collect top-level directories to parallelize
-        dirs_to_scan = []
+
+        dirs_to_scan: List[Path] = []
         for root in roots:
             if not root.exists():
                 continue
-            
+
             if root.is_file():
                 try:
                     stat = root.stat()
                     all_files.append((root, stat.st_size, stat.st_mtime))
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                except OSError:
                     pass
                 continue
-            
-            # For directories, check if we can skip based on cache
+
             if self.config.incremental and self.dir_cache:
                 if not self.dir_cache.has_changed(root):
                     self.stats['directories_skipped'] += 1
                     # TODO: Load files from cache
                     continue
-            
-            # Add immediate subdirectories for better parallelism
-            try:
-                for item in root.iterdir():
-                    if item.is_dir():
-                        if not (self.config.skip_hidden and item.name.startswith('.')):
-                            if item.name not in self.config.exclude_dirs:
-                                dirs_to_scan.append(item)
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                pass
-            
-            # Also scan the root itself
+
             dirs_to_scan.append(root)
-        
+
         if not dirs_to_scan:
             return all_files
-        
-        # Prepare worker arguments
+
         worker_args = [
-            (d, self.config.skip_hidden, self.config.exclude_dirs, 
-             self.config.min_size, self.config.max_size)
+            (
+                d,
+                self.config.skip_hidden,
+                self.config.exclude_dirs,
+                self.config.min_size,
+                self.config.max_size,
+            )
             for d in dirs_to_scan
         ]
-        
-        # Use process pool for true parallelism
+
         if self.config.use_multiprocessing and len(dirs_to_scan) > 1:
             workers = min(self.config.dir_workers, len(dirs_to_scan))
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(walk_directory_worker, args) for args in worker_args]
-                
+                futures = [
+                    executor.submit(walk_directory_worker, args) for args in worker_args
+                ]
+
                 for future in as_completed(futures):
                     try:
                         results = future.result()
@@ -633,21 +640,32 @@ class TurboScanner:
                         discovered_so_far += len(results)
                         if emit and discovered_so_far % 1000 <= len(results):
                             emit("discovering", discovered_so_far, 0)
-                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+                    except OSError as e:
                         logger.warning("[Turbo] Worker error: %s", e)
                         continue
         else:
-            # Fallback to sequential for small scans
-            for args in worker_args:
-                try:
-                    results = walk_directory_worker(args)
-                    all_files.extend(results)
-                    discovered_so_far += len(results)
-                    if emit and discovered_so_far % 1000 <= len(results):
-                        emit("discovering", discovered_so_far, 0)
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                    continue
-        
+            # Threads are sufficient and avoid the spawn overhead of processes.
+            # Hash work is GIL-bound but directory traversal is I/O-bound, so
+            # threads give true parallelism here.
+            workers = min(self.config.dir_workers, max(1, len(dirs_to_scan)))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(walk_directory_worker, args)
+                    for args in worker_args
+                ]
+                for future in as_completed(futures):
+                    try:
+                        results = future.result()
+                        all_files.extend(results)
+                        discovered_so_far += len(results)
+                        if emit and discovered_so_far % 1000 <= len(results):
+                            emit("discovering", discovered_so_far, 0)
+                    except OSError as e:
+                        logger.warning(
+                            "[Turbo] Worker error walking directory: %s", e
+                        )
+                        continue
+
         return all_files
     
     def _compute_hashes_parallel(
