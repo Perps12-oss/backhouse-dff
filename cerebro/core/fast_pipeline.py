@@ -59,7 +59,7 @@ class _HashCache:
         try:
             sig = StatSignature(size=int(size), mtime_ns=int(float(mtime) * 1_000_000_000), dev=0, inode=0)
             return self._cache.get_quick(path, sig)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
     def set_many(self, rows: List[Tuple[str, int, float, str]]) -> None:
@@ -67,7 +67,7 @@ class _HashCache:
             for p, size, mtime, qh in rows:
                 sig = StatSignature(size=int(size), mtime_ns=int(float(mtime) * 1_000_000_000), dev=0, inode=0)
                 self._cache.set_quick(p, sig, str(qh), algo="md5")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return
 
 
@@ -144,9 +144,9 @@ class FastDiscovery:
                             if progress_callback and len(out) - last_report >= report_interval:
                                 progress_callback(len(out))
                                 last_report = len(out)
-                        except Exception:
+                        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                             continue
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
 
         if progress_callback and len(out) != last_report:
@@ -245,7 +245,7 @@ class FastPipeline:
             try:
                 cache = _HashCache(self.cache_path)
                 cache.open()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 cache = None
 
         try:
@@ -304,7 +304,7 @@ class FastPipeline:
             try:
                 if cache:
                     cache.close()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
         if cancelled():
@@ -365,7 +365,7 @@ class FastPipeline:
                 fp.seek(max(0, size - sample))
                 h.update(fp.read(sample))
             return f, h.hexdigest()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return f, None
 
 

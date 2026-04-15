@@ -7,6 +7,7 @@ Handles window lifecycle, panel organization, and keyboard shortcuts.
 
 from __future__ import annotations
 
+import logging
 import os
 import tkinter as tk
 import time
@@ -52,7 +53,7 @@ from cerebro.engines.base_engine import (
 from cerebro.services.logger import get_logger
 from cerebro.utils.formatting import format_bytes
 
-logger = get_logger(__name__)
+logger = get_logger(__name__)  # wraps logging.getLogger(__name__)
 
 
 class MainWindow(CTk, CTkMessageInterface):
@@ -567,10 +568,6 @@ class MainWindow(CTk, CTkMessageInterface):
         if self._view_mode == "grid":
             self.after(0, self._hydrate_thumbnail_grid_if_needed)
 
-    def _format_bytes(self, bytes_count: int) -> str:
-        """Format bytes to human-readable string."""
-        return format_bytes(bytes_count, decimals=1)
-
     # ===================
     # PREVIEW INTEGRATION
     # ===================
@@ -807,7 +804,7 @@ class MainWindow(CTk, CTkMessageInterface):
             return
 
         reclaimable_space = self._results_panel.get_reclaimable_space()
-        reclaimable_str = self._format_bytes(reclaimable_space)
+        reclaimable_str = format_bytes(reclaimable_space, decimals=1)
 
         confirm = True
         if self._app_settings.general.get("confirm_before_delete", True):

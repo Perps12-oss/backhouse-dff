@@ -13,6 +13,7 @@ Behaviour:
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, Dict, Any
 from pathlib import Path
@@ -43,10 +44,6 @@ _IMAGE_EXTENSIONS = {
 }
 
 _DEFAULT_HEIGHT = 220  # px when expanded
-
-
-def _format_bytes(n: int) -> str:
-    return format_bytes(n, decimals=1)
 
 
 def _format_date(ts: float) -> str:
@@ -122,7 +119,7 @@ class _SidePanel(CTkFrame):
             self.configure(fg_color=theme_color("base.backgroundTertiary"))
             self._meta_lbl.configure(text_color=theme_color("base.foregroundSecondary"))
             self._ext_badge.configure(text_color=theme_color("base.foregroundMuted"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _fd_get(self, file_data: Any, key: str, default: Any = None) -> Any:
@@ -160,7 +157,7 @@ class _SidePanel(CTkFrame):
             parts.append(f"{w} × {h} px")
         size = self._fd_get(file_data, "size", 0)
         if size:
-            parts.append(_format_bytes(size))
+            parts.append(format_bytes(size, decimals=1))
         modified = self._fd_get(file_data, "modified", 0)
         if modified:
             parts.append(_format_date(modified))
@@ -385,7 +382,7 @@ class PreviewPanel(CTkFrame):
             self._expand_btn.configure(
                 hover_color=theme_color("base.backgroundElevated"),
                 text_color=theme_color("base.foregroundSecondary"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     # ------------------------------------------------------------------
@@ -399,7 +396,7 @@ class PreviewPanel(CTkFrame):
             try:
                 self._ashisoft_canvas.pack_forget()
                 self._ashisoft_no_preview.pack(expand=True)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             self._metadata_table.clear()
             return
@@ -417,7 +414,7 @@ class PreviewPanel(CTkFrame):
             else:
                 self._ashisoft_canvas.pack_forget()
                 self._ashisoft_no_preview.pack(expand=True, before=self._metadata_table)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         self._metadata_table.load(path)
 
@@ -428,12 +425,12 @@ class PreviewPanel(CTkFrame):
         try:
             self._content.pack_forget()
             self._ashisoft_content.pack_forget()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         if mode == "ashisoft":
             try:
                 self._header.pack_forget()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             self._ashisoft_content.pack(fill="both", expand=True)
             self._collapsed = False
@@ -441,10 +438,10 @@ class PreviewPanel(CTkFrame):
         else:
             try:
                 self._header.pack(fill="x", before=self._ashisoft_content)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 try:
                     self._header.pack(fill="x")
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             if not self._collapsed:
                 self._content.pack(fill="both", expand=True)

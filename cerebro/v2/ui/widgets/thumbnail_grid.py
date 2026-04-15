@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -39,7 +40,7 @@ from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.services.logger import get_logger
 from cerebro.utils.formatting import format_bytes
 
-logger = get_logger(__name__)
+logger = get_logger(__name__)  # wraps logging.getLogger(__name__)
 
 
 def _fmt_bytes(n: int) -> str:

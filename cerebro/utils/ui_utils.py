@@ -75,7 +75,7 @@ def restore_main_window_geometry(
     if state:
         try:
             window.restoreState(QByteArray(state))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
     if geometry:
         # Decode geometry using a temporary window so we never call
@@ -87,7 +87,7 @@ def restore_main_window_geometry(
             else:
                 decoded = None
             del temp
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             decoded = None
         if decoded is not None:
             screen = window.screen() or QApplication.primaryScreen()

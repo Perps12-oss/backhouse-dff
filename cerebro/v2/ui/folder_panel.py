@@ -10,6 +10,7 @@ Supports post-scan collapse (full-width results) and pre-scan expand.
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from tkinter import filedialog
 from typing import Optional, Callable, List, Dict
@@ -89,14 +90,14 @@ class ScanFolderList(CTkScrollableFrame):
                 scrollbar_button_color=theme_color("base.backgroundTertiary"),
                 scrollbar_button_hover_color=theme_color(self._add_color_key),
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         try:
             self._add_btn.configure(
                 fg_color=theme_color(self._add_color_key),
                 hover_color=theme_color(self._add_hover_key),
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         for widgets in self._folder_widgets.values():
             try:
@@ -106,7 +107,7 @@ class ScanFolderList(CTkScrollableFrame):
                     fg_color=theme_color("base.foregroundSecondary"),
                     hover_color=theme_color("feedback.danger"),
                 )
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def _trigger_add(self) -> None:
@@ -196,7 +197,7 @@ class ScanOptionsPanel(CTkScrollableFrame):
 
         try:
             self.configure(fg_color=theme_color("base.backgroundTertiary"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
         self._options_container = CTkFrame(self, fg_color="transparent")
@@ -207,7 +208,7 @@ class ScanOptionsPanel(CTkScrollableFrame):
     def _apply_theme(self) -> None:
         try:
             self.configure(fg_color=theme_color("base.backgroundTertiary"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         self._set_mode_options(self._current_mode)
 
@@ -215,14 +216,14 @@ class ScanOptionsPanel(CTkScrollableFrame):
         for w in self._option_widgets.values():
             try:
                 w.destroy()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
         self._option_widgets.clear()
         # Also destroy any bare labels in container
         for child in list(self._options_container.winfo_children()):
             try:
                 child.destroy()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def _set_mode_options(self, mode: str) -> None:
@@ -334,12 +335,12 @@ class ScanOptionsPanel(CTkScrollableFrame):
             elif isinstance(widget, CTkCheckBox):
                 try:
                     options[key] = bool(widget.get())
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     options[key] = False
             elif isinstance(widget, CTkOptionMenu):
                 try:
                     options[key] = widget.get()
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     options[key] = ""
         return options
 
@@ -548,7 +549,7 @@ class FolderPanel(CTkFrame):
             self._content.configure(fg_color=theme_color("panel.background"))
             self._tab_bar.configure(fg_color=theme_color("base.backgroundTertiary"))
             self._toggle_btn.configure(hover_color=theme_color("base.backgroundElevated"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         # Re-apply active tab highlight
         self._switch_tab(self._active_tab)
@@ -572,7 +573,7 @@ class FolderPanel(CTkFrame):
         try:
             self._options_header.configure(
                 text=mode_labels.get(mode, "Scan Options"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def set_photo_phash_dhash_defaults(self, phash_threshold: int, dhash_threshold: int) -> None:

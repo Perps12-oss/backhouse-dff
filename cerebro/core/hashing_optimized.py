@@ -16,6 +16,8 @@ Expected improvement: 10-20x faster with cache, 2-3x without
 
 from __future__ import annotations
 
+import logging
+
 import hashlib
 import mmap
 import os
@@ -25,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 import time
 
 from cerebro.services.hash_cache import HashCache, StatSignature
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -88,7 +91,7 @@ def compute_quick_hash(
         
         return hasher.hexdigest()
     
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -120,7 +123,7 @@ def compute_full_hash_optimized(
                             hasher.update(mm[i:i + chunk_size])
                 
                 return hasher.hexdigest()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Fall back to regular I/O if mmap fails
                 pass
         
@@ -142,7 +145,7 @@ def compute_full_hash_optimized(
         
         return hasher.hexdigest()
     
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -194,7 +197,7 @@ def compute_hash_with_cache(
         
         return hash_value
     
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -353,7 +356,7 @@ class OptimizedHashingEngine:
                         self.stats['files_hashed'] += 1
                         try:
                             self.stats['bytes_processed'] += path.stat().st_size
-                        except:
+                        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                             pass
                     
                     # Progress callback
@@ -361,7 +364,7 @@ class OptimizedHashingEngine:
                     if progress_callback and processed % 100 == 0:
                         progress_callback(processed, total, str(path))
                 
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     processed += 1
                     continue
         
@@ -400,21 +403,21 @@ class OptimizedHashingEngine:
         """Print performance statistics."""
         stats = self.get_stats()
         
-        print("\n[Hashing Statistics]")
-        print(f"  Files hashed: {stats['files_hashed']:,}")
-        print(f"  Time: {stats['elapsed_time']:.2f}s")
+        logger.info("\n[Hashing Statistics]")
+        logger.info(f"  Files hashed: {stats['files_hashed']:,}")
+        logger.info(f"  Time: {stats['elapsed_time']:.2f}s")
         
         if 'files_per_second' in stats:
-            print(f"  Speed: {stats['files_per_second']:.0f} files/sec")
+            logger.info(f"  Speed: {stats['files_per_second']:.0f} files/sec")
         
         if 'mb_per_second' in stats:
-            print(f"  Throughput: {stats['mb_per_second']:.1f} MB/sec")
+            logger.info(f"  Throughput: {stats['mb_per_second']:.1f} MB/sec")
         
         if self.cache:
-            print(f"  Cache hits: {stats['cache_hits']:,}")
-            print(f"  Cache misses: {stats['cache_misses']:,}")
+            logger.info(f"  Cache hits: {stats['cache_hits']:,}")
+            logger.info(f"  Cache misses: {stats['cache_misses']:,}")
             if 'cache_hit_rate' in stats:
-                print(f"  Hit rate: {stats['cache_hit_rate']:.1f}%")
+                logger.info(f"  Hit rate: {stats['cache_hit_rate']:.1f}%")
 
 
 # ============================================================================
@@ -456,7 +459,7 @@ class SmartHashingPipeline:
             return {}
         
         # Stage 1: Group by size
-        print("[Stage 1] Grouping by size...")
+        logger.info("[Stage 1] Grouping by size...")
         size_groups: Dict[int, List[Path]] = {}
         
         for path in files:
@@ -465,33 +468,33 @@ class SmartHashingPipeline:
                 if size not in size_groups:
                     size_groups[size] = []
                 size_groups[size].append(path)
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
         
         # Filter out unique sizes
         size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
         
         total_candidates = sum(len(v) for v in size_groups.values())
-        print(f"  Found {len(size_groups)} size groups with {total_candidates} candidates")
+        logger.info(f"  Found {len(size_groups)} size groups with {total_candidates} candidates")
         
         if not size_groups:
             return {}
         
         # Stage 2: Quick hash
-        print("[Stage 2] Computing quick hashes...")
+        logger.info("[Stage 2] Computing quick hashes...")
         quick_hash_groups = self.engine.hash_size_groups(
             size_groups,
             quick=True,
             progress_callback=progress_callback
         )
         
-        print(f"  Found {len(quick_hash_groups)} quick-hash groups")
+        logger.info(f"  Found {len(quick_hash_groups)} quick-hash groups")
         
         if not quick_hash_groups:
             return {}
         
         # Stage 3: Full hash for groups with matches
-        print("[Stage 3] Computing full hashes for potential duplicates...")
+        logger.info("[Stage 3] Computing full hashes for potential duplicates...")
         
         # Flatten quick-hash groups
         files_for_full_hash = []
@@ -503,7 +506,7 @@ class SmartHashingPipeline:
             progress_callback=progress_callback
         )
         
-        print(f"  Found {len(full_hash_groups)} duplicate groups")
+        logger.info(f"  Found {len(full_hash_groups)} duplicate groups")
         
         # Print statistics
         self.engine.print_stats()

@@ -337,7 +337,7 @@ def load_image(path: Path) -> Optional["Image"]:
         # Try with default Pillow loader
         try:
             return PILImage.open(path)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
     # HEIC/HEIF formats - need pillow-heif
@@ -350,7 +350,7 @@ def load_image(path: Path) -> Optional["Image"]:
             # Fallback: try standard Pillow
             try:
                 return PILImage.open(path)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 return None
 
     # RAW formats - need rawpy
@@ -363,13 +363,13 @@ def load_image(path: Path) -> Optional["Image"]:
                 return PILImage.fromarray(rgb)
         except ImportError:
             return None
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
     # Common formats - standard Pillow
     try:
         return PILImage.open(path)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 

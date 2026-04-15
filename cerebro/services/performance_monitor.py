@@ -1,3 +1,4 @@
+import logging
 # cerebro/services/performance_monitor.py
 
 import os
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from collections import deque
 import platform
 import warnings
+logger = logging.getLogger(__name__)
 
 try:
     import GPUtil
@@ -216,9 +218,9 @@ class PerformanceMonitor:
             try:
                 self._update_metrics()
                 time.sleep(self.update_interval)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 # Log error but continue monitoring
-                print(f"Performance monitoring error: {e}")
+                logger.info(f"Performance monitoring error: {e}")
                 
     def _update_metrics(self):
         """Update all performance metrics."""
@@ -256,7 +258,7 @@ class PerformanceMonitor:
                         gpu = gpus[0]  # Use first GPU
                         gpu_percent = gpu.load * 100
                         gpu_memory_percent = (gpu.memoryUsed / gpu.memoryTotal) * 100
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
                     
             # Create system metrics
@@ -334,7 +336,7 @@ class PerformanceMonitor:
             for callback in self.alert_callbacks:
                 try:
                     callback(alerts)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
                     
     def get_cpu_usage(self) -> float:
@@ -453,7 +455,7 @@ class PerformanceMonitor:
                     'memory_total': gpu.memoryTotal,
                     'driver': gpu.driver
                 } for gpu in gpus]
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 info['gpus'] = []
                 
         return info

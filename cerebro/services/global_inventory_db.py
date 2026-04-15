@@ -32,7 +32,7 @@ def _device_id_for_root(root_path: str) -> str:
     try:
         from cerebro.services.device_identity import get_device_id
         return get_device_id(root_path) or _path_hash_device_id(root_path)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return _path_hash_device_id(root_path)
 
 
@@ -114,7 +114,7 @@ class GlobalInventoryDB:
             try:
                 from cerebro.services.device_identity import get_device_type
                 device_type = get_device_type(canonical)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 device_type = "internal"
         now = time.time()
         conn = self._connect()
@@ -280,7 +280,7 @@ class GlobalInventoryDB:
                 dev_id, root = row[0], row[1]
                 try:
                     online = 1 if (os.path.exists(root) and os.access(root, os.R_OK)) else 0
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     online = 0
                 conn.execute(
                     "UPDATE devices SET is_online = ?, last_seen_timestamp = ?, updated_at = ? WHERE device_id = ?",

@@ -99,7 +99,7 @@ class FileDiscovery:
             try:
                 with os.scandir(cur) as it:
                     entries = list(it)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
 
             # Deterministic directory traversal if validation_mode
@@ -140,7 +140,7 @@ class FileDiscovery:
                     )
 
                     discovered.append(DiscoveredFile(path=Path(entry.path), size=size, mtime_ns=mtime_ns))
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     # unreadable entry (permissions, broken symlink, etc.)
                     continue
 

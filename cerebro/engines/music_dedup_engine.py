@@ -79,7 +79,7 @@ def _extract_tags(path: Path) -> Optional[Dict]:
         if len(parts) >= 2:
             tags["artist"] = parts[0].strip()
             tags["title"] = parts[1].strip()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
     return tags
 

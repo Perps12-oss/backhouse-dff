@@ -1,3 +1,4 @@
+import logging
 # cerebro/core/config.py
 
 import json
@@ -12,6 +13,7 @@ import shutil
 from datetime import datetime
 import re
 import tempfile
+logger = logging.getLogger(__name__)
 
 # Theme validation: run discovery once, log fallback once (no logger import to avoid recursion)
 _valid_themes_cache: Optional[set] = None
@@ -326,7 +328,7 @@ class AppConfig:
             data_path = Path(self.data_dir)
             if not data_path.parent.exists():
                 errors.append(f"Parent directory for data_dir does not exist: {data_path.parent}")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             errors.append(f"Invalid data_dir path: {self.data_dir}")
 
         # Validate other paths (best-effort)
@@ -335,7 +337,7 @@ class AppConfig:
                 p = Path(p_str)
                 if not p.parent.exists():
                     errors.append(f"Parent directory for {label} does not exist: {p.parent}")
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 errors.append(f"Invalid {label} path: {p_str}")
 
             
@@ -368,7 +370,7 @@ class AppConfig:
                 if themes_dir.exists():
                     for p in themes_dir.glob("*.json"):
                         valid_themes.add(p.stem)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             _valid_themes_cache = valid_themes
         else:
@@ -380,7 +382,7 @@ class AppConfig:
             if not alt or alt not in valid_themes:
                 self.ui.theme = "dark"
                 if not _theme_fallback_logged:
-                    print("[CEREBRO] Invalid theme '%s'; falling back to 'dark'." % theme_name)
+                    logger.info("[CEREBRO] Invalid theme '%s'; falling back to 'dark'." % theme_name)
                     _theme_fallback_logged = True
             # do not append to errors; already fixed in memory
 
@@ -485,7 +487,7 @@ class ConfigManager:
             # Validate
             errors = config.validate()
             if errors:
-                print(f"Configuration validation errors: {errors}")
+                logger.info(f"Configuration validation errors: {errors}")
                 # Fix obvious errors
                 for error in errors:
                     if "min_file_size_kb" in error:
@@ -498,8 +500,8 @@ class ConfigManager:
             self._cached_config = config
             return config
             
-        except Exception as e:
-            print(f"Failed to load config: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to load config: {e}")
             # Create backup of corrupted config
             self._backup_corrupted_config()
             # Return default config
@@ -543,13 +545,13 @@ class ConfigManager:
                 try:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
 
             return True
             
-        except Exception as e:
-            print(f"Failed to save config: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to save config: {e}")
             return False
             
     def _migrate_config(self, data: Dict[str, Any], from_version: str) -> Dict[str, Any]:
@@ -567,7 +569,7 @@ class ConfigManager:
         
         while current_version != AppConfig.config_version:
             if current_version in self.migrations:
-                print(f"Migrating config from {current_version}")
+                logger.info(f"Migrating config from {current_version}")
                 data = self.migrations[current_version](data)
                 
                 # Update version in data
@@ -705,7 +707,7 @@ class ConfigManager:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = self.backup_dir / f"corrupted_config_{timestamp}.json"
                 shutil.copy2(self.config_file, backup_file)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
                 
     def _cleanup_old_backups(self):
@@ -718,7 +720,7 @@ class ConfigManager:
             if len(backup_files) > 5:
                 for old_file in backup_files[:-5]:
                     old_file.unlink()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
             
     def export_config(self, export_path: Path, include_sensitive: bool = False) -> bool:
@@ -746,8 +748,8 @@ class ConfigManager:
                 
             return True
             
-        except Exception as e:
-            print(f"Failed to export config: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to export config: {e}")
             return False
             
     def import_config(self, import_path: Path, merge: bool = True) -> bool:
@@ -783,8 +785,8 @@ class ConfigManager:
                 imported_config = AppConfig.from_dict(import_data)
                 return self.save_config(imported_config)
                 
-        except Exception as e:
-            print(f"Failed to import config: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to import config: {e}")
             return False
             
     def _deep_merge(self, dict1: Dict, dict2: Dict) -> Dict:
@@ -809,8 +811,8 @@ class ConfigManager:
         try:
             default_config = AppConfig()
             return self.save_config(default_config)
-        except Exception as e:
-            print(f"Failed to reset config: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to reset config: {e}")
             return False
 
 

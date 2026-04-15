@@ -101,7 +101,7 @@ class HistoryStore:
         try:
             from ..services.logger import get_logger
             self._logger = get_logger("history.store")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             self._logger = None
 
     def _ensure_dirs(self) -> None:
@@ -111,7 +111,7 @@ class HistoryStore:
         if self._logger:
             try:
                 getattr(self._logger, level, self._logger.info)(message)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def record_deletion(
@@ -157,16 +157,16 @@ class HistoryStore:
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, audit_file)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 try:
                     os.unlink(tmp_path)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
                 raise
             self._log(
                 f"Recorded deletion audit: scan={record.scan_id} deleted={record.deleted} failed={record.failed} bytes={record.bytes_reclaimed}"
             )
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._log(f"Failed to write audit record: {e}", level="warning")
 
         return record
@@ -203,12 +203,12 @@ class HistoryStore:
                             records.append(DeletionAuditRecord.from_dict(data))
                             if len(records) >= limit:
                                 break
-                        except Exception:
+                        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                             if not _corrupt_warned:
                                 self._log("History: skipping corrupt line in audit file", level="warning")
                                 _corrupt_warned = True
                             continue
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
 
             if len(records) >= limit:
@@ -296,10 +296,10 @@ class HistoryStore:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, self._resume_file)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             try:
                 os.unlink(tmp_path)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def get_latest_resume_payload(self) -> Optional[ResumePayload]:
@@ -310,7 +310,7 @@ class HistoryStore:
             with open(self._resume_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return ResumePayload.from_dict(data)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
     def get_undo_candidates(self, *, since_hours: int = 24) -> List[Dict[str, Any]]:

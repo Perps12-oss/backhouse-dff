@@ -62,7 +62,7 @@ def _dhash(image_path: Path, size: int = 8) -> Optional[int]:
         for bit in bits:
             h = (h << 1) | bit
         return h
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -100,7 +100,7 @@ def _extract_keyframes(video_path: Path, n: int, out_dir: Path) -> List[Path]:
             )
             if out_file.exists():
                 frames.append(out_file)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
     return frames
 
@@ -129,7 +129,7 @@ def _video_signature(video_path: Path, use_ffmpeg: bool) -> Optional[Tuple]:
                 capture_output=True, text=True, timeout=10,
             )
             duration = float(result.stdout.strip() or "0")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     frame_hashes: List[int] = []

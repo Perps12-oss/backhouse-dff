@@ -1,3 +1,4 @@
+import logging
 # cerebro/core/preview.py
 """
 File preview functionality.
@@ -8,6 +9,7 @@ from typing import Optional
 import subprocess
 import os
 import platform
+logger = logging.getLogger(__name__)
 
 class PreviewManager:
     """Manages file previews."""
@@ -26,6 +28,6 @@ class PreviewManager:
                 subprocess.run(["xdg-open", str(path)], check=False)
             return True
             
-        except Exception as e:
-            print(f"[Preview] Failed to preview {path}: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"[Preview] Failed to preview {path}: {e}")
             return False

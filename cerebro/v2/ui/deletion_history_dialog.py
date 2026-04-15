@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import tkinter as tk
 from tkinter import ttk
 
@@ -24,6 +25,8 @@ from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.core.deletion_history_db import get_default_history_manager
 from cerebro.v2.ui.feedback import confirm_yes_no
+
+logger = logging.getLogger(__name__)
 
 
 class DeletionHistoryDialog:
@@ -121,7 +124,7 @@ class DeletionHistoryDialog:
             try:
                 dt = datetime.fromisoformat(str(deletion_date))
                 date_txt = dt.strftime("%Y-%m-%d %H:%M")
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 date_txt = str(deletion_date)
             self._tree.insert(
                 "",
@@ -148,5 +151,5 @@ class DeletionHistoryDialog:
     def _apply_theme(self) -> None:
         try:
             self._win.configure(fg_color=theme_color("base.background"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass

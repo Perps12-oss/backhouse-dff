@@ -143,7 +143,7 @@ class TurboFileEngine(BaseEngine):
         try:
             self._state = ScanState.SCANNING
             self._do_scan()
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as exc:
             logger.exception("Turbo scan failed: %s", exc)
             self._state = ScanState.ERROR
             self._progress = ScanProgress(state=ScanState.ERROR)
@@ -234,7 +234,7 @@ class TurboFileEngine(BaseEngine):
         if self._callback:
             try:
                 self._callback(self._progress)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     # -- result conversion -----------------------------------------------------

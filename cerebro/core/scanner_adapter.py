@@ -21,6 +21,8 @@ Performance improvements:
 
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Generator, Callable
 from dataclasses import dataclass
@@ -31,6 +33,7 @@ from cerebro.core.scanners.turbo_scanner import TurboScanner, TurboScanConfig
 from cerebro.core.discovery_optimized import OptimizedFileDiscovery
 from cerebro.core.hashing_optimized import SmartHashingPipeline
 from cerebro.services.hash_cache import HashCache
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -171,7 +174,7 @@ class OptimizedScannerAdapter:
                 for cb in self.file_callbacks:
                     try:
                         cb(file_meta)
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
                 
                 # Progress callbacks (throttled)
@@ -187,11 +190,11 @@ class OptimizedScannerAdapter:
             # Expose groups for worker/Review (TurboScanner sets last_groups)
             self.last_groups = getattr(self.scanner, "last_groups", [])
             
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             for cb in self.error_callbacks:
                 try:
                     cb("scan", e, {"paths": paths})
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             raise
         finally:
@@ -218,7 +221,7 @@ class OptimizedScannerAdapter:
         for cb in self.progress_callbacks:
             try:
                 cb(progress)
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
     
     def scan_directory(self, directory: Path, options: Dict[str, Any]) -> List[FileMetadata]:
@@ -402,9 +405,9 @@ def benchmark_scanners(test_path: Path, use_optimized: bool = True):
     
     Useful for comparing old vs new implementations.
     """
-    print(f"\n{'='*60}")
-    print(f"Benchmarking {'OPTIMIZED' if use_optimized else 'LEGACY'} Scanner")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Benchmarking {'OPTIMIZED' if use_optimized else 'LEGACY'} Scanner")
+    logger.info(f"{'='*60}")
     
     start_time = time.time()
     
@@ -424,27 +427,27 @@ def benchmark_scanners(test_path: Path, use_optimized: bool = True):
         
         elapsed = time.time() - start_time
         
-        print(f"\nResults:")
-        print(f"  Files found: {file_count:,}")
-        print(f"  Total size: {total_size / (1024**3):.2f} GB")
-        print(f"  Time: {elapsed:.2f}s")
-        print(f"  Speed: {file_count / elapsed:.0f} files/sec")
+        logger.info(f"\nResults:")
+        logger.info(f"  Files found: {file_count:,}")
+        logger.info(f"  Total size: {total_size / (1024**3):.2f} GB")
+        logger.info(f"  Time: {elapsed:.2f}s")
+        logger.info(f"  Speed: {file_count / elapsed:.0f} files/sec")
         
         if hasattr(scanner, 'scanner'):
             stats = scanner.scanner.stats
             if 'hash_cache_hits' in stats:
-                print(f"\nCache Performance:")
-                print(f"  Hits: {stats['hash_cache_hits']:,}")
-                print(f"  Misses: {stats['hash_cache_misses']:,}")
+                logger.info(f"\nCache Performance:")
+                logger.info(f"  Hits: {stats['hash_cache_hits']:,}")
+                logger.info(f"  Misses: {stats['hash_cache_misses']:,}")
                 total = stats['hash_cache_hits'] + stats['hash_cache_misses']
                 if total > 0:
-                    print(f"  Hit rate: {stats['hash_cache_hits']/total*100:.1f}%")
+                    logger.info(f"  Hit rate: {stats['hash_cache_hits']/total*100:.1f}%")
         
     finally:
         if hasattr(scanner, 'close'):
             scanner.close()
     
-    print(f"{'='*60}\n")
+    logger.info(f"{'='*60}\n")
     
     return elapsed
 
@@ -456,8 +459,8 @@ def compare_performance(test_path: Path):
     Usage:
         compare_performance(Path("/large/dataset"))
     """
-    print("\nPerformance Comparison")
-    print("=" * 60)
+    logger.info("\nPerformance Comparison")
+    logger.info("=" * 60)
     
     # Run optimized first
     optimized_time = benchmark_scanners(test_path, use_optimized=True)
@@ -467,9 +470,9 @@ def compare_performance(test_path: Path):
         legacy_time = benchmark_scanners(test_path, use_optimized=False)
         
         speedup = legacy_time / optimized_time
-        print(f"\nSpeedup: {speedup:.1f}x faster")
-        print(f"Time saved: {legacy_time - optimized_time:.1f}s")
+        logger.info(f"\nSpeedup: {speedup:.1f}x faster")
+        logger.info(f"Time saved: {legacy_time - optimized_time:.1f}s")
     
-    except Exception as e:
-        print(f"\nLegacy scanner error: {e}")
-        print("(This is expected if advanced_scanner has been replaced)")
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+        logger.info(f"\nLegacy scanner error: {e}")
+        logger.info("(This is expected if advanced_scanner has been replaced)")

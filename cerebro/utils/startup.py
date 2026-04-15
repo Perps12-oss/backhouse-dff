@@ -178,7 +178,7 @@ class EnvironmentValidator:
             test_file.write_text("test")
             test_file.unlink()
             return True
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return False
     
     @staticmethod
@@ -268,7 +268,7 @@ def create_directories(base_dir: Path) -> bool:
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
         return True
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return False
 
 

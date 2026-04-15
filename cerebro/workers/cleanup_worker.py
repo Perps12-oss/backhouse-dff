@@ -45,7 +45,7 @@ class CleanupWorker(BaseWorker):
             self.check_cancelled()
             try:
                 fpath = Path(item.file.path)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Defensive: malformed item
                 self._failed += 1
                 continue
@@ -59,7 +59,7 @@ class CleanupWorker(BaseWorker):
                 else:
                     self._delete_path(fpath)
                 self._deleted += 1
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 self._failed += 1
                 log_error(f"[CLEANUP] Failed: {fpath} :: {e}")
 
@@ -81,7 +81,7 @@ class CleanupWorker(BaseWorker):
         # MOVE_TO_TRASH
         try:
             from send2trash import send2trash
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             raise RuntimeError("send2trash is required for MOVE_TO_TRASH policy") from e
 
         send2trash(str(path))

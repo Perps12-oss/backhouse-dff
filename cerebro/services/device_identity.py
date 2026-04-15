@@ -21,17 +21,17 @@ def get_device_id(root_path: str) -> str:
     if sys.platform == "win32":
         try:
             return _windows_volume_guid(canonical)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
     if sys.platform == "darwin":
         try:
             return _macos_device_id(canonical)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
     if sys.platform.startswith("linux"):
         try:
             return _linux_device_id(canonical)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
@@ -43,7 +43,7 @@ def get_device_type(root_path: str) -> str:
     if sys.platform == "win32":
         try:
             return _windows_drive_type(root_path)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
     return "internal"
 

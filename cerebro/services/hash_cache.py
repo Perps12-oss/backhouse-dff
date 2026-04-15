@@ -96,11 +96,11 @@ class HashCache:
         if conn is not None:
             try:
                 conn.commit()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             try:
                 conn.close()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             self._local.conn = None
 
@@ -193,12 +193,12 @@ class HashCache:
             conn = self.get_connection()
             cur = conn.execute("SELECT COUNT(*) FROM file_hashes")
             stats["total_entries"] = int(cur.fetchone()[0] or 0)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         try:
             if self.db_path.exists():
                 stats["cache_size_mb"] = round(self.db_path.stat().st_size / (1024 * 1024), 2)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         return stats
 

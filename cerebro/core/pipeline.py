@@ -84,14 +84,14 @@ class CerebroPipeline:
         try:
             from ..services.logger import Logger  # type: ignore
             self._logger = Logger()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             self._logger = None
 
     def _log(self, message: str, level: str = "info") -> None:
         if self._logger:
             try:
                 getattr(self._logger, level, self._logger.info)(message)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     # ------------------------------------------------------------------
@@ -126,7 +126,7 @@ class CerebroPipeline:
         for group_data in groups:
             try:
                 group_idx = int(group_data.get("group_index", 0) or 0)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 group_idx = 0
 
             keep_path_str = str(group_data.get("keep", "") or "")
@@ -139,7 +139,7 @@ class CerebroPipeline:
 
             try:
                 keep_resolved = keep_path.resolve()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 keep_resolved = keep_path
 
             # Invariant: cannot delete keeper. Missing delete file → skip that file only (race/stale UI).
@@ -155,7 +155,7 @@ class CerebroPipeline:
 
                 try:
                     del_resolved = del_path.resolve()
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     del_resolved = del_path
 
                 if keep_resolved == del_resolved:
@@ -167,7 +167,7 @@ class CerebroPipeline:
                     st = del_path.stat()
                     size = int(st.st_size or 0)
                     mtime = float(st.st_mtime or 0.0)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     size = 0
                     mtime = 0.0
 
@@ -289,7 +289,7 @@ class CerebroPipeline:
                 policy=plan.policy or {"mode": plan.mode},
                 details=details,
             )
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._log(f"Audit write failed (non-fatal): {e}", level="warning")
 
         self._log(

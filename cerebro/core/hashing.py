@@ -192,6 +192,6 @@ class FileHashing:
         try:
             digest = _hash_file_segment(path, bytes_to_read=bytes_to_read)
             return path, digest
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             # Corrupt / unreadable file — silently drop
             return None

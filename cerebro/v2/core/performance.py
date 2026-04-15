@@ -174,7 +174,7 @@ def run_parallel(
         item = futures[future]
         try:
             results[index_map[item]] = future.result()
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.error(f"Error processing {item}: {e}")
             results[index_map[item]] = None
 
@@ -209,7 +209,7 @@ def run_parallel_map(
 
     try:
         return list(executor.map(func, items))
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         logger.error(f"Error in parallel map: {e}")
         raise
 

@@ -1,3 +1,4 @@
+import logging
 # cerebro/services/update_checker.py
 
 import json
@@ -20,6 +21,7 @@ import platform
 from PySide6.QtCore import QObject, Signal, QThread, Slot
 
 from cerebro.services.config import load_config, AppConfig
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -141,14 +143,14 @@ class UpdateChecker(QObject):
         try:
             import pkg_resources
             return pkg_resources.get_distribution("cerebro").version
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
             
         # Try to get from __version__ module
         try:
             from cerebro import __version__
             return __version__
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
             
         # Default fallback
@@ -162,8 +164,8 @@ class UpdateChecker(QObject):
                 with open(status_file, 'r') as f:
                     data = json.load(f)
                     self.status = UpdateStatus.from_dict(data)
-            except Exception as e:
-                print(f"Failed to load update status: {e}")
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+                logger.info(f"Failed to load update status: {e}")
                 
     def _save_status(self):
         """Save update status to disk."""
@@ -171,8 +173,8 @@ class UpdateChecker(QObject):
         try:
             with open(status_file, 'w') as f:
                 json.dump(self.status.to_dict(), f, indent=2)
-        except Exception as e:
-            print(f"Failed to save update status: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to save update status: {e}")
             
     def check_async(self, force: bool = False):
         """
@@ -220,7 +222,7 @@ class UpdateChecker(QObject):
         except urllib.error.URLError as e:
             error_msg = f"Network error: {e.reason}"
             self.signals.check_failed.emit(error_msg)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             error_msg = f"Update check failed: {str(e)}"
             self.signals.check_failed.emit(error_msg)
         finally:
@@ -282,7 +284,7 @@ class UpdateChecker(QObject):
                 with open(update_file, 'r') as f:
                     data = json.load(f)
                     return UpdateInfo.from_dict(data)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
                 
         return None
@@ -392,7 +394,7 @@ class UpdateChecker(QObject):
             # Emit completion signal
             self.signals.download_complete.emit(download_path)
             
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             error_msg = f"Download failed: {str(e)}"
             self.status.error_message = error_msg
             self.status.download_status = "failed"
@@ -491,7 +493,7 @@ class UpdateChecker(QObject):
             self.signals.install_complete.emit()
             self.signals.status_changed.emit(self.status)
             
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             error_msg = f"Installation failed: {str(e)}"
             self.status.error_message = error_msg
             self.status.download_status = "failed"
@@ -577,7 +579,7 @@ class UpdateChecker(QObject):
             try:
                 with open(skipped_file, 'r') as f:
                     skipped_versions = json.load(f)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
                 
         if version not in skipped_versions:
@@ -595,7 +597,7 @@ class UpdateChecker(QObject):
                 with open(skipped_file, 'r') as f:
                     skipped_versions = json.load(f)
                     return version in skipped_versions
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
                 
         return False
@@ -621,7 +623,7 @@ class UpdateChecker(QObject):
                 # Keep files less than 7 days old
                 if file.stat().st_mtime < time.time() - (7 * 86400):
                     file.unlink()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
 

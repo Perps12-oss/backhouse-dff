@@ -54,7 +54,7 @@ def _token_score(name: str) -> float:
 def _safe_get(obj: Any, attr: str, default: Any = None) -> Any:
     try:
         return getattr(obj, attr, default)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return default
 
 
@@ -64,7 +64,7 @@ def _size_bytes(item: Any) -> int:
         v = _safe_get(item, "size", 0)
     try:
         return int(v)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return 0
 
 
@@ -73,12 +73,12 @@ def _mtime(item: Any) -> float:
     if v is not None:
         try:
             return float(v)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return 0.0
     v = _safe_get(item, "mtime_ns", None)
     try:
         return float(v) / 1_000_000_000.0
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return 0.0
 
 
@@ -144,7 +144,7 @@ class ScoringEngine:
                 # Store
                 try:
                     setattr(it, "score", float(s))
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
 
                 # Optional label for UI/debug
@@ -153,7 +153,7 @@ class ScoringEngine:
                         setattr(it, "label", "keeper:semantic")
                     elif _token_score(name) <= -2:
                         setattr(it, "label", "ghost:semantic")
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
 
         return groups

@@ -68,7 +68,7 @@ class VisualSimilarityClustering:
 
             try:
                 st = p.stat()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
 
             hv = compute_visual_hash(p, settings)

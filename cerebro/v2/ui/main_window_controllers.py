@@ -6,6 +6,7 @@ scan lifecycle, selection/preview orchestration, and history recording.
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any, List
@@ -14,7 +15,7 @@ from cerebro.engines.base_engine import ScanState
 from cerebro.v2.ui.status_bar import StatusBarMetrics
 from cerebro.services.logger import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger(__name__)  # wraps logging.getLogger(__name__)
 
 
 class HistoryRecorder:

@@ -24,7 +24,7 @@ def validate_directory_path(path: str) -> Tuple[bool, Optional[str]]:
         if not dir_path.is_dir():
             return False, "Path is not a directory"
         return True, None
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         return False, f"Error validating path: {str(e)}"
 
 
@@ -45,7 +45,7 @@ def validate_file_path(path: str) -> Tuple[bool, Optional[str]]:
         if not file_path.is_file():
             return False, "Path is not a file"
         return True, None
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         return False, f"Error validating path: {str(e)}"
 
 
@@ -68,7 +68,7 @@ def validate_file_size(file_path: Path, min_size: int = 0, max_size: Optional[in
         if max_size is not None and size > max_size:
             return False, f"File is too large (maximum: {max_size} bytes)"
         return True, None
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         return False, f"Error checking file size: {str(e)}"
 
 

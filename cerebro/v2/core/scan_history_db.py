@@ -118,7 +118,7 @@ class ScanHistoryDB:
             return 0
         try:
             payload = json.loads(json_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return 0
         if not isinstance(payload, Iterable):
             return 0
@@ -135,7 +135,7 @@ class ScanHistoryDB:
                     timestamp=float(row.get("timestamp", time.time())),
                 )
                 count += 1
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
         return count
 

@@ -10,6 +10,7 @@ The active tab has an accent-coloured 3 px bottom border and a slightly elevated
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, List, Dict
 
@@ -231,12 +232,12 @@ class ModeTabs(CTkFrame):
         try:
             self.configure(fg_color=theme_color("tabs.background"))
             self._inner.configure(bg=theme_color("tabs.background"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         for tab in self._tabs.values():
             try:
                 tab.apply_theme()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
 

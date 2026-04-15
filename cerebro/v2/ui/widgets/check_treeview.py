@@ -7,6 +7,7 @@ Supports grouped/hierarchical rows with expand/collapse functionality.
 
 from __future__ import annotations
 
+import logging
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -14,6 +15,8 @@ from typing import Iterable, List, Optional, Callable, Any
 
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+
+logger = logging.getLogger(__name__)
 
 
 # Checkbox icons (unicode)
@@ -329,7 +332,7 @@ class CheckTreeview(ttk.Treeview):
         if self._load_job:
             try:
                 self.after_cancel(self._load_job)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             self._load_job = None
         self.delete(*self.get_children())
@@ -392,7 +395,7 @@ class CheckTreeview(ttk.Treeview):
 
         try:
             self.update_idletasks()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
         if self._load_cursor < len(self._pending_data):

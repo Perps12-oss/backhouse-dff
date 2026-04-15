@@ -13,6 +13,8 @@ CONTRACT:
 
 from __future__ import annotations
 
+import logging
+
 import os
 import sys
 import time
@@ -30,7 +32,7 @@ from typing import (
     Callable, Any, Tuple, Union
 )
 from collections import defaultdict, deque
-from cerebro.core.utils import(
+from cerebro.core.utils import (
     format_size,
     should_skip_directory,
     should_skip_file,
@@ -38,6 +40,8 @@ from cerebro.core.utils import(
     HashCache,
     is_system_file,          # NEW
 )
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------
 # Scanner-local tuning constants
@@ -210,7 +214,7 @@ class ScanConfig:
             else:
                 return min(int(cpu_count * 1.5), 12)
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return 4
 
     def to_dict(self) -> Dict[str, Any]:
@@ -524,13 +528,13 @@ def scan_request(
 
                     results.append(meta)
 
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                     # Reuse your central error handler if present
                     try:
                         self._handle_error("scan_directory", e, {"path": str(file_path)})
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         # Last-resort: do not crash scanning on a single bad file
-                        print(f"[FileScanner.scan_directory] Error on {file_path}: {e}")
+                        logger.info(f"[FileScanner.scan_directory] Error on {file_path}: {e}")
 
         # -----------------------------
         # 4. Basic stats for compatibility
@@ -580,7 +584,7 @@ def scan_request(
             # Finalise scan
             self._finalize_scan()
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._handle_error("scan_main", e, {"paths": paths})
             raise
 
@@ -640,7 +644,7 @@ def scan_request(
                 p_obj = Path(p) if isinstance(p, str) else p
                 if p_obj.exists():
                     valid.append(p_obj.resolve())
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
         return valid
@@ -716,7 +720,7 @@ def scan_request(
 
             except queue.Empty:
                 break
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 self._handle_error("parallel_worker", e, {"depth": depth})
 
     def _scan_directory_parallel(self, directory: Path, depth: int):
@@ -749,7 +753,7 @@ def scan_request(
                     with self.lock:
                         self.stats['permission_errors'] += 1
 
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                     self._handle_error(
                         "parallel_entry",
                         e,
@@ -763,7 +767,7 @@ def scan_request(
             with self.lock:
                 self.stats['permission_errors'] += 1
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._handle_error(
                 "parallel_directory",
                 e,
@@ -827,7 +831,7 @@ def scan_request(
                     with self.lock:
                         self.stats['permission_errors'] += 1
 
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                     self._handle_error(
                         "recursive_entry",
                         e,
@@ -842,7 +846,7 @@ def scan_request(
             with self.lock:
                 self.stats['permission_errors'] += 1
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._handle_error(
                 "recursive_directory",
                 e,
@@ -880,13 +884,13 @@ def scan_request(
                 except PermissionError:
                     pass
 
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
 
         except PermissionError:
             pass
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._handle_error("quick_directory", e, {"directory": str(directory)})
 
     def _should_skip_directory_quick(self, directory: Path) -> bool:
@@ -935,7 +939,7 @@ def scan_request(
                     if file_meta:
                         self.file_queue.put(file_meta)
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             with self.lock:
                 self.stats['symlinks_skipped'] += 1
 
@@ -1015,12 +1019,12 @@ def scan_request(
             for cb in self.file_callbacks:
                 try:
                     cb(meta)
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                     self._handle_error("file_callback", e, {"file": str(file_path)})
 
             return meta
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._handle_error("file_processing", e, {"file": str(file_path)})
             return None
 
@@ -1051,7 +1055,7 @@ def scan_request(
 
             return meta
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
     # -----------------------------------------------------------------
     # ERROR HANDLING
@@ -1071,7 +1075,7 @@ def scan_request(
         for cb in self.error_callbacks:
             try:
                 cb(context, error, info)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     # -----------------------------------------------------------------
@@ -1099,7 +1103,7 @@ def scan_request(
         for cb in self.progress_callbacks:
             try:
                 cb(progress)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     # -----------------------------------------------------------------
@@ -1154,7 +1158,7 @@ def _should_cancel(self) -> bool:
         return False
     try:
         return bool(ev.is_set())
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return False
     # -----------------------------------------------------------------
     # UTILITIES

@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 def _safe_path(p: Any) -> str:
     try:
         return str(Path(p))
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return str(p)
 
 

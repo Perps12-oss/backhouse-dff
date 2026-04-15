@@ -7,6 +7,7 @@ Provides: Rule dropdown, Apply button, selected counter, Select All/Deselect All
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, List
 
@@ -310,7 +311,7 @@ class SelectionBar(CTkFrame):
                 fg_color=theme_color("button.danger"),
                 hover_color=theme_color("button.dangerHover"),
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _refresh_selected_label(self) -> None:

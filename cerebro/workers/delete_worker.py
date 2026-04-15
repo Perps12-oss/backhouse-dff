@@ -81,7 +81,7 @@ class DeleteWorker(QThread):
                         if pct is None:
                             return
                         self._emit_fn(int(pct), msg or phase)
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         return
 
             result = self._pipeline.run(
@@ -98,5 +98,5 @@ class DeleteWorker(QThread):
             self.progress.emit(100, "Delete complete.")
             self.finished.emit(result)
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             self.error.emit(traceback.format_exc())

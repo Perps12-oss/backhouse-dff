@@ -21,6 +21,8 @@ Target: 250K files in < 30 seconds (60x faster than original!)
 
 from __future__ import annotations
 
+import logging
+
 import os
 import sys
 import time
@@ -34,6 +36,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import threading
 import multiprocessing as mp
+logger = logging.getLogger(__name__)
 
 # Try to import performance libraries (graceful degradation)
 try:
@@ -95,7 +98,7 @@ class BloomFilter:
         
         self.item_count = 0
         
-        print(f"[BloomFilter] Size: {self.size:,} bits ({self.size/8/1024/1024:.1f} MB), "
+        logger.info(f"[BloomFilter] Size: {self.size:,} bits ({self.size/8/1024/1024:.1f} MB), "
               f"Hash functions: {self.hash_count}")
     
     def add(self, item: bytes):
@@ -175,13 +178,13 @@ class SIMDHasher:
         
         if algorithm == "xxhash" and HAS_XXHASH:
             self.hasher = xxhash.xxh64()
-            print("[SIMDHasher] Using xxHash (10x faster)")
+            logger.info("[SIMDHasher] Using xxHash (10x faster)")
         elif algorithm == "mmh3" and HAS_MMH3:
             self.hasher = None  # MurmurHash3 is stateless
-            print("[SIMDHasher] Using MurmurHash3 (5x faster)")
+            logger.info("[SIMDHasher] Using MurmurHash3 (5x faster)")
         else:
             self.hasher = hashlib.md5()
-            print("[SIMDHasher] Using MD5 (baseline)")
+            logger.info("[SIMDHasher] Using MD5 (baseline)")
     
     def hash_file(self, path: Path) -> Optional[str]:
         """Hash file with SIMD acceleration."""
@@ -211,7 +214,7 @@ class SIMDHasher:
                         h.update(chunk)
                 return h.hexdigest()
         
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
     
     def hash_quick(self, path: Path, sample_size: int = 64 * 1024) -> Optional[str]:
@@ -242,7 +245,7 @@ class SIMDHasher:
             
             return h.hexdigest() if HAS_XXHASH else h.hexdigest()
         
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
 
@@ -317,9 +320,9 @@ class WindowsEverythingIntegration:
                 # Try to load Everything SDK
                 self.dll = ctypes.WinDLL('Everything64.dll')
                 self.available = True
-                print("[Everything] SDK loaded - 1000x faster file discovery!")
-            except Exception:
-                print("[Everything] SDK not available, using standard methods")
+                logger.info("[Everything] SDK loaded - 1000x faster file discovery!")
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                logger.info("[Everything] SDK not available, using standard methods")
     
     def search(self, path: str, extensions: Optional[List[str]] = None) -> List[Path]:
         """
@@ -376,7 +379,7 @@ class PredictivePrefetcher:
             for sibling in parent.iterdir():
                 if sibling.is_file():
                     predictions.append(sibling)
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         
         return predictions[:10]  # Top 10 predictions
@@ -388,7 +391,7 @@ class PredictivePrefetcher:
                 # Read first page to trigger OS prefetch
                 with open(path, 'rb') as f:
                     f.read(4096)
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
 
@@ -465,16 +468,16 @@ class UltraScanner:
             'elapsed': 0,
         }
         
-        print(f"\n{'='*60}")
-        print("ULTRA SCANNER INITIALIZED")
-        print(f"{'='*60}")
-        print(f"Bloom filter: {'✓' if self.bloom else '✗'}")
-        print(f"SIMD hashing: {'✓' if self.hasher else '✗'}")
-        print(f"Everything SDK: {'✓' if self.everything and self.everything.available else '✗'}")
-        print(f"Prefetching: {'✓' if self.prefetcher else '✗'}")
-        print(f"Memory pool: {'✓' if self.memory_pool else '✗'}")
-        print(f"Workers: {self.config.dir_workers} dir / {self.config.hash_workers} hash")
-        print(f"{'='*60}\n")
+        logger.info(f"\n{'='*60}")
+        logger.info("ULTRA SCANNER INITIALIZED")
+        logger.info(f"{'='*60}")
+        logger.info(f"Bloom filter: {'✓' if self.bloom else '✗'}")
+        logger.info(f"SIMD hashing: {'✓' if self.hasher else '✗'}")
+        logger.info(f"Everything SDK: {'✓' if self.everything and self.everything.available else '✗'}")
+        logger.info(f"Prefetching: {'✓' if self.prefetcher else '✗'}")
+        logger.info(f"Memory pool: {'✓' if self.memory_pool else '✗'}")
+        logger.info(f"Workers: {self.config.dir_workers} dir / {self.config.hash_workers} hash")
+        logger.info(f"{'='*60}\n")
     
     def scan(self, roots: List[Path]) -> Generator[Dict, None, None]:
         """
@@ -484,7 +487,7 @@ class UltraScanner:
         """
         start_time = time.time()
         
-        print("[UltraScanner] Phase 1: Discovery...")
+        logger.info("[UltraScanner] Phase 1: Discovery...")
         
         # Try Windows Everything SDK first (1000x faster!)
         if self.everything and self.everything.available:
@@ -492,14 +495,14 @@ class UltraScanner:
             for root in roots:
                 discovered.extend(self.everything.search(str(root)))
             self.stats['everything_used'] = True
-            print(f"[UltraScanner] Everything found {len(discovered)} files instantly!")
+            logger.info(f"[UltraScanner] Everything found {len(discovered)} files instantly!")
         else:
             # Fall back to parallel discovery
             discovered = self._parallel_discover(roots)
-            print(f"[UltraScanner] Parallel discovery found {len(discovered)} files")
+            logger.info(f"[UltraScanner] Parallel discovery found {len(discovered)} files")
         
         # Phase 2: Process with all optimizations
-        print("[UltraScanner] Phase 2: Processing with bloom filter + SIMD...")
+        logger.info("[UltraScanner] Phase 2: Processing with bloom filter + SIMD...")
         
         file_count = 0
         for file_path in discovered:
@@ -534,7 +537,7 @@ class UltraScanner:
                     'quick_hash': quick_hash,
                 }
                 file_count += 1
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
         
         # Statistics
@@ -542,18 +545,18 @@ class UltraScanner:
         self.stats['elapsed'] = elapsed
         self.stats['files_scanned'] = file_count
         
-        print(f"\n{'='*60}")
-        print("ULTRA SCANNER RESULTS")
-        print(f"{'='*60}")
-        print(f"Files scanned: {file_count:,}")
-        print(f"Time: {elapsed:.2f}s")
-        print(f"Speed: {file_count / elapsed:.0f} files/sec")
+        logger.info(f"\n{'='*60}")
+        logger.info("ULTRA SCANNER RESULTS")
+        logger.info(f"{'='*60}")
+        logger.info(f"Files scanned: {file_count:,}")
+        logger.info(f"Time: {elapsed:.2f}s")
+        logger.info(f"Speed: {file_count / elapsed:.0f} files/sec")
         if self.bloom:
-            print(f"Bloom hits: {self.stats['bloom_hits']:,} (fast path)")
-            print(f"Bloom misses: {self.stats['bloom_misses']:,} (slow path)")
+            logger.info(f"Bloom hits: {self.stats['bloom_hits']:,} (fast path)")
+            logger.info(f"Bloom misses: {self.stats['bloom_misses']:,} (slow path)")
         if self.stats['everything_used']:
-            print(f"Everything SDK: ✓ USED (1000x faster!)")
-        print(f"{'='*60}\n")
+            logger.info(f"Everything SDK: ✓ USED (1000x faster!)")
+        logger.info(f"{'='*60}\n")
     
     def _parallel_discover(self, roots: List[Path]) -> List[Path]:
         """Parallel file discovery."""
@@ -580,9 +583,9 @@ class UltraScanner:
                             size = file_path.stat().st_size
                             if size >= self.config.min_size:
                                 results.append(file_path)
-                        except:
+                        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                             continue
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             
             return results
@@ -593,7 +596,7 @@ class UltraScanner:
             for future in futures:
                 try:
                     all_files.extend(future.result())
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
         
         return all_files

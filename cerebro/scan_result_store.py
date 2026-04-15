@@ -254,7 +254,7 @@ class ScanResultStore:
             if row["config_json"]:
                 try:
                     config = json.loads(row["config_json"])
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             return {
                 "scan_id": row["scan_id"],

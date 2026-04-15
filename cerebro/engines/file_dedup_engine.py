@@ -247,7 +247,7 @@ class FileDedupEngine(BaseEngine):
             self._state = ScanState.COMPLETED
             progress_callback(self._progress)
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             import traceback
             traceback.print_exc()
             self._progress = ScanProgress(
@@ -414,7 +414,7 @@ class FileDedupEngine(BaseEngine):
                     self._progress.files_total = total_files
                     self._update_progress(progress_callback, str(file))
 
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 processed += 1
                 continue
 
@@ -459,7 +459,7 @@ class FileDedupEngine(BaseEngine):
 
             return file, hash_value
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return file, None
 
     # ========================================================================
@@ -517,7 +517,7 @@ class FileDedupEngine(BaseEngine):
                     self._progress.files_total = total_files
                     self._update_progress(progress_callback, str(file))
 
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 processed += 1
                 continue
 
@@ -566,7 +566,7 @@ class FileDedupEngine(BaseEngine):
 
             return file, hash_value
 
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return file, None
 
     # ========================================================================

@@ -107,7 +107,7 @@ class SimpleScanner:
                     try:
                         if bool(getattr(cancel_event, 'is_set')()):
                             break
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
                 file_path = root_path / name
                 file_name_lower = name.lower()

@@ -180,7 +180,7 @@ class FileMetadata:
                 tags=[],
                 metadata={}
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 @dataclass
 class DuplicateGroup:

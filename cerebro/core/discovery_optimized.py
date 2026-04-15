@@ -101,7 +101,7 @@ class DiscoveryCache:
                         total_size += st.st_size
                         mtime_ns = getattr(st, 'st_mtime_ns', int(st.st_mtime * 1_000_000_000))
                         last_mtime = max(last_mtime, mtime_ns)
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
             
             return DirectoryStats(
@@ -111,7 +111,7 @@ class DiscoveryCache:
                 total_size=total_size,
                 last_mtime=last_mtime
             )
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
     
     def clear(self):
@@ -195,7 +195,7 @@ class OptimizedFileDiscovery:
                     if size >= min_size:
                         mtime_ns = getattr(st, 'st_mtime_ns', int(st.st_mtime * 1_000_000_000))
                         return [DiscoveredFile(root, size, mtime_ns)]
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
                 continue
             
@@ -261,7 +261,7 @@ class OptimizedFileDiscovery:
                         self.cache.put(stats)
 
                 return files, subdirs
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 return [], []
 
         num_workers = min(self.max_workers, max(len(roots) * 2, 4))
@@ -274,7 +274,7 @@ class OptimizedFileDiscovery:
                 for future in as_completed(pending):
                     try:
                         files, subdirs = future.result()
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         continue
 
                     if files:
@@ -354,11 +354,11 @@ class OptimizedFileDiscovery:
                             mtime_ns=mtime_ns
                         ))
                         
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         # Skip problematic entries
                         continue
                         
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             # Skip problematic directories
             pass
         

@@ -169,7 +169,7 @@ class FastScanWorker(QThread):
         if self._pipeline is not None:
             try:
                 self._pipeline.cancel()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def run(self) -> None:
@@ -211,7 +211,7 @@ class FastScanWorker(QThread):
                         if delta > 0:
                             self.group_discovered.emit(delta)
                         self._last_groups = g
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
 
                 warn = stats.get("warning")
@@ -257,7 +257,7 @@ class FastScanWorker(QThread):
 
             self.finished.emit(payload)
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             msg = f"{e}"
             tb = traceback.format_exc()
             self.error_occurred.emit(msg)
@@ -417,7 +417,7 @@ class FastScanWorker(QThread):
             
             self.finished.emit(result)
             
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             msg = f"{e}"
             tb = traceback.format_exc()
             self.error_occurred.emit(msg)

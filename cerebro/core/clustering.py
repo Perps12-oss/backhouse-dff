@@ -79,7 +79,7 @@ class HashClustering:
             for p in paths:
                 try:
                     size = p.stat().st_size
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     size = 0
 
                 items.append(

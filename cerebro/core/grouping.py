@@ -42,7 +42,7 @@ class SizeGrouping:
 
             try:
                 size = p.stat().st_size
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 continue
 
             # request.min_size_bytes handled in discovery already, but re-check is harmless

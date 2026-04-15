@@ -305,7 +305,7 @@ class ImageDedupEngine(BaseEngine):
                 duplicates_found=sum(len(g.files) - 1 for g in self._results),
                 bytes_reclaimable=sum(g.reclaimable for g in self._results),
             ))
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             cb(ScanProgress(
                 state=ScanState.ERROR,
                 current_file=f"Error: {str(e)}"
@@ -350,7 +350,7 @@ class ImageDedupEngine(BaseEngine):
         try:
             with Image.open(path) as img:
                 return img.size
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
     def _passes_resolution_filter(
@@ -400,7 +400,7 @@ class ImageDedupEngine(BaseEngine):
             phash_hex = digest[:16]
             dhash_hex = digest[16:32]
             return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16))
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.warning(f"Failed to compute hashes for {image_path}: {e}")
             return None
 

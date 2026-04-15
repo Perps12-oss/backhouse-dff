@@ -9,6 +9,7 @@ Opens from Settings → Appearance → [Edit / New Theme].
 
 from __future__ import annotations
 
+import logging
 import json
 import tkinter as tk
 from tkinter import colorchooser, simpledialog
@@ -38,6 +39,8 @@ except ImportError:
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.ui.feedback import FeedbackPanel, confirm_yes_no, show_text_panel
+
+logger = logging.getLogger(__name__)
 
 # Slots users can edit (subset — most important ones)
 _EDITABLE_GROUPS = [
@@ -82,7 +85,7 @@ def _load_active_colors() -> Dict[str, str]:
     try:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         return ThemeEngineV3.get().get_all_resolved()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return {}
 
 
@@ -252,7 +255,7 @@ class ThemeEditorDialog:
             if swatch:
                 try:
                     swatch.configure(bg=val)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             self._dirty = True
 
@@ -272,7 +275,7 @@ class ThemeEditorDialog:
                 theme_meta = engine.get_theme_metadata(name)
                 self._type_var.set(theme_meta.get("type", "dark"))
                 self._name_var.set(f"{name}_copy")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _preview(self) -> None:
@@ -296,7 +299,7 @@ class ThemeEditorDialog:
         out = _USER_THEMES_DIR / f"{name}.json"
         try:
             out.write_text(json.dumps(theme_data, indent=2))
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as exc:
             FeedbackPanel(self._win, "Save Theme", f"Could not save:\n{exc}", type="error")
             return
 
@@ -323,7 +326,7 @@ class ThemeEditorDialog:
             engine.set_theme(name)
             from cerebro.v2.core.theme_bridge_v2 import set_ctk_appearance_mode
             set_ctk_appearance_mode()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _on_close(self) -> None:
@@ -335,5 +338,5 @@ class ThemeEditorDialog:
     def _apply_theme(self) -> None:
         try:
             self._win.configure(fg_color=theme_color("base.background"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass

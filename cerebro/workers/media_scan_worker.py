@@ -73,7 +73,7 @@ class MediaScanWorker(QThread):
         self._cancelled = True
         try:
             self._orchestrator.cancel()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def run(self) -> None:
@@ -95,7 +95,7 @@ class MediaScanWorker(QThread):
             try:
                 engine_options = self._orchestrator.set_mode(orchestrator_mode)
                 engine_name = self._orchestrator.get_engine_name()
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 self.failed.emit(f"Failed to initialize {orchestrator_mode} engine: {e}")
                 return
 
@@ -181,7 +181,7 @@ class MediaScanWorker(QThread):
 
             self.finished.emit(result)
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             tb = traceback.format_exc()
             error_msg = f"Media scan failed: {e}"
             self.error_occurred.emit(error_msg)
@@ -238,7 +238,7 @@ class MediaScanWorker(QThread):
                     ]
                 }
                 result.append(group_dict)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Skip malformed groups
                 continue
         return result

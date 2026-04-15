@@ -7,6 +7,7 @@ Supports: General, Appearance, Performance, Deletion, About.
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, Dict, Any
 import json
@@ -437,7 +438,7 @@ class SettingsDialog(CTkToplevel):
         try:
             from cerebro.core.theme_engine_v3 import ThemeEngineV3
             return sorted(ThemeEngineV3.get().all_theme_names())
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return ["dark", "light"]
 
     def _get_active_theme(self) -> str:
@@ -445,7 +446,7 @@ class SettingsDialog(CTkToplevel):
         try:
             from cerebro.core.theme_engine_v3 import ThemeEngineV3
             return ThemeEngineV3.get().active_theme_name
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return ""
 
     def _on_theme_changed(self, theme_name: str) -> None:
@@ -457,7 +458,7 @@ class SettingsDialog(CTkToplevel):
             set_ctk_appearance_mode()
             # Persist selection
             self._settings.appearance["theme"] = theme_name
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _open_theme_editor_current(self) -> None:

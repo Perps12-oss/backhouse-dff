@@ -357,7 +357,7 @@ class ThemeEngineV3:
         for cb in self._listeners:
             try:
                 cb()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     # ------------------------------------------------------------------
@@ -419,7 +419,7 @@ class ThemeEngineV3:
                 theme = getattr(ui, "theme", None)
                 if isinstance(theme, str) and theme.strip():
                     return theme.strip()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         return None
 
@@ -432,7 +432,7 @@ class ThemeEngineV3:
             if ui is not None and hasattr(ui, "theme"):
                 ui.theme = name
                 save_config(cfg)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     # ------------------------------------------------------------------

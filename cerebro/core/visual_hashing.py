@@ -53,7 +53,7 @@ def compute_dhash(path: Path, *, orientation_invariant: bool) -> Optional[int]:
     """Classic 64-bit dHash using an 9x8 grayscale sample."""
     try:
         from PIL import Image
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         raise RuntimeError("Pillow is required for Similar Match (pip install pillow).") from e
 
     target_w, target_h = 9, 8  # 8 comparisons per row => 64 bits
@@ -74,7 +74,7 @@ def compute_dhash(path: Path, *, orientation_invariant: bool) -> Optional[int]:
     try:
         img = Image.open(path)
         img.load()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
     variants = [img]
@@ -90,14 +90,14 @@ def compute_dhash(path: Path, *, orientation_invariant: bool) -> Optional[int]:
                 img.transpose(Image.Transpose.FLIP_LEFT_RIGHT).rotate(90, expand=True),
                 img.transpose(Image.Transpose.FLIP_TOP_BOTTOM).rotate(90, expand=True),
             ]
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             variants = [img]
 
     best: Optional[int] = None
     for v in variants:
         try:
             hv = _hash(v)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             continue
         best = hv if best is None else min(best, hv)
     return best
@@ -113,17 +113,17 @@ def compute_phash(
     """64-bit pHash using 2D DCT. bitmap_size should be >= 2*hash_size."""
     try:
         from PIL import Image
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         raise RuntimeError("Pillow is required for Similar Match (pip install pillow).") from e
 
     try:
         import numpy as np
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         raise RuntimeError("numpy is required for Similar Match (pip install numpy).") from e
 
     try:
         from scipy.fftpack import dct
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         raise RuntimeError("scipy is required for Similar Match (pip install scipy).") from e
 
     hash_size = max(4, int(hash_size))
@@ -147,7 +147,7 @@ def compute_phash(
     try:
         img = Image.open(path)
         img.load()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
     variants = [img]
@@ -163,14 +163,14 @@ def compute_phash(
                 img.transpose(Image.Transpose.FLIP_LEFT_RIGHT).rotate(90, expand=True),
                 img.transpose(Image.Transpose.FLIP_TOP_BOTTOM).rotate(90, expand=True),
             ]
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             variants = [img]
 
     best: Optional[int] = None
     for v in variants:
         try:
             hv = _hash(v)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             continue
         best = hv if best is None else min(best, hv)
     return best

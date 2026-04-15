@@ -1,3 +1,4 @@
+import logging
 # cerebro/services/cache_manager.py
 
 import sqlite3
@@ -15,6 +16,7 @@ from contextlib import contextmanager
 import time
 
 from cerebro.core.models import FileItem
+logger = logging.getLogger(__name__)
 
 
 class CacheEntryStatus(Enum):
@@ -224,9 +226,9 @@ class CacheManager:
                 time.sleep(3600)  # Run every hour
                 self.cleanup_expired()
                 self.cleanup_oversized()
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 # Log but don't crash
-                print(f"Cache cleanup error: {e}")
+                logger.info(f"Cache cleanup error: {e}")
                 
     @contextmanager
     def _get_connection(self):
@@ -650,8 +652,8 @@ class CacheManager:
                     
                 return True
                 
-        except Exception as e:
-            print(f"Export failed: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Export failed: {e}")
             return False
             
     def import_cache(self, import_path: Path) -> bool:
@@ -695,8 +697,8 @@ class CacheManager:
                 
                 return True
                 
-        except Exception as e:
-            print(f"Import failed: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Import failed: {e}")
             return False
             
     def __del__(self):

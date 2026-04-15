@@ -47,7 +47,7 @@ def _score_item(item) -> int:
     # Size-based preference
     try:
         score += int(item.size_bytes // 1024)  # KB-weighted
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
 
     # Future hooks:

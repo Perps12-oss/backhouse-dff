@@ -72,7 +72,7 @@ class TrashDeletionAdapter(DeletionPort):
         try:
             import send2trash  # noqa: F401
             return True
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return False
 
     def can_handle(self, policy: DeletionPolicy) -> bool:
@@ -107,7 +107,7 @@ class TrashDeletionAdapter(DeletionPort):
                 policy=request.policy,
                 bytes_reclaimed=size,
             )
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             return SingleDeletionResult(
                 success=False,
                 path=path,
@@ -145,7 +145,7 @@ class PermanentDeletionAdapter(DeletionPort):
                 policy=request.policy,
                 bytes_reclaimed=size,
             )
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             return SingleDeletionResult(
                 success=False,
                 path=path,
@@ -170,7 +170,7 @@ class DeletionEngine:
             # optional logger (non-fatal)
             from ..services.logger import Logger  # type: ignore
             self._logger = Logger()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             self._logger = None
 
     def delete_one(self, path: Path, request: DeletionRequest) -> SingleDeletionResult:
@@ -229,7 +229,7 @@ class DeletionEngine:
             current_file = ""
             try:
                 current_file = str(getattr(op, "path", op))
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 current_file = ""
 
             if progress_cb:
@@ -238,7 +238,7 @@ class DeletionEngine:
                         if self._logger:
                             self._logger.info("Deletion cancelled by user")
                         break
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     # never allow UI callback to crash engine
                     pass
 
@@ -246,7 +246,7 @@ class DeletionEngine:
             if path is None:
                 try:
                     path = Path(op)
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
 
             res = self.delete_one(Path(path), request)

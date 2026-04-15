@@ -86,7 +86,7 @@ class BaseWorker(QThread, ABC, metaclass=CombinedMeta):
         except CancelledError:
             self.cancelled.emit()
             
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             self._error = traceback.format_exc()
             self.error.emit(self._error)
     

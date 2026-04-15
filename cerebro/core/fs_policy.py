@@ -59,7 +59,7 @@ class FileIdentity:
 def is_symlink(path: Path) -> bool:
     try:
         return path.is_symlink()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return False
 
 
@@ -89,7 +89,7 @@ def should_block_delete(
         ident = FileIdentity.from_path(path, follow_symlinks=follow_symlinks)
         if ident.is_hardlinked() and not hardlink_policy.allow_hardlink_deletes:
             return f"hardlink_protected (st_nlink={ident.nlink})"
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         return f"stat_failed: {e}"
     return None
 

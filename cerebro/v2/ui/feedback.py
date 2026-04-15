@@ -4,6 +4,7 @@ Lightweight CTk-native feedback helpers for v2 flows.
 
 from __future__ import annotations
 
+import logging
 from typing import Protocol
 
 import tkinter as tk
@@ -12,6 +13,8 @@ try:
     import customtkinter as ctk
 except ImportError:  # pragma: no cover - fallback only
     ctk = None
+
+logger = logging.getLogger(__name__)
 
 
 class CTkMessageInterface(Protocol):

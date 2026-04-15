@@ -164,7 +164,7 @@ class ScanOrchestrator:
                     self._progress_callback(progress)
 
             self._active_engine.start(wrapper_callback)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             # Report error via progress callback
             if self._progress_callback:
                 error_progress = ScanProgress(

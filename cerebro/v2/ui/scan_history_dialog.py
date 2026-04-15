@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.ui.feedback import confirm_yes_no
 from cerebro.v2.core.scan_history_db import get_scan_history_db
+
+logger = logging.getLogger(__name__)
 
 
 _LEGACY_HISTORY_FILE = Path.home() / ".cerebro" / "scan_history.json"
@@ -68,7 +71,7 @@ def _save_history(entries: List[Dict[str, Any]]) -> None:
                 duration_seconds=float(row.get("duration_seconds", 0.0)),
                 timestamp=float(row.get("timestamp", time.time())),
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             continue
 
 
@@ -216,14 +219,14 @@ class ScanHistoryDialog:
     def _apply_theme(self) -> None:
         try:
             self._win.configure(fg_color=theme_color("base.background"))
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     def _migrate_legacy_history_if_present(self) -> None:
         try:
             if _LEGACY_HISTORY_FILE.exists():
                 get_scan_history_db().import_legacy_json(_LEGACY_HISTORY_FILE)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
 

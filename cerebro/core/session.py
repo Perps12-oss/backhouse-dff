@@ -11,6 +11,8 @@ Thread-safe session management with:
 
 from __future__ import annotations
 
+import logging
+
 import threading
 import time
 import json
@@ -18,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+logger = logging.getLogger(__name__)
 
 
 class ScanState(str, Enum):
@@ -146,7 +149,7 @@ class SessionManager:
             for root in roots:
                 try:
                     normalized_roots.append(Path(root).resolve())
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     normalized_roots.append(Path(root))
             
             record = ScanRecord(
@@ -291,7 +294,7 @@ class SessionManager:
             if hasattr(group, 'to_dict'):
                 try:
                     converted_groups.append(group.to_dict())
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     converted_groups.append(str(group))
             else:
                 converted_groups.append(str(group))
@@ -442,9 +445,9 @@ class SessionManager:
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(record.to_dict(), f, indent=2, default=str)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             # Log but don't fail
-            print(f"Failed to persist session: {e}")
+            logger.info(f"Failed to persist session: {e}")
     
     def _load_persisted(self) -> None:
         """Load persisted sessions from disk."""
@@ -498,11 +501,11 @@ class SessionManager:
                     
                     self._scans[record.scan_id] = record
                     
-                except Exception as e:
-                    print(f"Failed to load session {file_path}: {e}")
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+                    logger.info(f"Failed to load session {file_path}: {e}")
         
-        except Exception as e:
-            print(f"Failed to load persisted sessions: {e}")
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            logger.info(f"Failed to load persisted sessions: {e}")
     
     def cleanup_old_sessions(self, max_age_days: int = 30) -> int:
         """Clean up old session files."""

@@ -88,7 +88,7 @@ class DirectorySignature:
                 try:
                     if entry.is_file():
                         total_size += entry.stat().st_size
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             
             last_modified = stat.st_mtime
@@ -104,7 +104,7 @@ class DirectorySignature:
                 last_modified=last_modified,
                 checksum=checksum
             )
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
 
 
@@ -265,7 +265,7 @@ def compute_quick_hash_fast(path: Path, algorithm: str = "md5") -> Optional[str]
                 hasher.update(f.read(32 * 1024))
         
         return hasher.hexdigest()
-    except:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -290,7 +290,7 @@ def compute_full_hash_mmap(path: Path, algorithm: str = "md5") -> Optional[str]:
                         for i in range(0, len(mm), HASH_CHUNK_SIZE):
                             hasher.update(mm[i:i + HASH_CHUNK_SIZE])
                 return hasher.hexdigest()
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass  # Fall through to regular I/O
         
         # Regular I/O for smaller files
@@ -299,7 +299,7 @@ def compute_full_hash_mmap(path: Path, algorithm: str = "md5") -> Optional[str]:
                 hasher.update(chunk)
         
         return hasher.hexdigest()
-    except:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -338,7 +338,7 @@ def compute_hash_cached(
             if hash_val:
                 cache.set_full(path, sig, hash_val, algo=algorithm)
             return hash_val
-    except:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return None
 
 
@@ -380,10 +380,10 @@ def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
                         continue
                     
                     results.append((file_path, size, stat.st_mtime))
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
         
-    except:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
     
     return results
@@ -452,7 +452,7 @@ class TurboScanner:
                 return
             try:
                 cb(stage, processed, total)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Never allow UI callback errors to break scanning.
                 pass
         
@@ -509,7 +509,7 @@ class TurboScanner:
             for p, _ in paths_list:
                 try:
                     total += os.path.getsize(str(p))
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             return total
 
@@ -537,7 +537,7 @@ class TurboScanner:
                     if meta is not None:
                         yield meta
                         emitted_count += 1
-                except Exception:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     meta_errors += 1
                     continue
 
@@ -586,7 +586,7 @@ class TurboScanner:
                 try:
                     stat = root.stat()
                     all_files.append((root, stat.st_size, stat.st_mtime))
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
                 continue
             
@@ -604,7 +604,7 @@ class TurboScanner:
                         if not (self.config.skip_hidden and item.name.startswith('.')):
                             if item.name not in self.config.exclude_dirs:
                                 dirs_to_scan.append(item)
-            except:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
             
             # Also scan the root itself
@@ -633,7 +633,7 @@ class TurboScanner:
                         discovered_so_far += len(results)
                         if emit and discovered_so_far % 1000 <= len(results):
                             emit("discovering", discovered_so_far, 0)
-                    except Exception as e:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                         logger.warning("[Turbo] Worker error: %s", e)
                         continue
         else:
@@ -645,7 +645,7 @@ class TurboScanner:
                     discovered_so_far += len(results)
                     if emit and discovered_so_far % 1000 <= len(results):
                         emit("discovering", discovered_so_far, 0)
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
         
         return all_files
@@ -706,7 +706,7 @@ class TurboScanner:
                     path, mtime, hash_val = future.result()
                     if hash_val:
                         hash_groups[hash_val].append((path, mtime))
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
                 finally:
                     processed += 1

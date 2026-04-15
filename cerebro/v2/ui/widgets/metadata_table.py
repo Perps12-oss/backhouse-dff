@@ -57,10 +57,6 @@ _META_CACHE: "OrderedDict[str, Dict[str, str]]" = OrderedDict()
 _META_LOCK = threading.Lock()
 
 
-def _format_bytes(n: int) -> str:
-    return format_bytes(n, decimals=2)
-
-
 def _format_timestamp(ts: float) -> str:
     if not ts:
         return "—"
@@ -86,7 +82,7 @@ def _gather_metadata(path: Path) -> Dict[str, str]:
     out["path"] = str(path.parent)
     try:
         st = path.stat()
-        out["size"] = _format_bytes(st.st_size)
+        out["size"] = format_bytes(st.st_size, decimals=2)
         out["date_modified"] = _format_timestamp(st.st_mtime)
         out["date_created"] = _format_timestamp(getattr(st, "st_birthtime", None) or st.st_ctime)
         out["date_accessed"] = _format_timestamp(st.st_atime)
@@ -110,7 +106,7 @@ def _gather_metadata(path: Path) -> Dict[str, str]:
                 if callable(getexif):
                     try:
                         exif = getexif()
-                    except Exception:
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         exif = None
                 if exif:
                     raw = exif.get(_EXIF_DATETIME_ORIGINAL) or exif.get(_EXIF_DATETIME)
@@ -118,7 +114,7 @@ def _gather_metadata(path: Path) -> Dict[str, str]:
                         parsed = _parse_exif_dt(str(raw))
                         if parsed:
                             out["date_taken"] = parsed
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.debug("image metadata failed for %s: %s", path, e)
     return out
 
@@ -213,7 +209,7 @@ class MetadataTable(CTkFrame):
             return
         try:
             meta = fut.result()
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.debug("metadata background task failed for %s: %s", path, e)
             meta = {k: "—" for k, _ in _FIELDS}
         self._cache_put(path, meta)

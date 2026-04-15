@@ -7,6 +7,7 @@ Features sub-filtering by file type and sortable columns.
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, List, Dict, Any
 from pathlib import Path
@@ -29,7 +30,7 @@ from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
 from cerebro.services.logger import get_logger
 from cerebro.utils.formatting import format_bytes
 
-logger = get_logger(__name__)
+logger = get_logger(__name__)  # wraps logging.getLogger(__name__)
 
 
 class FilterType:
@@ -514,7 +515,7 @@ class ResultsPanel(CTkFrame):
         size = self._fd_size(file_data)
         modified = getattr(file_data, "modified", file_data.get("modified", 0))
         similarity = getattr(file_data, "similarity", file_data.get("similarity", 1.0))
-        size_str = self._format_bytes(size)
+        size_str = format_bytes(size, decimals=1)
         mod_str = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M:%S") if modified else "—"
         sim_str = f"{int(similarity * 100)}%"
         show_text_panel(
@@ -635,8 +636,8 @@ class ResultsPanel(CTkFrame):
         # Load groups into treeview
         for group_idx, group in enumerate(self._filtered_groups):
             # Format size for display
-            size_str = self._format_bytes(group.total_size)
-            reclaimable_str = self._format_bytes(group.reclaimable)
+            size_str = format_bytes(group.total_size, decimals=1)
+            reclaimable_str = format_bytes(group.reclaimable, decimals=1)
 
             # Create group header
             group_text = f"Group {group.group_id} — {group.file_count} files, {reclaimable_str} reclaimable"
@@ -694,7 +695,7 @@ class ResultsPanel(CTkFrame):
             return (
                 path.name,
                 path.suffix.lstrip(".").upper() or "—",
-                self._format_bytes(file_data.size),
+                format_bytes(file_data.size, decimals=1),
                 _fmt_dur(meta.get("duration", 0)),
                 meta.get("resolution", "—"),
                 f"{int(file_data.similarity * 100)}%",
@@ -705,7 +706,7 @@ class ResultsPanel(CTkFrame):
                 meta.get("artist", "—") or "—",
                 meta.get("album", "—") or "—",
                 _fmt_dur(meta.get("duration", 0)),
-                self._format_bytes(file_data.size),
+                format_bytes(file_data.size, decimals=1),
                 f"{int(file_data.similarity * 100)}%",
             )
         elif mode == ScanMode.EMPTY_FOLDERS:
@@ -721,7 +722,7 @@ class ResultsPanel(CTkFrame):
             return (
                 path.name,
                 path.suffix.lstrip(".").upper() or "—",
-                self._format_bytes(file_data.size),
+                format_bytes(file_data.size, decimals=1),
                 str(path.parent),
                 self._format_date(file_data.modified),
             )
@@ -729,7 +730,7 @@ class ResultsPanel(CTkFrame):
             return (
                 path.name,
                 path.suffix.lstrip(".").upper() or "—",
-                self._format_bytes(file_data.size),
+                format_bytes(file_data.size, decimals=1),
                 self._format_date(file_data.modified),
                 f"{int(file_data.similarity * 100)}%",
                 meta.get("resolution", "—"),
@@ -738,7 +739,7 @@ class ResultsPanel(CTkFrame):
             return (
                 path.name,
                 path.suffix.lstrip(".").upper() or "—",
-                self._format_bytes(file_data.size),
+                format_bytes(file_data.size, decimals=1),
                 self._format_date(file_data.modified),
                 f"{int(file_data.similarity * 100)}%",
             )
@@ -769,10 +770,6 @@ class ResultsPanel(CTkFrame):
         self._results_count_label.configure(
             text=f"{len(self._filtered_groups)} groups, {total_files} files"
         )
-
-    def _format_bytes(self, bytes_count: int) -> str:
-        """Format bytes to human-readable string."""
-        return format_bytes(bytes_count, decimals=1)
 
     def _format_date(self, timestamp: float) -> str:
         """Format timestamp to readable date."""

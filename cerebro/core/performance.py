@@ -43,7 +43,7 @@ def _get_cpu_count() -> int:
         cpu_count = os.cpu_count() or 1
         # Cap at 8 to avoid diminishing returns
         return min(cpu_count, 8)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return 1
 
 
@@ -196,7 +196,7 @@ class ThreadPoolManager:
             try:
                 result = future.result(timeout=timeout)
                 results.append(result)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 # Return None or handle errors as needed
                 results.append(None)
         return results
@@ -362,7 +362,7 @@ class ProcessPoolManager:
             try:
                 result = future.result(timeout=timeout)
                 results.append(result)
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                 # Return None or handle errors as needed
                 results.append(None)
         return results

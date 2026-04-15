@@ -64,7 +64,7 @@ class TrashManager:
                 if dst_p.exists():
                     src_p.parent.mkdir(parents=True, exist_ok=True)
                     dst_p.replace(src_p)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 ok = False
 
         return ok
@@ -76,7 +76,7 @@ class TrashManager:
     def _safe_relpath(self, path: Path, scan_root: Path) -> Path:
         try:
             return path.relative_to(scan_root)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             safe = str(path).replace(":", "").lstrip("\\/")
             return Path("_external") / safe
 

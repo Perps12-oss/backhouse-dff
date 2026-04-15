@@ -7,6 +7,7 @@ Shows: Scanned, Duplicates, Groups, Reclaimable, Elapsed, Progress bar.
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional, Callable
@@ -252,7 +253,7 @@ class StatusBar(CTkFrame):
         )
 
         # Format reclaimable space
-        reclaimable = self._format_bytes(self._metrics.bytes_reclaimable)
+        reclaimable = format_bytes(self._metrics.bytes_reclaimable, decimals=1)
         self._reclaimable_label.configure(
             text=f"Reclaimable: {reclaimable}",
             text_color=theme_color("feedback.success")
@@ -391,18 +392,6 @@ class StatusBar(CTkFrame):
             progress_color=accent,
             fg_color=bg,
         )
-
-    def _format_bytes(self, bytes_count: int) -> str:
-        """
-        Format bytes to human-readable string.
-
-        Args:
-            bytes_count: Number of bytes.
-
-        Returns:
-            Human-readable string (e.g., "1.2 GB").
-        """
-        return format_bytes(bytes_count, decimals=1)
 
     def _format_time(self, seconds: float) -> str:
         """

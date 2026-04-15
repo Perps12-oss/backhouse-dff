@@ -10,6 +10,7 @@ Full Ashisoft-style toolbar:
 
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Optional, Callable, List
 from pathlib import Path
@@ -327,7 +328,7 @@ class Toolbar(CTkFrame):
         try:
             self._delete_btn.configure(state=state)
             self._move_to_btn.configure(state=state)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     # ------------------------------------------------------------------
@@ -344,7 +345,7 @@ class Toolbar(CTkFrame):
             root.bind("<Escape>",          lambda e: self._trigger_stop())
             root.bind("<Control-comma>",   lambda e: self._trigger_settings())
             root.bind("<Delete>",          lambda e: self._trigger_delete())
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
     # ------------------------------------------------------------------
@@ -383,12 +384,12 @@ class Toolbar(CTkFrame):
             else:
                 self._view_grid_btn.configure(fg_color=acc, hover_color=accH, border_width=0)
                 self._view_list_btn.configure(fg_color=sec, hover_color=secH, border_width=1, border_color=bdr)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         if fire_callback and self._on_view_mode_changed:
             try:
                 self._on_view_mode_changed(mode)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
     def _set_view_mode(self, mode: str) -> None:
@@ -416,7 +417,7 @@ class Toolbar(CTkFrame):
 
     def _apply_theme(self) -> None:
         try: self.configure(fg_color=theme_color("toolbar.background"))
-        except Exception: pass
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError): pass
 
         pairs = [
             (self._add_path_btn,  "button.secondary",  "button.secondaryHover"),
@@ -429,11 +430,11 @@ class Toolbar(CTkFrame):
         ]
         for btn, fg_slot, hov_slot in pairs:
             try: btn.configure(fg_color=theme_color(fg_slot), hover_color=theme_color(hov_slot))
-            except Exception: pass
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError): pass
 
         for sep in (self._sep1, self._sep2, self._sep3, self._sep_view):
             try: sep.configure(text_color=theme_color("toolbar.border"))
-            except Exception: pass
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError): pass
 
 
 logger = __import__('logging').getLogger(__name__)

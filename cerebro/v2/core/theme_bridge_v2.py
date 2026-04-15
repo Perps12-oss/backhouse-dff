@@ -41,7 +41,7 @@ def theme_color(slot: str, fallback: str = "#7aa2ff") -> str:
     try:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         return ThemeEngineV3.get().get_color(slot, fallback)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return fallback
 
 
@@ -53,7 +53,7 @@ def theme_colors() -> dict:
     try:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         return ThemeEngineV3.get().get_all_resolved()
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return {}
 
 
@@ -63,7 +63,7 @@ def theme_type() -> str:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         engine = ThemeEngineV3.get()
         return engine.get_theme_metadata(engine.active_theme_name).get("type", "dark")
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         return "dark"
 
 
@@ -85,7 +85,7 @@ def subscribe_to_theme(widget, apply_fn: Callable[[], None]) -> None:
     try:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         ThemeEngineV3.get().subscribe(apply_fn)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
 
 
@@ -99,7 +99,7 @@ def unsubscribe_from_theme(widget, apply_fn: Callable[[], None]) -> None:
     try:
         from cerebro.core.theme_engine_v3 import ThemeEngineV3
         ThemeEngineV3.get().unsubscribe(apply_fn)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
 
 
@@ -114,7 +114,7 @@ def set_ctk_appearance_mode() -> None:
         import customtkinter as ctk
         mode = "Dark" if is_dark_theme() else "Light"
         ctk.set_appearance_mode(mode)
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
 
 

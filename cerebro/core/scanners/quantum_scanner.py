@@ -22,6 +22,8 @@ This is the bleeding edge - requires specialized hardware and libraries.
 
 from __future__ import annotations
 
+import logging
+
 import os
 import sys
 import time
@@ -31,20 +33,21 @@ from dataclasses import dataclass
 import asyncio
 import json
 import socket
+logger = logging.getLogger(__name__)
 
 # GPU Computing
 try:
     import cupy as cp  # CUDA-accelerated NumPy
     HAS_CUPY = True
-    print("[Quantum] ✓ CUDA GPU acceleration available")
+    logger.info("[Quantum] ✓ CUDA GPU acceleration available")
 except ImportError:
     HAS_CUPY = False
-    print("[Quantum] ✗ CUDA not available (install cupy for GPU acceleration)")
+    logger.info("[Quantum] ✗ CUDA not available (install cupy for GPU acceleration)")
 
 try:
     import pyopencl as cl  # OpenCL for AMD/Intel GPUs
     HAS_OPENCL = True
-    print("[Quantum] ✓ OpenCL GPU acceleration available")
+    logger.info("[Quantum] ✓ OpenCL GPU acceleration available")
 except ImportError:
     HAS_OPENCL = False
 
@@ -52,7 +55,7 @@ except ImportError:
 try:
     import torch  # PyTorch for ML-based prediction
     HAS_TORCH = True
-    print("[Quantum] ✓ PyTorch for neural duplicate detection")
+    logger.info("[Quantum] ✓ PyTorch for neural duplicate detection")
 except ImportError:
     HAS_TORCH = False
 
@@ -60,7 +63,7 @@ except ImportError:
 try:
     import zmq  # ZeroMQ for distributed scanning
     HAS_ZMQ = True
-    print("[Quantum] ✓ ZeroMQ for distributed scanning")
+    logger.info("[Quantum] ✓ ZeroMQ for distributed scanning")
 except ImportError:
     HAS_ZMQ = False
 
@@ -69,7 +72,7 @@ try:
     import uvloop  # Ultra-fast event loop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     HAS_UVLOOP = True
-    print("[Quantum] ✓ uvloop for async I/O (2-4x faster)")
+    logger.info("[Quantum] ✓ uvloop for async I/O (2-4x faster)")
 except ImportError:
     HAS_UVLOOP = False
 
@@ -92,12 +95,12 @@ class GPUHasher:
         
         if device == "cuda" and HAS_CUPY:
             self.available = True
-            print("[GPUHasher] Using CUDA (100x faster for batches)")
+            logger.info("[GPUHasher] Using CUDA (100x faster for batches)")
         elif device == "opencl" and HAS_OPENCL:
             self.available = True
-            print("[GPUHasher] Using OpenCL (50x faster for batches)")
+            logger.info("[GPUHasher] Using OpenCL (50x faster for batches)")
         else:
-            print("[GPUHasher] No GPU available, falling back to CPU")
+            logger.info("[GPUHasher] No GPU available, falling back to CPU")
     
     def hash_batch(self, file_paths: List[Path]) -> Dict[Path, str]:
         """
@@ -132,7 +135,7 @@ class GPUHasher:
                     hash_val = str(cp.sum(gpu_data))  # Simplified
                     
                     results[path] = hash_val
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
         
         return results
@@ -170,13 +173,13 @@ class DistributedScanner:
                 self.socket = self.context.socket(zmq.PUSH)
                 for node in self.nodes:
                     self.socket.connect(f"tcp://{node}")
-                print(f"[Distributed] Master connected to {len(nodes)} workers")
+                logger.info(f"[Distributed] Master connected to {len(nodes)} workers")
             
             else:
                 # Worker receives tasks
                 self.socket = self.context.socket(zmq.PULL)
                 self.socket.bind("tcp://*:5555")
-                print(f"[Distributed] Worker listening on port 5555")
+                logger.info(f"[Distributed] Worker listening on port 5555")
     
     def distribute_work(self, directories: List[Path]):
         """Distribute scanning work to workers."""
@@ -197,7 +200,7 @@ class DistributedScanner:
                 'directories': [str(d) for d in work]
             }).encode())
         
-        print(f"[Distributed] Work distributed to {len(self.nodes)} nodes")
+        logger.info(f"[Distributed] Work distributed to {len(self.nodes)} nodes")
     
     def collect_results(self) -> List[Dict]:
         """Collect results from workers."""
@@ -245,7 +248,7 @@ class NeuralDuplicatePredictor:
                 torch.nn.Linear(32, 1),    # Output: duplicate probability
                 torch.nn.Sigmoid()
             )
-            print("[NeuralPredictor] Model loaded (50% fewer hashes needed)")
+            logger.info("[NeuralPredictor] Model loaded (50% fewer hashes needed)")
     
     def predict_duplicate(self, file_metadata: Dict) -> float:
         """
@@ -291,7 +294,7 @@ class AsyncIOEngine:
     
     def __init__(self):
         self.use_direct_io = sys.platform == 'linux'
-        print(f"[AsyncIO] Direct I/O: {'✓' if self.use_direct_io else '✗'}")
+        logger.info(f"[AsyncIO] Direct I/O: {'✓' if self.use_direct_io else '✗'}")
     
     async def read_file_async(self, path: Path) -> bytes:
         """Async file reading with zero-copy."""
@@ -307,7 +310,7 @@ class AsyncIOEngine:
             )
             
             return data
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return b''
     
     def _read_file_sync(self, path: Path) -> bytes:
@@ -324,7 +327,7 @@ class AsyncIOEngine:
                 # Regular I/O
                 with open(path, 'rb') as f:
                     return f.read()
-        except:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return b''
     
     async def hash_batch_async(self, paths: List[Path]) -> Dict[Path, str]:
@@ -401,18 +404,18 @@ class QuantumScanner:
         self.predictor = NeuralDuplicatePredictor() if self.config.use_neural_predictor else None
         self.async_io = AsyncIOEngine() if self.config.use_async_io else None
         
-        print(f"\n{'='*70}")
-        print("🚀 QUANTUM SCANNER INITIALIZED 🚀")
-        print(f"{'='*70}")
-        print(f"GPU acceleration: {'✓ ' + self.config.gpu_device if self.gpu_hasher and self.gpu_hasher.available else '✗'}")
-        print(f"Distributed: {'✓ ' + str(len(self.config.worker_nodes)) + ' nodes' if self.distributed and self.distributed.available else '✗'}")
-        print(f"Neural predictor: {'✓' if self.predictor and self.predictor.available else '✗'}")
-        print(f"Async I/O: {'✓' if self.async_io else '✗'}")
-        print(f"Workers: {self.config.workers}")
-        print(f"{'='*70}\n")
+        logger.info(f"\n{'='*70}")
+        logger.info("🚀 QUANTUM SCANNER INITIALIZED 🚀")
+        logger.info(f"{'='*70}")
+        logger.info(f"GPU acceleration: {'✓ ' + self.config.gpu_device if self.gpu_hasher and self.gpu_hasher.available else '✗'}")
+        logger.info(f"Distributed: {'✓ ' + str(len(self.config.worker_nodes)) + ' nodes' if self.distributed and self.distributed.available else '✗'}")
+        logger.info(f"Neural predictor: {'✓' if self.predictor and self.predictor.available else '✗'}")
+        logger.info(f"Async I/O: {'✓' if self.async_io else '✗'}")
+        logger.info(f"Workers: {self.config.workers}")
+        logger.info(f"{'='*70}\n")
         
-        print("⚡ TARGET: 250K files in < 10 seconds ⚡")
-        print("⚡ TARGET: 1M files in < 30 seconds ⚡\n")
+        logger.info("⚡ TARGET: 250K files in < 10 seconds ⚡")
+        logger.info("⚡ TARGET: 1M files in < 30 seconds ⚡\n")
     
     async def scan_async(self, roots: List[Path]) -> List[Dict]:
         """
@@ -422,13 +425,13 @@ class QuantumScanner:
         """
         start_time = time.time()
         
-        print("[Quantum] Phase 1: Discovery...")
+        logger.info("[Quantum] Phase 1: Discovery...")
         
         # Distributed discovery if available
         if self.distributed and self.distributed.available:
             self.distributed.distribute_work(roots)
             discovered = self.distributed.collect_results()
-            print(f"[Quantum] Distributed: {len(discovered)} files from cluster")
+            logger.info(f"[Quantum] Distributed: {len(discovered)} files from cluster")
         else:
             # Local discovery
             discovered = []
@@ -436,9 +439,9 @@ class QuantumScanner:
                 for dirpath, _, filenames in os.walk(root):
                     for name in filenames:
                         discovered.append(Path(dirpath) / name)
-            print(f"[Quantum] Local: {len(discovered)} files")
+            logger.info(f"[Quantum] Local: {len(discovered)} files")
         
-        print("[Quantum] Phase 2: Neural prediction + GPU hashing...")
+        logger.info("[Quantum] Phase 2: Neural prediction + GPU hashing...")
         
         # Neural prediction to skip obvious non-duplicates
         if self.predictor and self.predictor.available:
@@ -454,10 +457,10 @@ class QuantumScanner:
                     
                     if prob > self.config.prediction_threshold:
                         to_hash.append(path)
-                except:
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     continue
             
-            print(f"[Quantum] Neural: {len(to_hash)} files need hashing ({len(discovered) - len(to_hash)} skipped)")
+            logger.info(f"[Quantum] Neural: {len(to_hash)} files need hashing ({len(discovered) - len(to_hash)} skipped)")
         else:
             to_hash = discovered
         
@@ -478,7 +481,7 @@ class QuantumScanner:
                     for path, hash_val in batch_hashes.items()
                 ])
             
-            print(f"[Quantum] GPU: Hashed {len(results)} files on GPU")
+            logger.info(f"[Quantum] GPU: Hashed {len(results)} files on GPU")
         
         # Async I/O if available
         elif self.async_io:
@@ -491,20 +494,20 @@ class QuantumScanner:
                 }
                 for path, hash_val in hashes.items()
             ]
-            print(f"[Quantum] Async: Hashed {len(results)} files")
+            logger.info(f"[Quantum] Async: Hashed {len(results)} files")
         
         else:
             results = []
         
         elapsed = time.time() - start_time
         
-        print(f"\n{'='*70}")
-        print("🎯 QUANTUM SCANNER RESULTS 🎯")
-        print(f"{'='*70}")
-        print(f"Files processed: {len(results):,}")
-        print(f"Time: {elapsed:.2f}s")
-        print(f"Speed: {len(results) / elapsed:.0f} files/sec")
-        print(f"{'='*70}\n")
+        logger.info(f"\n{'='*70}")
+        logger.info("🎯 QUANTUM SCANNER RESULTS 🎯")
+        logger.info(f"{'='*70}")
+        logger.info(f"Files processed: {len(results):,}")
+        logger.info(f"Time: {elapsed:.2f}s")
+        logger.info(f"Speed: {len(results) / elapsed:.0f} files/sec")
+        logger.info(f"{'='*70}\n")
         
         return results
     
@@ -544,18 +547,18 @@ def quantum_scan(roots: List[Path], **kwargs) -> List[Dict]:
 
 def print_comparison():
     """Print performance comparison across all scanner generations."""
-    print("\n" + "="*70)
-    print(" CEREBRO SCANNER EVOLUTION ".center(70, "="))
-    print("="*70)
-    print(f"{'Scanner':<20} {'250K Files':<15} {'Speedup':<15} {'Features':<20}")
-    print("-"*70)
-    print(f"{'Legacy':<20} {'30+ min':<15} {'1x':<15} {'Single-threaded':<20}")
-    print(f"{'Turbo':<20} {'2.5 min':<15} {'12x':<15} {'Parallel + Cache':<20}")
-    print(f"{'Ultra':<20} {'30 sec':<15} {'60x':<15} {'Bloom + SIMD':<20}")
-    print(f"{'Quantum':<20} {'< 10 sec':<15} {'180x+':<15} {'GPU + Distributed':<20}")
-    print("="*70)
-    print("\n💡 Tip: Start with Turbo (drop-in), upgrade to Ultra/Quantum for maximum speed")
-    print()
+    logger.info("\n" + "="*70)
+    logger.info(" CEREBRO SCANNER EVOLUTION ".center(70, "="))
+    logger.info("="*70)
+    logger.info(f"{'Scanner':<20} {'250K Files':<15} {'Speedup':<15} {'Features':<20}")
+    logger.info("-"*70)
+    logger.info(f"{'Legacy':<20} {'30+ min':<15} {'1x':<15} {'Single-threaded':<20}")
+    logger.info(f"{'Turbo':<20} {'2.5 min':<15} {'12x':<15} {'Parallel + Cache':<20}")
+    logger.info(f"{'Ultra':<20} {'30 sec':<15} {'60x':<15} {'Bloom + SIMD':<20}")
+    logger.info(f"{'Quantum':<20} {'< 10 sec':<15} {'180x+':<15} {'GPU + Distributed':<20}")
+    logger.info("="*70)
+    logger.info("\n💡 Tip: Start with Turbo (drop-in), upgrade to Ultra/Quantum for maximum speed")
+    logger.info()
 
 
 if __name__ == "__main__":

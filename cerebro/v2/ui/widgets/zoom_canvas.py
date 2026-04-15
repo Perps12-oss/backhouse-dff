@@ -163,7 +163,7 @@ class ZoomCanvas(CTkCanvas):
 
             return True
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.error(f"Failed to load image {path}: {e}")
             return False
 
@@ -203,7 +203,7 @@ class ZoomCanvas(CTkCanvas):
                 tags="image"
             )
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.error(f"Failed to render image: {e}")
 
     def _get_resized_image(self, width: int, height: int, zoom: float):
@@ -226,7 +226,7 @@ class ZoomCanvas(CTkCanvas):
         if self._render_job:
             try:
                 self.after_cancel(self._render_job)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
         self._render_job = self.after(delay_ms, self._run_scheduled_render)
 
@@ -238,7 +238,7 @@ class ZoomCanvas(CTkCanvas):
         if self._fit_job:
             try:
                 self.after_cancel(self._fit_job)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
         self._fit_job = self.after_idle(self.fit_to_window)
 

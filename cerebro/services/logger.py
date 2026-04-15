@@ -81,10 +81,10 @@ def _safe_logs_dir() -> Path:
         test.write_text("ok", encoding="utf-8")
         try:
             test.unlink()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         return home_preferred
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         pass
 
     here = Path(__file__).resolve()
@@ -96,10 +96,10 @@ def _safe_logs_dir() -> Path:
         test.write_text("ok", encoding="utf-8")
         try:
             test.unlink()
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
         return preferred
-    except Exception:
+    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
         tmp = Path(tempfile.gettempdir()) / "cerebro_logs"
         tmp.mkdir(parents=True, exist_ok=True)
         return tmp
@@ -124,7 +124,7 @@ def _configure_root(level: int = logging.INFO,
             try:
                 base.removeHandler(h)
                 h.close()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
         class _Fmt(logging.Formatter):
@@ -180,7 +180,7 @@ def _configure_root(level: int = logging.INFO,
                 session_fh.setFormatter(formatter)
                 session_fh.addFilter(_ScanIdFilter())
                 base.addHandler(session_fh)
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Console logging still works even if file logging fails.
                 pass
 
@@ -284,7 +284,7 @@ def cleanup_handlers() -> None:
             try:
                 base.removeHandler(h)
                 h.close()
-            except Exception:
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
         _configured = False
 
