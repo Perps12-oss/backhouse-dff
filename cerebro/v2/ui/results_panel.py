@@ -26,6 +26,9 @@ from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
 from cerebro.v2.ui.feedback import FeedbackPanel, show_text_panel
 from cerebro.v2.ui.widgets.check_treeview import CheckTreeview
 from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
+from cerebro.services.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class FilterType:
@@ -461,7 +464,7 @@ class ResultsPanel(CTkFrame):
                 subprocess.Popen(["open", path])
             else:
                 subprocess.Popen(["xdg-open", path])
-        except Exception as exc:
+        except (OSError, tk.TclError) as exc:
             FeedbackPanel(self, "Open File", f"Could not open file:\n{exc}", type="error")
 
     def _open_folder(self, path: str) -> None:
@@ -474,15 +477,15 @@ class ResultsPanel(CTkFrame):
                 subprocess.Popen(["open", "-R", path])
             else:
                 subprocess.Popen(["xdg-open", folder])
-        except Exception as exc:
+        except (OSError, tk.TclError) as exc:
             FeedbackPanel(self, "Open Folder", f"Could not open folder:\n{exc}", type="error")
 
     def _copy_path(self, path: str) -> None:
         try:
             self.clipboard_clear()
             self.clipboard_append(path)
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            logger.warning("Clipboard copy failed: %s", exc)
 
     def _select_group_for_item(self, item_id: str) -> None:
         parent = self._treeview.parent(item_id) or item_id
@@ -537,8 +540,8 @@ class ResultsPanel(CTkFrame):
                         d["path"] = str(d["path"])
                         return d
                     return fd
-        except Exception:
-            pass
+        except (ValueError, IndexError, AttributeError, TypeError) as exc:
+            logger.debug("Failed to map tree item id '%s': %s", item_id, exc)
         return None
 
     def _sort_by(self, column: str) -> None:
@@ -671,8 +674,8 @@ class ResultsPanel(CTkFrame):
             if group_idx % 15 == 0:
                 try:
                     self.update_idletasks()
-                except Exception:
-                    pass
+                except tk.TclError as exc:
+                    logger.debug("Idle task flush skipped during tree insert: %s", exc)
 
     def _format_row(self, path: Path, file_data, meta: dict) -> tuple:
         """Return treeview column values for the current scan mode."""
@@ -843,8 +846,8 @@ class ResultsPanel(CTkFrame):
                 item_id = f"{group.group_id}_{i}"
                 try:
                     self._treeview.delete(item_id)
-                except Exception:
-                    pass
+                except tk.TclError as exc:
+                    logger.debug("Failed to delete tree row '%s': %s", item_id, exc)
                 group.files.pop(i)
 
             # Recalculate group derived fields
@@ -857,8 +860,8 @@ class ResultsPanel(CTkFrame):
                 group_row_id = f"group_{group.group_id}"
                 try:
                     self._treeview.delete(group_row_id)
-                except Exception:
-                    pass
+                except tk.TclError as exc:
+                    logger.debug("Failed to delete group row '%s': %s", group_row_id, exc)
                 self._groups.remove(group)
 
         self._filtered_groups = list(self._groups)
@@ -1025,8 +1028,8 @@ class ResultsPanel(CTkFrame):
                                 item_id = f"{group.group_id}_{i}"
                                 self._treeview.set_check(item_id, True)
                                 self._selected_count += 1
-                        except Exception:
-                            pass
+                        except (OSError, ValueError) as exc:
+                            logger.debug("Path '%s' folder match failed: %s", path_str, exc)
 
         elif rule == "select_by_extension":
             # Prompt user for extensions (comma-separated); select matching files
@@ -1223,8 +1226,8 @@ class _GettingStartedView(CTkFrame):
     def _apply_theme(self) -> None:
         try:
             self.configure(fg_color=theme_color("results.background"))
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("GettingStartedView theme application skipped: %s", exc)
 
     def _click_add(self) -> None:
         if self._on_add_folder:
@@ -1337,10 +1340,8 @@ class _FilterBar(CTkFrame):
         try:
             self.configure(fg_color=theme_color("tabs.background"))
             self._inner.configure(bg=theme_color("tabs.background"))
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("Filter bar theme application skipped: %s", exc)
         self._refresh_styles()
 
 
-# Simple logger fallback
-logger = __import__('logging').getLogger(__name__)

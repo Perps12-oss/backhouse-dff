@@ -465,8 +465,8 @@ class MainWindow(CTk, CTkMessageInterface):
             else:
                 self._horizontal_paned.sash_place(
                     0, Dimensions.LEFT_PANEL_DEFAULT_WIDTH, 0)
-        except Exception:
-            pass  # PanedWindow variant may not support sash_place
+        except (tk.TclError, AttributeError, RuntimeError) as exc:
+            logger.debug("Sash placement skipped: %s", exc)
 
     def _on_folders_changed(self, folders: List[Path]) -> None:
         """Handle folder list changes."""
@@ -603,8 +603,8 @@ class MainWindow(CTk, CTkMessageInterface):
                     bytes_reclaimable=reclaimable,
                     duration_seconds=elapsed,
                 )
-            except Exception:
-                pass
+            except (ImportError, OSError, ValueError) as exc:
+                logger.warning("Failed to record scan history entry: %s", exc)
 
             self._status_bar.update_metrics(StatusBarMetrics(
                 files_scanned=total_files,
@@ -690,21 +690,21 @@ class MainWindow(CTk, CTkMessageInterface):
         try:
             self._results_panel.pack_forget()
             self._thumbnail_grid.pack_forget()
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("Failed to hide previous view widgets: %s", exc)
         if mode == "grid":
             self._thumbnail_grid.pack(fill="both", expand=True)
             self.after(0, self._hydrate_thumbnail_grid_if_needed)
             try:
                 self._preview_panel.set_layout_mode("ashisoft")
-            except Exception:
-                pass
+            except (tk.TclError, AttributeError) as exc:
+                logger.debug("Failed to switch preview to ashisoft layout: %s", exc)
         else:
             self._results_panel.pack(fill="both", expand=True)
             try:
                 self._preview_panel.set_layout_mode("compact")
-            except Exception:
-                pass
+            except (tk.TclError, AttributeError) as exc:
+                logger.debug("Failed to switch preview to compact layout: %s", exc)
 
     def _hydrate_thumbnail_grid_if_needed(self) -> None:
         """Lazily load scan results into thumbnail grid when required."""
@@ -713,8 +713,8 @@ class MainWindow(CTk, CTkMessageInterface):
         try:
             self._thumbnail_grid.load_results(self._scan_results)
             self._thumbnail_grid_dirty = False
-        except Exception:
-            pass
+        except (RuntimeError, tk.TclError, AttributeError) as exc:
+            logger.warning("Thumbnail grid hydration failed: %s", exc)
 
     def _on_keep_a(self) -> None:
         """Handle keep file A button in preview."""
@@ -809,8 +809,8 @@ class MainWindow(CTk, CTkMessageInterface):
         if hasattr(self, '_thumbnail_grid') and self._thumbnail_grid:
             try:
                 self._thumbnail_grid.clear()
-            except Exception:
-                pass
+            except (tk.TclError, RuntimeError, AttributeError) as exc:
+                logger.debug("Failed clearing thumbnail grid on mode switch: %s", exc)
         self._thumbnail_grid_dirty = True
 
         # Update left panel scan options for this mode
@@ -834,7 +834,8 @@ class MainWindow(CTk, CTkMessageInterface):
                 from cerebro.engines.video_dedup_engine import VideoDedupEngine
                 engine = self._orchestrator._engines.get("videos")
                 ffmpeg_missing = isinstance(engine, VideoDedupEngine) and not engine._ffmpeg
-            except Exception:
+            except (ImportError, AttributeError) as exc:
+                logger.debug("FFmpeg capability probe failed: %s", exc)
                 ffmpeg_missing = False
             self._results_panel.show_ffmpeg_warning(ffmpeg_missing)
         else:
@@ -865,7 +866,7 @@ class MainWindow(CTk, CTkMessageInterface):
                 try:
                     shutil.move(str(src), str(dest_path / src.name))
                     moved += 1
-                except Exception as exc:
+                except (OSError, shutil.Error) as exc:
                     errors.append(str(exc))
         msg = f"Moved {moved} file(s) to {dest_path}"
         if errors:
@@ -948,7 +949,7 @@ class MainWindow(CTk, CTkMessageInterface):
                     success_count += 1
                     deleted_paths.append(str(file_path))
                     log_deletion_event(str(file_path), _fd_size(file_data), self.get_scan_mode())
-                except Exception as e:
+                except OSError as e:
                     failed_files.append((str(file_path), str(e)))
 
             if failed_files:
@@ -1105,8 +1106,8 @@ class MainWindow(CTk, CTkMessageInterface):
             focused = tv.focus()
             if focused and focused not in tv._group_rows:
                 tv.toggle_check(focused)
-        except Exception:
-            pass
+        except (AttributeError, tk.TclError, KeyError) as exc:
+            logger.debug("Space toggle ignored due to UI state: %s", exc)
 
     # ------------------------------------------------------------------
     # Drag-and-drop support (tkinterdnd2 optional)
@@ -1118,8 +1119,8 @@ class MainWindow(CTk, CTkMessageInterface):
             # tkinterdnd2 patches Tk/CTk with DnD support
             self.drop_target_register("DND_Files")
             self.dnd_bind("<<Drop>>", self._on_dnd_drop)
-        except Exception:
-            pass  # library not installed — silent fallback
+        except (AttributeError, tk.TclError, RuntimeError) as exc:
+            logger.debug("Drag-and-drop setup unavailable: %s", exc)
 
     def _on_dnd_drop(self, event) -> None:
         """Handle files/folders dropped onto the window."""
@@ -1138,8 +1139,8 @@ class MainWindow(CTk, CTkMessageInterface):
             self._folder_panel.set_scan_folders(
                 list(dict.fromkeys(self._folder_panel.get_scan_folders() + [path]))
             )
-        except Exception:
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            logger.warning("Failed to add dropped folder '%s': %s", path, exc)
 
     # ------------------------------------------------------------------
     # Window state persistence
@@ -1158,8 +1159,8 @@ class MainWindow(CTk, CTkMessageInterface):
         try:
             self._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             self._STATE_FILE.write_text(json.dumps(state, indent=2))
-        except Exception:
-            pass
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("Failed to persist window state: %s", exc)
 
     def _restore_window_state(self) -> None:
         """Restore last window geometry and folders if state file exists."""
@@ -1179,10 +1180,10 @@ class MainWindow(CTk, CTkMessageInterface):
                 try:
                     self._mode_tabs.set_mode(mode)
                     self._current_scan_mode = mode
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except (ValueError, tk.TclError, AttributeError) as exc:
+                    logger.debug("Saved mode restore skipped: %s", exc)
+        except (OSError, ValueError, TypeError, tk.TclError) as exc:
+            logger.warning("Failed to restore window state: %s", exc)
 
     def _apply_theme(self) -> None:
         """Apply current theme colors to all themed widgets."""
@@ -1289,8 +1290,8 @@ class _UndoToast:
         self._win.attributes("-topmost", True)
         try:
             self._win.attributes("-alpha", 0.95)
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            logger.debug("Toast transparency unsupported: %s", exc)
 
         # Content
         frame = tk.Frame(self._win, bg=self.BG, padx=14, pady=10)
@@ -1331,8 +1332,8 @@ class _UndoToast:
             if self._after_id:
                 self._parent.after_cancel(self._after_id)
             self._win.destroy()
-        except Exception:
-            pass
+        except (tk.TclError, ValueError, AttributeError) as exc:
+            logger.debug("Undo toast dismiss cleanup skipped: %s", exc)
 
     def _undo(self) -> None:
         """Attempt to restore trashed files from the platform Recycle Bin."""
@@ -1343,22 +1344,22 @@ class _UndoToast:
             try:
                 subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])
                 restored = -1  # sentinel = opened folder, not auto-restored
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("Failed to open Recycle Bin on Windows: %s", exc)
         elif sys.platform == "darwin":
             try:
                 subprocess.Popen(["open", os.path.expanduser("~/.Trash")])
                 restored = -1
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("Failed to open Trash on macOS: %s", exc)
         else:
             # Linux/XDG: try trash-restore or open file manager
             try:
                 trash_dir = Path.home() / ".local" / "share" / "Trash" / "files"
                 subprocess.Popen(["xdg-open", str(trash_dir)])
                 restored = -1
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("Failed to open Trash folder on Linux: %s", exc)
 
         if restored == -1:
             show_text_panel(
@@ -1397,20 +1398,18 @@ def _apply_loaded_settings(self: MainWindow) -> None:
         self._folder_panel.set_scan_mode(mode)
         self._results_panel.set_mode(mode)
         self._orchestrator.set_mode(mode)
-    except Exception:
-        pass
+    except (ValueError, AttributeError, tk.TclError, RuntimeError) as exc:
+        logger.warning("Failed applying persisted mode settings: %s", exc)
     try:
         self._folder_panel.set_photo_phash_dhash_defaults(
             int(self._app_settings.photo_mode.get("phash_threshold", 8)),
             int(self._app_settings.photo_mode.get("dhash_threshold", 10)),
         )
         self._folder_panel.set_scan_mode(self._current_scan_mode)
-    except Exception:
-        pass
+    except (ValueError, AttributeError, tk.TclError, TypeError) as exc:
+        logger.warning("Failed applying photo hash defaults: %s", exc)
 
 
 MainWindow._apply_loaded_settings = _apply_loaded_settings
 
 
-# Simple logger fallback
-logger = __import__('logging').getLogger(__name__)

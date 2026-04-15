@@ -36,6 +36,9 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.services.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _fmt_bytes(n: int) -> str:
@@ -88,14 +91,14 @@ class _Card(CTkFrame):
         self._thumb_ref = image
         try:
             self._thumb.configure(image=image, text="")
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("Thumbnail draw failed for item '%s': %s", self._item_id, exc)
 
     def set_placeholder(self, text: str) -> None:
         try:
             self._thumb.configure(image=None, text=text)
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("Placeholder draw failed for item '%s': %s", self._item_id, exc)
 
 
 class ThumbnailGrid(CTkFrame):
@@ -147,15 +150,15 @@ class ThumbnailGrid(CTkFrame):
             if canvas:
                 canvas.bind("<MouseWheel>", self._on_scroll_event, add="+")
                 canvas.bind("<Configure>", self._on_scroll_event, add="+")
-        except Exception:
-            pass
+        except (AttributeError, tk.TclError) as exc:
+            logger.debug("Scroll event binding skipped: %s", exc)
 
     def _apply_theme(self) -> None:
         try:
             self.configure(fg_color=theme_color("results.background"))
             self._scroll.configure(fg_color=theme_color("results.background"))
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError) as exc:
+            logger.debug("Theme apply skipped for thumbnail grid: %s", exc)
 
     def load_results(self, groups: List[Any]) -> None:
         self.clear()
@@ -177,14 +180,14 @@ class ThumbnailGrid(CTkFrame):
         if self._render_after_id:
             try:
                 self.after_cancel(self._render_after_id)
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                logger.debug("Failed to cancel render timer: %s", exc)
             self._render_after_id = None
         if self._scroll_after_id:
             try:
                 self.after_cancel(self._scroll_after_id)
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                logger.debug("Failed to cancel scroll timer: %s", exc)
             self._scroll_after_id = None
         self._render_tasks = []
         self._cards.clear()
@@ -198,8 +201,8 @@ class ThumbnailGrid(CTkFrame):
         for w in list(self._scroll.winfo_children()):
             try:
                 w.destroy()
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                logger.debug("Failed to destroy old thumbnail widget: %s", exc)
         self._empty = CTkFrame(self._scroll, fg_color="transparent")
         self._empty.pack(fill="both", expand=True)
         CTkLabel(self._empty, text="No duplicates to display", font=Typography.FONT_LG).pack(pady=(40, Spacing.SM))
@@ -227,8 +230,8 @@ class ThumbnailGrid(CTkFrame):
 
         try:
             self.update_idletasks()
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            logger.debug("Idle update skipped during batch render: %s", exc)
 
         if self._render_cursor < target or self._render_tasks:
             self._schedule_render_next_batch()
@@ -300,8 +303,8 @@ class ThumbnailGrid(CTkFrame):
         if self._scroll_after_id:
             try:
                 self.after_cancel(self._scroll_after_id)
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                logger.debug("Failed to cancel pending scroll idle callback: %s", exc)
         self._scroll_after_id = self.after(100, self._on_scroll_idle)
 
     def _on_scroll_idle(self) -> None:
@@ -326,8 +329,8 @@ class ThumbnailGrid(CTkFrame):
                 )
                 if self._render_after_id is None:
                     self._schedule_render_next_batch()
-        except Exception:
-            pass
+        except (tk.TclError, AttributeError, ValueError) as exc:
+            logger.debug("Scroll idle prefetch skipped: %s", exc)
 
     def _request_thumbnail(self, item_id: str, file_obj: Any) -> None:
         if not HAS_PIL:
@@ -366,7 +369,8 @@ class ThumbnailGrid(CTkFrame):
         self._decode_futures.pop(item_id, None)
         try:
             pil_image = future.result()
-        except Exception:
+        except (RuntimeError, OSError, ValueError) as exc:
+            logger.debug("Thumbnail decode future failed for '%s': %s", item_id, exc)
             pil_image = None
         card = self._cards.get(item_id)
         if card is None:
@@ -410,7 +414,8 @@ class ThumbnailGrid(CTkFrame):
                 img = img.convert("RGB")
                 img.thumbnail((_Card.THUMB_W, _Card.THUMB_H), Image.Resampling.LANCZOS)
                 return img.copy()
-        except Exception:
+        except (OSError, ValueError) as exc:
+            logger.debug("Thumbnail decode failed for '%s': %s", path, exc)
             return None
         finally:
             self._decode_semaphore.release()
