@@ -241,3 +241,12 @@ class ModeTabs(CTkFrame):
 
 
 logger = __import__('logging').getLogger(__name__)
+
+
+class ModeNavPanel(ModeTabs):
+    """Blueprint-compatible alias wrapper for Ashisoft mode navigation."""
+
+    def __init__(self, master=None, on_mode_change: Optional[Callable[[str], None]] = None, **kwargs):
+        super().__init__(master=master, **kwargs)
+        if on_mode_change is not None:
+            self.on_mode_changed(on_mode_change)

@@ -30,20 +30,21 @@ from cerebro.v2.core.design_tokens import (
     Spacing, Typography, Dimensions
 )
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme, set_ctk_appearance_mode
-from cerebro.v2.ui.toolbar import Toolbar
-from cerebro.v2.ui.mode_tabs import ModeTabs
+from cerebro.v2.ui.toolbar import Toolbar, TopActionToolbar
+from cerebro.v2.ui.mode_tabs import ModeTabs, ModeNavPanel
 from cerebro.v2.ui.status_bar import StatusBar, StatusBarMetrics
 from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings
 from cerebro.v2.ui.folder_panel import FolderPanel
 from cerebro.v2.ui.results_panel import ResultsPanel
 from cerebro.v2.ui.preview_panel import PreviewPanel
+from cerebro.v2.ui.feedback import CTkMessageInterface, FeedbackPanel, confirm_yes_no, show_text_panel
 from cerebro.engines.orchestrator import ScanOrchestrator
 from cerebro.engines.base_engine import (
     ScanProgress, ScanState, DuplicateGroup, DuplicateFile
 )
 
 
-class MainWindow(CTk):
+class MainWindow(CTk, CTkMessageInterface):
     """
     Main application window with complete single-window layout.
 
@@ -154,7 +155,7 @@ class MainWindow(CTk):
 
     def _build_toolbar(self) -> None:
         """Build and install toolbar."""
-        self._toolbar = Toolbar(
+        self._toolbar = TopActionToolbar(
             self._content_container,
             height=Dimensions.TOOLBAR_HEIGHT
         )
@@ -173,7 +174,7 @@ class MainWindow(CTk):
 
     def _build_mode_tabs(self) -> None:
         """Build and install mode tabs."""
-        self._mode_tabs = ModeTabs(
+        self._mode_tabs = ModeNavPanel(
             self._content_container,
             height=Dimensions.MODE_TABS_HEIGHT
         )
@@ -337,8 +338,7 @@ class MainWindow(CTk):
         """Handle start search button."""
         folders = self._folder_panel.get_scan_folders()
         if not folders:
-            from tkinter import messagebox
-            messagebox.showwarning("No Folders", "Please add at least one folder to scan.")
+            self.show_info("No Folders", "Please add at least one folder to scan.")
             return
 
         # Clear previous results
@@ -407,8 +407,7 @@ class MainWindow(CTk):
             menu.grab_release()
 
     def _show_keyboard_help(self) -> None:
-        from tkinter import messagebox
-        messagebox.showinfo("Keyboard Shortcuts", (
+        show_text_panel(self, "Keyboard Shortcuts", (
             "Ctrl+O          Add folder\n"
             "Ctrl+Enter      Start scan\n"
             "Escape          Stop scan / close dialog\n"
@@ -763,8 +762,7 @@ class MainWindow(CTk):
             msg += f"\n{len(errors)} error(s) — check console."
             for e in errors:
                 print(f"Move error: {e}")
-        from tkinter import messagebox
-        messagebox.showinfo("Move Complete", msg)
+        self.show_info("Move Complete", msg)
         # Refresh results
         self._on_refresh()
 
@@ -786,11 +784,9 @@ class MainWindow(CTk):
 
     def _on_delete_selected(self) -> None:
         """Handle delete selected action."""
-        from tkinter import messagebox
-
         selected_files = self._results_panel.get_selected_files()
         if not selected_files:
-            messagebox.showinfo(
+            self.show_info(
                 "Delete Selected",
                 "No files selected for deletion."
             )
@@ -799,12 +795,11 @@ class MainWindow(CTk):
         reclaimable_space = self._results_panel.get_reclaimable_space()
         reclaimable_str = self._format_bytes(reclaimable_space)
 
-        confirm = messagebox.askyesno(
+        confirm = self.confirm_action(
             "Send to Recycle Bin",
             f"Send {len(selected_files)} files to the Recycle Bin?\n\n"
             f"Space freed: {reclaimable_str}\n\n"
-            f"You can restore them from the Recycle Bin if needed.",
-            icon="warning"
+            f"You can restore them from the Recycle Bin if needed."
         )
 
         if confirm:
@@ -815,8 +810,7 @@ class MainWindow(CTk):
             try:
                 from send2trash import send2trash
             except ImportError:
-                from tkinter import messagebox
-                messagebox.showerror(
+                self.show_error(
                     "Dependency Missing",
                     "send2trash package is required.\n\n"
                     "Install with: pip install send2trash"
@@ -835,13 +829,14 @@ class MainWindow(CTk):
                     failed_files.append((str(file_path), str(e)))
 
             if failed_files:
-                from tkinter import messagebox
                 failed_list = "\n".join(f"{f}: {e}" for f, e in failed_files[:5])
                 more = f"\n... and {len(failed_files) - 5} more" if len(failed_files) > 5 else ""
-                messagebox.showwarning(
+                FeedbackPanel(
+                    self,
                     "Delete Partially Failed",
                     f"Deleted {success_count}/{len(selected_files)} files.\n\n"
-                    f"Failed:\n{failed_list}{more}"
+                    f"Failed:\n{failed_list}{more}",
+                    type="warning",
                 )
             elif success_count > 0:
                 # Non-blocking undo toast instead of messagebox
@@ -1233,13 +1228,31 @@ class _UndoToast:
                 pass
 
         if restored == -1:
-            from tkinter import messagebox
-            messagebox.showinfo(
+            show_text_panel(
+                self._parent,
                 "Undo",
                 "The Recycle Bin has been opened.\n"
                 "Select the files and choose 'Restore' to recover them.",
             )
         self._dismiss()
+
+
+# --- CTkMessageInterface implementation ---
+def _mw_show_error(self, title: str, message: str) -> None:
+    FeedbackPanel(self, title=title, message=message, type="error")
+
+
+def _mw_show_info(self, title: str, message: str) -> None:
+    FeedbackPanel(self, title=title, message=message, type="info")
+
+
+def _mw_confirm_action(self, title: str, message: str) -> bool:
+    return confirm_yes_no(self, title=title, message=message)
+
+
+MainWindow.show_error = _mw_show_error
+MainWindow.show_info = _mw_show_info
+MainWindow.confirm_action = _mw_confirm_action
 
 
 # Simple logger fallback

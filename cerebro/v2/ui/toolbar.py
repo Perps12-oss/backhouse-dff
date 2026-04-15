@@ -378,3 +378,6 @@ class Toolbar(CTkFrame):
 
 
 logger = __import__('logging').getLogger(__name__)
+
+# Blueprint-compatible alias.
+TopActionToolbar = Toolbar
