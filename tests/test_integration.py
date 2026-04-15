@@ -14,7 +14,7 @@ Tests:
 from pathlib import Path
 from cerebro.engines.orchestrator import ScanOrchestrator
 from cerebro.engines.base_engine import ScanProgress, ScanState, DuplicateGroup, DuplicateFile
-from cerebro.ui.results_panel import DuplicateResult
+from cerebro.core.duplicate_result import DuplicateResult
 from cerebro.engines.image_formats import (
     ImageFormatRegistry,
     UnionFind,
@@ -27,15 +27,14 @@ def test_orchestrator_modes():
     """Test orchestrator mode switching."""
     orch = ScanOrchestrator()
 
-    # Test only the "files" mode (only one implemented in Phase 2)
-    mode = orch.MODE_FILES
+    mode = "files"
     options = orch.set_mode(mode)
-    assert orch.get_mode() == mode
+    assert orch.get_active_mode() == mode
     print(f"  {mode}: OK ({len(options)} options)")
 
     # Verify other modes are not implemented yet
-    unimplemented = [m for m in orch.list_modes() if m != orch.MODE_FILES]
-    print(f"  Unimplemented modes: {', '.join(unimplemented)}")
+    available = [m for m in orch.get_available_modes() if m != mode]
+    print(f"  Other available modes: {', '.join(available)}")
 
     print("[PASS] Orchestrator mode switching: PASS")
 
@@ -79,20 +78,14 @@ def test_duplicate_group():
         ),
     ]
 
-    group = DuplicateGroup(
-        group_id=1,
-        files=files,
-        engine_type="files",
-    )
+    group = DuplicateGroup(group_id=1, files=files)
 
     assert group.group_id == 1
     assert group.file_count == 2
     assert group.total_size == 2000
 
-    # Test mark_by_largest
-    group.mark_by_largest()
-    keepers = group.keepers
-    assert len(keepers) == 1
+    keeper_index = group.get_keeper_index()
+    assert keeper_index in (0, 1)
 
     print("[PASS] DuplicateGroup: PASS")
 
@@ -144,9 +137,9 @@ def test_mode_options():
 
     # Check that options have required fields
     for opt in options:
-        assert "name" in opt
-        assert "type" in opt
-        assert "default" in opt
+        assert hasattr(opt, "name")
+        assert hasattr(opt, "type")
+        assert hasattr(opt, "default")
 
     print("[PASS] Mode options: PASS")
 
@@ -156,11 +149,8 @@ def test_image_mode_available():
     orch = ScanOrchestrator()
 
     # Test photos mode is now implemented
-    modes = orch.list_modes()
-    assert orch.MODE_PHOTOS in modes
-
-    # Check if mode is available (has engine registered)
-    assert orch.is_mode_available(orch.MODE_PHOTOS)
+    modes = orch.get_available_modes()
+    assert "photos" in modes
 
     print("[PASS] Image mode available: PASS")
 

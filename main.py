@@ -1,191 +1,33 @@
-# path: main.py
-"""
-CEREBRO — Windows-only duplicate finder (Gemini 2 style).
-Entry point: platform guard, ThemeEngine applied via MainWindow.
-"""
+"""CEREBRO v2 launcher (CustomTkinter)."""
+
 from __future__ import annotations
 
+import importlib.util
 import sys
-import os
-import traceback
-from pathlib import Path
 
-# Windows consoles often use cp1252; UTF-8 avoids UnicodeEncodeError on status symbols.
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+from cerebro.v2.ui.main_window import run_app
 
-# ============================================================================
-# WINDOWS-ONLY PLATFORM GUARD
-# ============================================================================
-if sys.platform != "win32":
-    print("CEREBRO is Windows-only. This application does not run on macOS or Linux.")
-    sys.exit(1)
 
-# ============================================================================
-# FORCE DEBUG MODE
-# ============================================================================
-os.environ["CEREBRO_DEBUG"] = "1"
-os.environ["CEREBRO_PAUSE_EXIT"] = "1"
+def _validate_environment() -> None:
+    """Warn (non-fatal) when optional photo dependencies are missing."""
+    missing = []
+    for module_name in ("imagehash", "numpy"):
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(module_name)
+    if missing:
+        print(
+            "Note: missing optional image dependencies: "
+            + ", ".join(missing)
+            + ". Install with: pip install imagehash numpy",
+            file=sys.stderr,
+        )
 
-# ============================================================================
-# GLOBAL VARIABLES
-# ============================================================================
-ROOT_DIR = Path(__file__).resolve().parent
-APP_NAME = "CEREBRO"
-APP_VERSION = "5.0.0"
-APP_ORG = "CEREBRO Labs"
 
-# ============================================================================
-# DEBUG UTILITIES
-# ============================================================================
-def pause(reason: str = "Press ENTER to exit...") -> None:
-    """Force pause - ALWAYS works. ASCII-only for Windows console."""
-    try:
-        print(f"\n[PAUSE] {reason}")
-        input()
-    except (EOFError, KeyboardInterrupt):
-        print("\n[PAUSE] Interrupted")
-    except Exception:
-        print("\n[!] Could not pause (maybe running in non-interactive console)")
-
-def print_step(step: str, success: bool = True) -> None:
-    """Print a step with status. ASCII-only for Windows console."""
-    status = "[OK]" if success else "[FAIL]"
-    print(f"{status} {step}")
-
-# ============================================================================
-# CRASH HANDLER
-# ============================================================================
-def install_crash_handlers() -> None:
-    """Install handlers to catch crashes."""
-    original_excepthook = sys.excepthook
-    
-    def crash_handler(exc_type, exc_value, exc_traceback):
-        print("\n" + "!" * 60)
-        print("CEREBRO CRASHED!")
-        print("!" * 60)
-        traceback.print_exception(exc_type, exc_value, exc_traceback)
-        
-        # Save crash log
-        try:
-            crash_file = ROOT_DIR / "crash_report.txt"
-            with open(crash_file, 'w', encoding='utf-8') as f:
-                f.write(f"CEREBRO Crash Report\n")
-                f.write(f"Time: {__import__('datetime').datetime.now()}\n\n")
-                traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
-            print(f"\n[LOG] Crash log saved to: {crash_file}")
-        except Exception:
-            pass
-        
-        # Force pause
-        pause("Crash detected. Press ENTER to exit...")
-        
-        # Call original handler
-        original_excepthook(exc_type, exc_value, exc_traceback)
-    
-    sys.excepthook = crash_handler
-
-# ============================================================================
-# SIMPLE MAIN FUNCTION
-# ============================================================================
 def main() -> int:
-    """Simple main function that definitely pauses."""
-    print(f"\n{'=' * 60}")
-    print(f"{APP_NAME} v{APP_VERSION}")
-    print(f"{'=' * 60}")
-    print("Starting in DEBUG mode...")
-    
-    # Install crash handlers
-    install_crash_handlers()
-    
-    try:
-        # Step 1: Import Qt
-        print_step("Importing PySide6...")
-        try:
-            from PySide6.QtWidgets import QApplication
-            from PySide6.QtCore import QTimer
-            print_step("PySide6 imported successfully", True)
-        except ImportError as e:
-            print_step(f"Failed to import PySide6: {e}", False)
-            pause("Install PySide6 with: pip install PySide6")
-            return 1
-        
-        # Step 2: Create Qt Application
-        print_step("Creating Qt application...")
-        app = QApplication(sys.argv)
-        app.setApplicationName(APP_NAME)
-        app.setApplicationVersion(APP_VERSION)
-        app.setOrganizationName(APP_ORG)
-        print_step("Qt application created", True)
-        
-        # Step 3: Import CEREBRO modules
-        print_step("Importing CEREBRO modules...")
-        try:
-            # Try minimal imports first
-            from cerebro.ui.main_window import MainWindow
-            print_step("MainWindow imported", True)
-        except ImportError as e:
-            print_step(f"Failed to import MainWindow: {e}", False)
-            traceback.print_exc()
-            pause("CEREBRO module import failed")
-            return 1
-        
-        # Step 4: Create main window
-        print_step("Creating main window...")
-        try:
-            window = MainWindow()
-            print_step("Main window created", True)
-        except Exception as e:
-            print_step(f"Failed to create main window: {e}", False)
-            traceback.print_exc()
-            pause("Main window creation failed")
-            return 1
-        
-        # Step 5: Show window
-        print_step("Showing main window...")
-        window.show()
-        
-        # Add a debug timer to check window status
-        def check_window():
-            if window.isVisible():
-                print_step("Window is visible", True)
-                print("\n[OK] Application is running!")
-                print("[OK] Window should be visible on screen")
-                print("[OK] Close the window to exit")
-            else:
-                print_step("Window is NOT visible!", False)
-                print("\n[!] WARNING: Window is not visible")
-                print("[!] This usually means it closed immediately")
-                print("[!] Check for errors in the console above")
-        
-        QTimer.singleShot(500, check_window)
-        
-        # Step 6: Run application
-        print("\n" + "=" * 60)
-        print("Starting Qt event loop...")
-        print("=" * 60 + "\n")
-        
-        result = app.exec()
-        
-        print(f"\n[EXIT] Application exited with code: {result}")
-        pause("Application closed. Press ENTER to exit console...")
-        
-        return result
-        
-    except Exception as e:
-        print(f"\n[ERROR] UNEXPECTED: {e}")
-        traceback.print_exc()
-        pause("Unexpected error. Press ENTER to exit...")
-        return 1
+    _validate_environment()
+    run_app()
+    return 0
 
-# ============================================================================
-# EXECUTION GUARD
-# ============================================================================
+
 if __name__ == "__main__":
-    # This will always pause, no matter what
-    exit_code = main()
-    sys.exit(exit_code)
+    raise SystemExit(main())

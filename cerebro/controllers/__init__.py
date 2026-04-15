@@ -1,12 +1,4 @@
 # cerebro/controllers/__init__.py
-"""
-Canonical controller package (Batch 5).
-Live scan control logic: re-exported from ui.controllers for clean scan path.
-"""
+"""Controller package placeholder after v2 UI migration."""
 
-from cerebro.ui.controllers.live_scan_controller import (
-    LiveScanController,
-    ControllerConfig,
-)
-
-__all__ = ["LiveScanController", "ControllerConfig"]
+__all__: list[str] = []

@@ -14,7 +14,17 @@ from collections import defaultdict
 
 from cerebro.core.fast_pipeline import FastPipeline
 from cerebro.core.models import ScanProgress
-from cerebro.ui.state_bus import StateBus
+
+
+def _allowed_extensions_for_media_type(media_type: str) -> Optional[List[str]]:
+    media_type = (media_type or "all").lower()
+    mapping = {
+        "images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"],
+        "video": [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm"],
+        "music": [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a"],
+        "documents": [".pdf", ".doc", ".docx", ".txt", ".rtf"],
+    }
+    return mapping.get(media_type)
 
 
 def _meta_path(meta: Any) -> str:
@@ -60,7 +70,7 @@ class FastScanConfig:
         allowed = d.get("allowed_extensions") or d.get("file_types")
         media_type = str(d.get("media_type", "all")).lower()
         if not allowed and media_type and media_type != "all":
-            allowed = StateBus.allowed_extensions_for_media_type(media_type)
+            allowed = _allowed_extensions_for_media_type(media_type)
         if allowed is not None:
             allowed = [e if e.startswith(".") else f".{e}" for e in (allowed or [])]
         return cls(

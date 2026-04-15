@@ -1,1 +1,0 @@
-# Top toolbar, chrome
