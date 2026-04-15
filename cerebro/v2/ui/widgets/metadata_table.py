@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover
 
 from cerebro.v2.core.design_tokens import Spacing, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.utils.formatting import format_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +58,7 @@ _META_LOCK = threading.Lock()
 
 
 def _format_bytes(n: int) -> str:
-    if not n:
-        return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB"]
-    i, s = 0, float(n)
-    while s >= 1024 and i < len(units) - 1:
-        s /= 1024
-        i += 1
-    return f"{int(s)} {units[i]}" if i == 0 else f"{s:.2f} {units[i]}"
+    return format_bytes(n, decimals=2)
 
 
 def _format_timestamp(ts: float) -> str:

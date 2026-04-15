@@ -24,6 +24,7 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Dimensions, Typography
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+from cerebro.utils.formatting import format_bytes
 
 
 class StatusBarMetrics:
@@ -401,21 +402,7 @@ class StatusBar(CTkFrame):
         Returns:
             Human-readable string (e.g., "1.2 GB").
         """
-        if bytes_count == 0:
-            return "0 B"
-
-        units = ["B", "KB", "MB", "GB", "TB"]
-        unit_index = 0
-        size = float(bytes_count)
-
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-
-        if unit_index == 0:
-            return f"{int(size)} {units[unit_index]}"
-        else:
-            return f"{size:.1f} {units[unit_index]}"
+        return format_bytes(bytes_count, decimals=1)
 
     def _format_time(self, seconds: float) -> str:
         """

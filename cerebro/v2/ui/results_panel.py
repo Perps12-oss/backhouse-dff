@@ -27,6 +27,7 @@ from cerebro.v2.ui.feedback import FeedbackPanel, show_text_panel
 from cerebro.v2.ui.widgets.check_treeview import CheckTreeview
 from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
 from cerebro.services.logger import get_logger
+from cerebro.utils.formatting import format_bytes
 
 logger = get_logger(__name__)
 
@@ -771,21 +772,7 @@ class ResultsPanel(CTkFrame):
 
     def _format_bytes(self, bytes_count: int) -> str:
         """Format bytes to human-readable string."""
-        if bytes_count == 0:
-            return "0 B"
-
-        units = ["B", "KB", "MB", "GB", "TB"]
-        unit_index = 0
-        size = float(bytes_count)
-
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-
-        if unit_index == 0:
-            return f"{int(size)} {units[unit_index]}"
-        else:
-            return f"{size:.1f} {units[unit_index]}"
+        return format_bytes(bytes_count, decimals=1)
 
     def _format_date(self, timestamp: float) -> str:
         """Format timestamp to readable date."""

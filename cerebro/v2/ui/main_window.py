@@ -45,6 +45,7 @@ from cerebro.engines.base_engine import (
     ScanProgress, ScanState, DuplicateGroup, DuplicateFile
 )
 from cerebro.services.logger import get_logger
+from cerebro.utils.formatting import format_bytes
 
 logger = get_logger(__name__)
 
@@ -662,21 +663,7 @@ class MainWindow(CTk, CTkMessageInterface):
 
     def _format_bytes(self, bytes_count: int) -> str:
         """Format bytes to human-readable string."""
-        if bytes_count == 0:
-            return "0 B"
-
-        units = ["B", "KB", "MB", "GB", "TB"]
-        unit_index = 0
-        size = float(bytes_count)
-
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-
-        if unit_index == 0:
-            return f"{int(size)} {units[unit_index]}"
-        else:
-            return f"{size:.1f} {units[unit_index]}"
+        return format_bytes(bytes_count, decimals=1)
 
     # ===================
     # PREVIEW INTEGRATION
