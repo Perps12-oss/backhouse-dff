@@ -37,6 +37,11 @@ from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings, get_settings
 from cerebro.v2.ui.folder_panel import FolderPanel
 from cerebro.v2.ui.results_panel import ResultsPanel
 from cerebro.v2.ui.preview_panel import PreviewPanel
+from cerebro.v2.ui.main_window_controllers import (
+    HistoryRecorder,
+    PreviewCoordinator,
+    ScanController,
+)
 from cerebro.v2.ui.widgets.thumbnail_grid import ThumbnailGrid
 from cerebro.v2.ui.feedback import CTkMessageInterface, FeedbackPanel, confirm_yes_no, show_text_panel
 from cerebro.v2.core.deletion_history_db import log_deletion_event
@@ -99,6 +104,9 @@ class MainWindow(CTk, CTkMessageInterface):
         # Create orchestrator
         self._orchestrator = ScanOrchestrator()
         self._orchestrator.set_mode("files")
+        self._history_recorder = HistoryRecorder(self)
+        self._preview_coordinator = PreviewCoordinator(self)
+        self._scan_controller = ScanController(self, self._history_recorder)
 
         # Initialize components
         self._setup_window()
@@ -354,63 +362,11 @@ class MainWindow(CTk, CTkMessageInterface):
 
     def _on_start_search(self) -> None:
         """Handle start search button."""
-        folders = self._folder_panel.get_scan_folders()
-        if not folders:
-            self.show_info("No Folders", "Please add at least one folder to scan.")
-            return
-
-        # Clear previous results
-        self._scan_results.clear()
-        self._results_panel.clear()
-        self._status_bar.reset()
-
-        # Reset state
-        self._scan_start_time = time.time()
-        self._eta_smoothed = 0.0
-        self._scanning = True
-        self._toolbar.set_scanning(True)
-        self._status_bar.set_scanning(True)
-        self._status_bar.start_polling(
-            lambda: self._status_bar.update_elapsed(time.time() - self._scan_start_time),
-            interval=200,
-        )
-
-        # Get scan parameters
-        scan_mode = self.get_scan_mode()
-        protected_folders = self._folder_panel.get_protected_folders()
-        scan_options = self._folder_panel.get_options()
-
-        logger.info("Starting scan in %s mode", scan_mode)
-        logger.debug("Scan folders count: %d", len(folders))
-        logger.debug("Protected folders count: %d", len(protected_folders))
-        logger.debug("Scan options: %s", scan_options)
-
-        # Collapse left panel so results get full width (user-toggleable in settings)
-        if self._app_settings.general.get("auto_collapse", True):
-            self._folder_panel.set_collapsed(True)
-
-        # Set mode and start scan
-        self._orchestrator.set_mode(scan_mode)
-
-        try:
-            self._orchestrator.start_scan(
-                folders=folders,
-                protected=protected_folders,
-                options=scan_options,
-                progress_callback=self._on_scan_progress
-            )
-            # Start polling for progress updates
-            self._start_progress_polling()
-        except RuntimeError as e:
-            logger.warning("Failed to start scan: %s", e)
-            self._on_scan_finished()
+        self._scan_controller.start_search()
 
     def _on_stop_search(self) -> None:
         """Handle stop search button."""
-        logger.info("Stopping active scan")
-        self._orchestrator.cancel()
-        # Stop will be detected via progress callback
-        # Don't reset state yet - wait for scan to fully stop
+        self._scan_controller.stop_search()
 
     def _on_settings(self) -> None:
         """Handle settings button."""
@@ -566,57 +522,7 @@ class MainWindow(CTk, CTkMessageInterface):
         Args:
             final_state: The final state of the scan (completed/cancelled/error).
         """
-        # Stop polling
-        self._stop_progress_polling()
-        self._status_bar.stop_polling()
-
-        # Update UI state
-        self._scanning = False
-        self._toolbar.set_scanning(False)
-        self._status_bar.set_scanning(False)
-
-        # Re-expand left panel so user can adjust folders before next scan
-        self._folder_panel.set_collapsed(False)
-
-        # Get results from orchestrator
-        self._scan_results = self._orchestrator.get_results()
-        logger.info("Scan finished with state %s", final_state)
-        logger.info("Found %d duplicate groups", len(self._scan_results))
-
-        # Load results into panel
-        if self._scan_results:
-            self._load_results_to_panel()
-
-        # Show completion summary in status bar (non-blocking)
-        if final_state == ScanState.COMPLETED:
-            total_files = sum(len(g.files) for g in self._scan_results)
-            reclaimable = sum(g.reclaimable for g in self._scan_results)
-            elapsed = time.time() - self._scan_start_time if self._scan_start_time > 0 else 0.0
-
-            # Record this scan in history
-            try:
-                from cerebro.v2.ui.scan_history_dialog import record_scan
-                record_scan(
-                    mode=self._current_scan_mode,
-                    folders=[str(f) for f in self._folder_panel.get_scan_folders()],
-                    groups_found=len(self._scan_results),
-                    files_found=total_files,
-                    bytes_reclaimable=reclaimable,
-                    duration_seconds=elapsed,
-                )
-            except (ImportError, OSError, ValueError) as exc:
-                logger.warning("Failed to record scan history entry: %s", exc)
-
-            self._status_bar.update_metrics(StatusBarMetrics(
-                files_scanned=total_files,
-                duplicates_found=total_files - len(self._scan_results),
-                groups_found=len(self._scan_results),
-                bytes_reclaimable=reclaimable,
-                elapsed_seconds=elapsed,
-                eta_seconds=0.0,
-                is_scanning=False,
-                progress_percent=100.0,
-            ))
+        self._scan_controller.finish_scan(final_state)
 
     def _compute_eta(self, files_scanned: int, files_total: int, elapsed: float) -> Optional[float]:
         """Estimate scan ETA using files/sec with lightweight smoothing."""
@@ -1014,11 +920,7 @@ class MainWindow(CTk, CTkMessageInterface):
 
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""
-        has_sel = len(checked_items) > 0
-        self._toolbar.set_has_selection(has_sel)
-
-        # Update preview panel
-        self._update_preview_panel(checked_items)
+        self._preview_coordinator.on_selection_changed(checked_items)
 
     def _update_preview_panel(self, checked_items: List[str]) -> None:
         """
@@ -1027,27 +929,7 @@ class MainWindow(CTk, CTkMessageInterface):
         Args:
             checked_items: List of checked item IDs.
         """
-        # Store selected file IDs for keep buttons
-        self._selected_file_ids = checked_items[:2]  # Max 2 for comparison
-
-        # Get file data for preview
-        files_data = []
-        for item_id in checked_items[:2]:  # Only show first 2 selected
-            file_data = self._get_file_data_by_id(item_id)
-            if file_data:
-                files_data.append(file_data)
-
-        # Update preview panel based on selection
-        if not files_data:
-            self._preview_panel.clear()
-        elif len(files_data) == 1:
-            # Single file preview
-            self._preview_panel.load_single(files_data[0])
-        elif len(files_data) >= 2:
-            # Side-by-side comparison
-            self._preview_panel.load_comparison(files_data[0], files_data[1])
-        else:
-            self._preview_panel.clear()
+        self._preview_coordinator.update_preview_panel(checked_items)
 
     def _set_mode(self, mode_num: int) -> None:
         """Set scan mode via keyboard shortcut (1-6)."""
