@@ -94,7 +94,7 @@ class TurboFileEngine(BaseEngine):
         self._protected: List[Path] = []
         self._options: Dict[str, Any] = {}
         self._results: List[DuplicateGroup] = []
-        self._progress: ScanProgress = ScanProgress()
+        self._progress: ScanProgress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[ScanProgress], None]] = None
@@ -165,12 +165,10 @@ class TurboFileEngine(BaseEngine):
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
             skip_hidden=not bool(opts.get("include_hidden", False)),
-            follow_symlinks=bool(opts.get("follow_symlinks", False)),
             use_multiprocessing=False,  # safer on Windows; still threaded
             use_quick_hash=True,
             use_full_hash=True,
             hash_algorithm=hash_algo,
-            max_group_size=10000,  # 0 in default means "no groups pass" — set high
             progress_callback=self._on_turbo_progress,
         )
 

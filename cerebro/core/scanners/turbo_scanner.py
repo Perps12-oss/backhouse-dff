@@ -442,13 +442,26 @@ class TurboScanner:
         Uses aggressive parallelization and caching for maximum speed.
         """
         start_time = time.time()
+
+        def _emit(stage: str, processed: int, total: int) -> None:
+            cb = self.config.progress_callback
+            if cb is None:
+                return
+            try:
+                cb(stage, processed, total)
+            except Exception:
+                # Never allow UI callback errors to break scanning.
+                pass
         
         # Phase 1: Parallel directory discovery
         print(f"[Turbo] Phase 1: Discovering files...")
-        discovered_files = self._discover_files_parallel(roots)
+        _emit("discovering", 0, 0)
+        discovered_files = self._discover_files_parallel(roots, emit=_emit)
+        _emit("discovering", len(discovered_files), len(discovered_files))
         print(f"[Turbo] Discovered {len(discovered_files)} files in {time.time() - start_time:.2f}s")
         
         # Phase 2: Group by size (instant duplicate detection)
+        _emit("grouping_by_size", len(discovered_files), len(discovered_files))
         size_groups = defaultdict(list)
         for path, size, mtime in discovered_files:
             size_groups[size].append((path, mtime))
@@ -462,7 +475,9 @@ class TurboScanner:
             print(f"[Turbo] Phase 2: Computing quick hashes...")
             quick_hash_groups = self._compute_hashes_parallel(
                 size_groups, 
-                quick=True
+                quick=True,
+                emit=_emit,
+                stage_name="hashing_partial",
             )
             print(f"[Turbo] Found {len(quick_hash_groups)} quick-hash groups")
         else:
@@ -473,7 +488,9 @@ class TurboScanner:
             print(f"[Turbo] Phase 3: Computing full hashes...")
             final_groups = self._compute_hashes_parallel(
                 quick_hash_groups,
-                quick=False
+                quick=False,
+                emit=_emit,
+                stage_name="hashing_full",
             )
             print(f"[Turbo] Found {len(final_groups)} duplicate groups")
         else:
@@ -538,13 +555,19 @@ class TurboScanner:
         if self.stats['hash_cache_hits'] + self.stats['hash_cache_misses'] > 0:
             hit_rate = self.stats['hash_cache_hits'] / (self.stats['hash_cache_hits'] + self.stats['hash_cache_misses']) * 100
             print(f"  - Hit rate: {hit_rate:.1f}%")
-    def _discover_files_parallel(self, roots: List[Path]) -> List[Tuple[Path, int, float]]:
+        _emit("complete", discovered_count, discovered_count)
+    def _discover_files_parallel(
+        self,
+        roots: List[Path],
+        emit: Optional[Callable[[str, int, int], None]] = None,
+    ) -> List[Tuple[Path, int, float]]:
         """
         Discover all files using parallel directory traversal.
         
         Uses multiprocessing to scan multiple directories simultaneously.
         """
         all_files = []
+        discovered_so_far = 0
         
         # Collect top-level directories to parallelize
         dirs_to_scan = []
@@ -600,6 +623,9 @@ class TurboScanner:
                     try:
                         results = future.result()
                         all_files.extend(results)
+                        discovered_so_far += len(results)
+                        if emit and discovered_so_far % 1000 <= len(results):
+                            emit("discovering", discovered_so_far, 0)
                     except Exception as e:
                         print(f"[Turbo] Worker error: {e}")
                         continue
@@ -609,6 +635,9 @@ class TurboScanner:
                 try:
                     results = walk_directory_worker(args)
                     all_files.extend(results)
+                    discovered_so_far += len(results)
+                    if emit and discovered_so_far % 1000 <= len(results):
+                        emit("discovering", discovered_so_far, 0)
                 except:
                     continue
         
@@ -617,7 +646,9 @@ class TurboScanner:
     def _compute_hashes_parallel(
         self, 
         groups: Dict[Any, List[Tuple[Path, float]]],
-        quick: bool = True
+        quick: bool = True,
+        emit: Optional[Callable[[str, int, int], None]] = None,
+        stage_name: str = "hashing_partial",
     ) -> Dict[str, List[Tuple[Path, float]]]:
         """
         Compute hashes in parallel with caching.
@@ -660,6 +691,8 @@ class TurboScanner:
         
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(hash_worker, pm) for pm in files_to_hash]
+            total = len(futures)
+            processed = 0
             
             for future in as_completed(futures):
                 try:
@@ -668,6 +701,10 @@ class TurboScanner:
                         hash_groups[hash_val].append((path, mtime))
                 except:
                     continue
+                finally:
+                    processed += 1
+                    if emit and (processed % 50 == 0 or processed == total):
+                        emit(stage_name, processed, total)
         
         # Filter out groups with only one file
         return {k: v for k, v in hash_groups.items() if len(v) >= 2}

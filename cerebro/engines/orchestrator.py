@@ -46,6 +46,7 @@ class ScanOrchestrator:
 
     def _register_engines(self) -> None:
         """Register all available scan engines."""
+        from cerebro.engines.turbo_file_engine import TurboFileEngine
         from cerebro.engines.file_dedup_engine import FileDedupEngine
         from cerebro.engines.image_dedup_engine import ImageDedupEngine
         from cerebro.engines.video_dedup_engine import VideoDedupEngine
@@ -53,7 +54,8 @@ class ScanOrchestrator:
         from cerebro.engines.empty_folder_engine import EmptyFolderEngine
         from cerebro.engines.large_file_engine import LargeFileEngine
 
-        self._engines["files"]         = FileDedupEngine()
+        self._engines["files"]         = TurboFileEngine()
+        self._engines["files_classic"] = FileDedupEngine()
         self._engines["photos"]        = ImageDedupEngine()
         self._engines["videos"]        = VideoDedupEngine()
         self._engines["music"]         = MusicDedupEngine()
