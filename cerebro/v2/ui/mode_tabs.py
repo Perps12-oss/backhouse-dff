@@ -105,13 +105,17 @@ class _Tab(tk.Frame):
 
     def _on_enter(self, _event=None) -> None:
         if not self._active:
-            self.configure(bg=theme_color("tabs.inactiveBackgroundHover"))
-            self._lbl.configure(bg=theme_color("tabs.inactiveBackgroundHover"))
+            hbg = theme_color("tabs.inactiveBackgroundHover")
+            fg = theme_color("tabs.inactiveForeground")
+            self.configure(bg=hbg)
+            self._lbl.configure(bg=hbg, fg=fg)
 
     def _on_leave(self, _event=None) -> None:
         if not self._active:
-            self.configure(bg=theme_color("tabs.inactiveBackground"))
-            self._lbl.configure(bg=theme_color("tabs.inactiveBackground"))
+            bg = theme_color("tabs.inactiveBackground")
+            fg = theme_color("tabs.inactiveForeground")
+            self.configure(bg=bg)
+            self._lbl.configure(bg=bg, fg=fg)
 
     def set_active(self, active: bool) -> None:
         self._active = active
@@ -122,7 +126,8 @@ class _Tab(tk.Frame):
         else:
             bg        = theme_color("tabs.inactiveBackground")
             fg        = theme_color("tabs.inactiveForeground")
-            ind_color = theme_color("tabs.inactiveBackground")  # invisible
+            # Hide underline on inactive tabs (match bar background)
+            ind_color = theme_color("tabs.background")
 
         self.configure(bg=bg)
         self._lbl.configure(bg=bg, fg=fg)

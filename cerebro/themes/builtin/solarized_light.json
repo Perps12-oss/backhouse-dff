@@ -87,6 +87,7 @@
     "feedback.infoBackground": "#DDF4FF",
     "tabs.inactiveBackground": "#FDF6E3",
     "tabs.inactiveForeground": "#586E75",
-    "tabs.inactiveBackgroundHover": "#EEE8D5"
+    "tabs.inactiveBackgroundHover": "#EEE8D5",
+    "tabs.activeBorder": "#CB4B16"
   }
 }
