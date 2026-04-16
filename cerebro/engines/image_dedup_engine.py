@@ -293,7 +293,9 @@ class ImageDedupEngine(BaseEngine):
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
         """Run scan in a background thread."""
         try:
+            t0 = time.perf_counter()
             image_files = self._get_image_files()
+            t_discover = time.perf_counter()
             self._progress = ScanProgress(
                 state=ScanState.SCANNING,
                 files_total=len(image_files),
@@ -302,8 +304,17 @@ class ImageDedupEngine(BaseEngine):
             )
             cb(dataclasses.replace(self._progress))
             groups = self._group_images(image_files)
+            t_group = time.perf_counter()
             self._results = groups if groups else []
             self._state = ScanState.COMPLETED
+            logger.info(
+                "Photo scan timings: discover=%.3fs group=%.3fs total=%.3fs files=%d groups=%d",
+                (t_discover - t0),
+                (t_group - t_discover),
+                (t_group - t0),
+                len(image_files),
+                len(self._results),
+            )
             cb(ScanProgress(
                 state=ScanState.COMPLETED,
                 files_scanned=len(image_files),
@@ -395,7 +406,7 @@ class ImageDedupEngine(BaseEngine):
 
         return True
 
-    def _compute_hashes(self, image_path: Path) -> Optional[tuple[str, str, int, int]]:
+    def _compute_hashes(self, image_path: Path) -> Optional[tuple[str, str, int, int, int, int]]:
         """
         Compute pHash and dHash for an image.
 
@@ -403,11 +414,12 @@ class ImageDedupEngine(BaseEngine):
             image_path: Path to image file.
 
         Returns:
-            Tuple of (phash_hex, dhash_hex) or None if failed.
+            Tuple of (phash_hex, dhash_hex, phash_int, dhash_int, width, height) or None if failed.
         """
         try:
             if HAS_PIL:
                 with Image.open(image_path) as img:
+                    width, height = img.size
                     # Compute pHash (perceptual hash)
                     phash_val = phash(img, hash_size=PHASH_SIZE)
                     # Compute dHash (difference hash)
@@ -415,13 +427,13 @@ class ImageDedupEngine(BaseEngine):
                     # imagehash objects serialize to hexadecimal using str(...)
                     phash_hex = str(phash_val)
                     dhash_hex = str(dhash_val)
-                    return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16))
+                    return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16), width, height)
 
             raw = image_path.read_bytes()
             digest = hashlib.sha256(raw).hexdigest()
             phash_hex = digest[:16]
             dhash_hex = digest[16:32]
-            return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16))
+            return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16), 0, 0)
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.warning(f"Failed to compute hashes for {image_path}: {e}")
             return None
@@ -439,85 +451,114 @@ class ImageDedupEngine(BaseEngine):
         if not image_files:
             return []
 
-        # Per-file records used for clustering and final group conversion
-        records: list[dict] = []
-        uf = UnionFind()
-
         total_files = len(image_files)
         processed = 0
         self._progress.stage = "analyzing_images"
         self._progress.files_total = total_files
-
+        t_hash_start = time.perf_counter()
+        # Hashing is the dominant cost in photo mode; parallelize misses.
+        records_by_idx: list[Optional[dict]] = [None] * total_files
+        future_to_job: dict = {}
         for idx, image_path in enumerate(image_files):
             if self._cancel_event.is_set():
                 return []
 
-            processed += 1
-            uf.add(idx)
-
-            # Check cache first
-            stat = image_path.stat()
+            try:
+                stat = image_path.stat()
+            except OSError:
+                continue
             mtime = stat.st_mtime
             size = stat.st_size
 
-            phash_hex: Optional[str] = None
-            dhash_hex: Optional[str] = None
-            phash_int: Optional[int] = None
-            dhash_int: Optional[int] = None
-
+            cached_phash: Optional[str] = None
+            cached_dhash: Optional[str] = None
             if self._cache is not None:
                 cached_phash = self._cache.get(image_path, mtime, size, "phash")
                 cached_dhash = self._cache.get(image_path, mtime, size, "dhash")
-                if cached_phash and cached_dhash:
-                    phash_hex = cached_phash
-                    dhash_hex = cached_dhash
-                    phash_int = int(cached_phash, 16)
-                    dhash_int = int(cached_dhash, 16)
 
-            # Compute hashes
-            if phash_hex is None or dhash_hex is None:
-                hashes = self._compute_hashes(image_path)
-                if not hashes:
-                    continue
-                phash_hex, dhash_hex, phash_int, dhash_int = hashes
+            if cached_phash and cached_dhash:
+                records_by_idx[idx] = {
+                    "path": image_path,
+                    "size": size,
+                    "modified": mtime,
+                    "phash_hex": cached_phash,
+                    "dhash_hex": cached_dhash,
+                    "phash_int": int(cached_phash, 16),
+                    "dhash_int": int(cached_dhash, 16),
+                    "width": 0,
+                    "height": 0,
+                }
+                processed += 1
+                self._progress.files_scanned = processed
+                self._progress.current_file = str(image_path)
+                if processed % 25 == 0 and self._callback:
+                    self._callback(dataclasses.replace(self._progress))
+                continue
+
+            if self._worker_pool is None:
+                self._worker_pool = ThreadPoolExecutor(
+                    max_workers=min(32, (os.cpu_count() or 4) * 2)
+                )
+            fut = self._worker_pool.submit(self._compute_hashes, image_path)
+            future_to_job[fut] = (idx, image_path, mtime, size)
+
+        for fut in as_completed(list(future_to_job.keys())):
+            if self._cancel_event.is_set():
+                for pending in future_to_job:
+                    pending.cancel()
+                return []
+
+            idx, image_path, mtime, size = future_to_job[fut]
+            hashes = fut.result()
+            if hashes:
+                phash_hex, dhash_hex, phash_int, dhash_int, width, height = hashes
                 if self._cache is not None:
                     self._cache.set(image_path, mtime, size, "phash", phash_hex)
                     self._cache.set(image_path, mtime, size, "dhash", dhash_hex)
+                records_by_idx[idx] = {
+                    "path": image_path,
+                    "size": size,
+                    "modified": mtime,
+                    "phash_hex": phash_hex,
+                    "dhash_hex": dhash_hex,
+                    "phash_int": phash_int,
+                    "dhash_int": dhash_int,
+                    "width": width,
+                    "height": height,
+                }
 
-            record = {
-                "path": image_path,
-                "size": size,
-                "modified": mtime,
-                "phash_hex": phash_hex,
-                "dhash_hex": dhash_hex,
-                "phash_int": phash_int,
-                "dhash_int": dhash_int,
-            }
-            records.append(record)
-
-            # Update progress (UI also polls get_progress() every ~200ms)
+            processed += 1
             self._progress.files_scanned = processed
             self._progress.current_file = str(image_path)
+            if (processed % 25 == 0 or processed == total_files) and self._callback:
+                self._callback(dataclasses.replace(self._progress))
 
-            if processed % 25 == 0 or processed == total_files:
-                if self._callback:
-                    self._callback(dataclasses.replace(self._progress))
+        records: list[dict] = [r for r in records_by_idx if r is not None]
+        if not records:
+            return []
+        t_hash_end = time.perf_counter()
+        uf = UnionFind()
+        for idx in range(len(records)):
+            uf.add(idx)
 
         # Connectivity rule: both pHash and dHash distances must satisfy thresholds.
         phash_threshold = int(self._options.get("phash_threshold", 8))
         dhash_threshold = int(self._options.get("dhash_threshold", 10))
+        t_cluster_start = time.perf_counter()
         for i in range(len(records)):
             for j in range(i + 1, len(records)):
                 a = records[i]
                 b = records[j]
-                ph_dist = hamming_distance(a["phash_int"], b["phash_int"])
-                dh_dist = hamming_distance(a["dhash_int"], b["dhash_int"])
+                ph_dist = (a["phash_int"] ^ b["phash_int"]).bit_count()
+                dh_dist = (a["dhash_int"] ^ b["dhash_int"]).bit_count()
                 if ph_dist <= phash_threshold and dh_dist <= dhash_threshold:
                     uf.union(i, j)
+        t_cluster_end = time.perf_counter()
 
         # Create duplicate groups
         groups: List[DuplicateGroup] = []
         group_id = 0
+        t_build_start = time.perf_counter()
         for group_indices in uf.get_groups():
             if len(group_indices) <= 1:
                 continue
@@ -527,7 +568,7 @@ class ImageDedupEngine(BaseEngine):
             keeper_record = max(
                 group_records,
                 key=lambda r: (
-                    self._resolution_score(r["path"]),
+                    (r.get("width", 0) * r.get("height", 0)),
                     r["size"],
                 ),
             )
@@ -549,7 +590,15 @@ class ImageDedupEngine(BaseEngine):
                         extension=rec["path"].suffix.lower(),
                         is_keeper=(rec["path"] == keeper_record["path"]),
                         similarity=similarity,
-                        metadata={},
+                        metadata={
+                            "width": rec.get("width", 0),
+                            "height": rec.get("height", 0),
+                            "resolution": (
+                                f'{rec.get("width", 0)}×{rec.get("height", 0)}'
+                                if rec.get("width", 0) and rec.get("height", 0)
+                                else "—"
+                            ),
+                        },
                     )
                 )
 
@@ -563,6 +612,15 @@ class ImageDedupEngine(BaseEngine):
                 )
             )
             group_id += 1
+        t_build_end = time.perf_counter()
+        logger.info(
+            "Photo grouping timings: hash=%.3fs cluster=%.3fs build=%.3fs records=%d groups=%d",
+            (t_hash_end - t_hash_start),
+            (t_cluster_end - t_cluster_start),
+            (t_build_end - t_build_start),
+            len(records),
+            len(groups),
+        )
 
         return groups
 
