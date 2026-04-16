@@ -215,13 +215,14 @@ class CheckTreeview(ttk.Treeview):
 
         self.set_check(item_id, new_state)
 
-    def set_check(self, item_id: str, checked: bool) -> None:
+    def set_check(self, item_id: str, checked: bool, *, notify: bool = True) -> None:
         """
         Set checkbox state for an item.
 
         Args:
             item_id: The item ID to update.
             checked: New checkbox state.
+            notify: Whether to emit callbacks/events for this change.
         """
         self._item_states[item_id] = checked
 
@@ -236,49 +237,50 @@ class CheckTreeview(ttk.Treeview):
             values[0] = check_icon
             self.item(item_id, values=tuple(values))
 
-        # Notify callback
-        if self._check_callback:
-            self._check_callback(item_id, checked)
+        if notify:
+            # Notify callback
+            if self._check_callback:
+                self._check_callback(item_id, checked)
 
-        # Fire virtual event
-        self.event_generate("<<CheckChanged>>")
+            # Fire virtual event
+            self.event_generate("<<CheckChanged>>")
 
-    def check_all(self) -> None:
+    def check_all(self, *, notify: bool = True) -> None:
         """Check all items (not group headers)."""
         for item_id, state in self._item_states.items():
             if not state and item_id not in self._group_rows:
-                self.set_check(item_id, True)
+                self.set_check(item_id, True, notify=notify)
 
-    def uncheck_all(self) -> None:
+    def uncheck_all(self, *, notify: bool = True) -> None:
         """Uncheck all items (not group headers)."""
         for item_id, state in self._item_states.items():
             if state and item_id not in self._group_rows:
-                self.set_check(item_id, False)
+                self.set_check(item_id, False, notify=notify)
 
-    def invert_checks(self) -> None:
+    def invert_checks(self, *, notify: bool = True) -> None:
         """Invert checkbox state for all items (not group headers)."""
         for item_id, state in self._item_states.items():
             if item_id not in self._group_rows:
-                self.set_check(item_id, not state)
+                self.set_check(item_id, not state, notify=notify)
 
-    def check_group(self, group_id: str) -> None:
+    def check_group(self, group_id: str, *, notify: bool = True) -> None:
         """Check all items in a group."""
         children = self.get_children(group_id)
         for child_id in children:
-            self.set_check(child_id, True)
+            self.set_check(child_id, True, notify=notify)
 
-    def uncheck_group(self, group_id: str) -> None:
+    def uncheck_group(self, group_id: str, *, notify: bool = True) -> None:
         """Uncheck all items in a group."""
         children = self.get_children(group_id)
         for child_id in children:
-            self.set_check(child_id, False)
+            self.set_check(child_id, False, notify=notify)
 
-    def invert_group(self, group_id: str) -> None:
+    def invert_group(self, group_id: str, *, notify: bool = True) -> None:
         """Invert checkbox state for all items in a group."""
         children = self.get_children(group_id)
         for child_id in children:
             current = self._item_states.get(child_id, False)
-            self.set_check(child_id, not current)
+            self.set_check(child_id, not current, notify=notify)
 
     def get_checked(self) -> List[str]:
         """

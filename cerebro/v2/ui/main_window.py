@@ -11,6 +11,7 @@ import logging
 import os
 import tkinter as tk
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -830,8 +831,14 @@ class MainWindow(CTk, CTkMessageInterface):
     def _on_move_to(self) -> None:
         """Handle Move To toolbar button — ask for destination, move checked files."""
         from tkinter import filedialog
+        def _fd_path(fd: Any) -> str:
+            if isinstance(fd, dict):
+                return str(fd.get("path", ""))
+            return str(getattr(fd, "path", ""))
+
         selected_files = self._results_panel.get_selected_files()
         if not selected_files:
+            self.show_info("Move Selected", "No files selected to move.")
             return
         dest = filedialog.askdirectory(title="Move files to…")
         if not dest:
@@ -840,7 +847,7 @@ class MainWindow(CTk, CTkMessageInterface):
         dest_path = Path(dest)
         moved, errors = 0, []
         for f in selected_files:
-            src = Path(f.get("path", ""))
+            src = Path(_fd_path(f))
             if src.exists():
                 try:
                     shutil.move(str(src), str(dest_path / src.name))
@@ -908,10 +915,6 @@ class MainWindow(CTk, CTkMessageInterface):
             )
 
         if confirm:
-            # Actually delete files using send2trash
-            success_count = 0
-            failed_files = []
-
             try:
                 from send2trash import send2trash
             except ImportError:
@@ -922,46 +925,79 @@ class MainWindow(CTk, CTkMessageInterface):
                 )
                 return
 
-            # Delete each selected file
-            deleted_paths: List[str] = []
-            for file_data in selected_files:
-                file_path = Path(_fd_path(file_data))
-                try:
-                    send2trash(str(file_path))
-                    success_count += 1
-                    deleted_paths.append(str(file_path))
-                    log_deletion_event(str(file_path), _fd_size(file_data), self.get_scan_mode())
-                except OSError as e:
-                    failed_files.append((str(file_path), str(e)))
-
-            if failed_files:
-                failed_list = "\n".join(f"{f}: {e}" for f, e in failed_files[:5])
-                more = f"\n... and {len(failed_files) - 5} more" if len(failed_files) > 5 else ""
-                FeedbackPanel(
-                    self,
-                    "Delete Partially Failed",
-                    f"Deleted {success_count}/{len(selected_files)} files.\n\n"
-                    f"Failed:\n{failed_list}{more}",
-                    type="warning",
-                )
-            elif success_count > 0:
-                # Non-blocking undo toast instead of messagebox
-                _UndoToast(self, success_count, reclaimable_str, deleted_paths)
-
-            # Remove deleted files from results
-            self._remove_deleted_files(selected_files)
-
-            # Clear selection
-            self._on_deselect_all()
             self._toolbar.set_has_selection(False)
+            self._status_bar.flash_message("Deleting selected files...")
 
-            # Update status bar reclaimable
-            new_reclaimable = self._results_panel.get_reclaimable_space()
-            self._status_bar.update_reclaimable(new_reclaimable)
+            def _delete_worker() -> None:
+                success_count = 0
+                failed_files: List[tuple[str, str]] = []
+                deleted_paths: List[str] = []
+                deleted_entries: List[Any] = []
+
+                for file_data in selected_files:
+                    file_path = Path(_fd_path(file_data))
+                    try:
+                        send2trash(str(file_path))
+                        success_count += 1
+                        deleted_paths.append(str(file_path))
+                        deleted_entries.append(file_data)
+                        log_deletion_event(str(file_path), _fd_size(file_data), self.get_scan_mode())
+                    except OSError as e:
+                        failed_files.append((str(file_path), str(e)))
+
+                self.after(
+                    0,
+                    lambda: self._finalize_delete_selected(
+                        selected_files=selected_files,
+                        deleted_entries=deleted_entries,
+                        deleted_paths=deleted_paths,
+                        failed_files=failed_files,
+                        success_count=success_count,
+                        reclaimable_str=reclaimable_str,
+                    ),
+                )
+
+            threading.Thread(target=_delete_worker, daemon=True, name="delete-selected").start()
+
+    def _finalize_delete_selected(
+        self,
+        *,
+        selected_files: List[Any],
+        deleted_entries: List[Any],
+        deleted_paths: List[str],
+        failed_files: List[tuple[str, str]],
+        success_count: int,
+        reclaimable_str: str,
+    ) -> None:
+        """Apply UI updates after background recycle-bin operation finishes."""
+        if failed_files:
+            failed_list = "\n".join(f"{f}: {e}" for f, e in failed_files[:5])
+            more = f"\n... and {len(failed_files) - 5} more" if len(failed_files) > 5 else ""
+            FeedbackPanel(
+                self,
+                "Delete Partially Failed",
+                f"Deleted {success_count}/{len(selected_files)} files.\n\n"
+                f"Failed:\n{failed_list}{more}",
+                type="warning",
+            )
+        elif success_count > 0:
+            _UndoToast(self, success_count, reclaimable_str, deleted_paths)
+
+        if deleted_entries:
+            self._remove_deleted_files(deleted_entries)
+
+        # Deletion refresh already renders remaining rows unchecked.
+        self._toolbar.set_has_selection(False)
+        new_reclaimable = self._results_panel.get_reclaimable_space()
+        self._status_bar.update_reclaimable(new_reclaimable)
+        if success_count > 0:
+            self._status_bar.flash_message(f"Deleted {success_count} file(s).")
+        elif failed_files:
+            self._status_bar.flash_message("No files were deleted (some failed).")
 
     def _remove_deleted_files(self, deleted_files: List[Dict[str, Any]]) -> None:
         """
-        Remove deleted files from the results panel.
+        Remove deleted files from results and keep list/grid views in sync.
 
         Args:
             deleted_files: List of file data dictionaries for deleted files.
@@ -971,41 +1007,19 @@ class MainWindow(CTk, CTkMessageInterface):
                 return str(fd.get("path", ""))
             return str(getattr(fd, "path", ""))
 
-        def _fd_size(fd: Any) -> int:
-            if isinstance(fd, dict):
-                return int(fd.get("size", 0))
-            return int(getattr(fd, "size", 0))
+        deleted_paths = [p for p in (_fd_path(f) for f in deleted_files) if p]
+        if not deleted_paths:
+            return
 
-        deleted_paths = {_fd_path(f) for f in deleted_files}
+        # Incremental in-place tree update is much cheaper than a full rebuild.
+        self._results_panel.remove_paths(deleted_paths)
+        # Keep top-level snapshot aligned with the panel's in-memory groups.
+        self._scan_results = list(self._results_panel._groups)
 
-        # Remove deleted files from filtered groups
-        groups_to_update = []
-        for group in self._results_panel._filtered_groups:
-            # Filter out deleted files
-            remaining_files = [
-                f for f in group.files
-                if _fd_path(f) not in deleted_paths
-            ]
-
-            if remaining_files:
-                # Update group with remaining files
-                new_total_size = sum(_fd_size(f) for f in remaining_files)
-                new_reclaimable = new_total_size - max(_fd_size(f) for f in remaining_files) if remaining_files else 0
-
-                group.files = remaining_files
-                group.total_size = new_total_size
-                group.reclaimable = new_reclaimable
-                groups_to_update.append(group)
-            # If group is now empty, it will be removed by _refresh_treeview
-
-        # Update filtered groups
-        self._results_panel._filtered_groups = [
-            g for g in self._results_panel._filtered_groups if g.files
-        ]
-
-        # Refresh treeview
-        self._results_panel._refresh_treeview()
-        self._results_panel._update_status()
+        # Ensure thumbnail grid reflects deletions too (prevents stale cards).
+        self._thumbnail_grid_dirty = True
+        if self._view_mode == "grid":
+            self.after(0, self._hydrate_thumbnail_grid_if_needed)
 
     def _on_selection_changed(self, checked_items: List[str]) -> None:
         """Handle selection changes from results panel."""

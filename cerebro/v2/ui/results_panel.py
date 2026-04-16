@@ -88,13 +88,79 @@ class _ScanCompleteBanner(CTkFrame):
         self._auto_btn: Optional[CTkButton] = None
         self._text_label: Optional[CTkLabel] = None
         self._inner: Optional[CTkFrame] = None
+        self._show_after_id: Optional[str] = None
+        self._anim_after_id: Optional[str] = None
+        self._anim_step: int = 0
+        self._anim_targets: List[tuple] = []
+        self._content_row: Optional[CTkFrame] = None
         subscribe_to_theme(self, self._apply_theme)
+
+    @staticmethod
+    def _blend_hex(start: str, end: str, t: float) -> str:
+        """Blend two #RRGGBB colors for simple fade animation."""
+        if not (isinstance(start, str) and isinstance(end, str)):
+            return end
+        if not (start.startswith("#") and end.startswith("#") and len(start) >= 7 and len(end) >= 7):
+            return end
+        t = max(0.0, min(1.0, float(t)))
+        try:
+            sr, sg, sb = int(start[1:3], 16), int(start[3:5], 16), int(start[5:7], 16)
+            er, eg, eb = int(end[1:3], 16), int(end[3:5], 16), int(end[5:7], 16)
+        except ValueError:
+            return end
+        r = int(sr + (er - sr) * t)
+        g = int(sg + (eg - sg) * t)
+        b = int(sb + (eb - sb) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _cancel_animation_jobs(self) -> None:
+        if self._show_after_id:
+            try:
+                self.after_cancel(self._show_after_id)
+            except tk.TclError:
+                pass
+            self._show_after_id = None
+        if self._anim_after_id:
+            try:
+                self.after_cancel(self._anim_after_id)
+            except tk.TclError:
+                pass
+            self._anim_after_id = None
+
+    def schedule_show(self, delay_ms: int = 260, **kwargs) -> None:
+        """Show banner after a brief delay for smoother scan-to-results transition."""
+        self._cancel_animation_jobs()
+        self._show_after_id = self.after(delay_ms, lambda: self.show(**kwargs))
 
     def _apply_theme(self) -> None:
         try:
             self.configure(fg_color=theme_color("base.backgroundElevated"))
         except (tk.TclError, AttributeError, ValueError) as exc:
             logger.debug("ScanCompleteBanner theme skipped: %s", exc)
+
+    def _animate_in(self) -> None:
+        steps = 8
+        self._anim_step += 1
+        t = self._anim_step / steps
+        top_start = Spacing.LG
+        top_end = Spacing.SM
+        if self._content_row is not None:
+            top = int(top_start + (top_end - top_start) * t)
+            try:
+                self._content_row.pack_configure(pady=(top, Spacing.SM))
+            except tk.TclError:
+                pass
+
+        for widget, start_color, end_color in self._anim_targets:
+            try:
+                widget.configure(text_color=self._blend_hex(start_color, end_color, t))
+            except (tk.TclError, AttributeError):
+                pass
+
+        if self._anim_step < steps:
+            self._anim_after_id = self.after(28, self._animate_in)
+        else:
+            self._anim_after_id = None
 
     def show(
         self,
@@ -105,9 +171,11 @@ class _ScanCompleteBanner(CTkFrame):
         bytes_reclaimable: int,
         elapsed_seconds: float,
     ) -> None:
+        self._cancel_animation_jobs()
         for w in self.winfo_children():
             w.destroy()
-        self._inner = CTkFrame(self, fg_color="transparent")
+        self._show_after_id = None
+        self._inner = CTkFrame(self, fg_color=theme_color("base.backgroundElevated"), corner_radius=10)
         self._inner.pack(fill="both", expand=True, padx=0, pady=0)
 
         dur = _format_duration(elapsed_seconds)
@@ -134,21 +202,24 @@ class _ScanCompleteBanner(CTkFrame):
             detail = "See logs for details."
             border = theme_color("button.danger")
 
-        stripe = CTkFrame(self._inner, width=6, fg_color=border, corner_radius=0)
+        stripe = CTkFrame(self._inner, width=8, fg_color=border, corner_radius=0)
         stripe.pack(side="left", fill="y")
 
         row = CTkFrame(self._inner, fg_color="transparent")
-        row.pack(side="left", fill="both", expand=True, padx=(Spacing.SM, Spacing.MD), pady=(Spacing.SM, Spacing.XS))
+        row.pack(side="left", fill="both", expand=True, padx=(Spacing.MD, Spacing.MD), pady=(Spacing.LG, Spacing.SM))
+        self._content_row = row
 
         header = CTkFrame(row, fg_color="transparent")
         header.pack(fill="x")
-        CTkLabel(
+        icon = "🏆" if (final_state == ScanState.COMPLETED and groups_found > 0) else ("✓" if final_state == ScanState.COMPLETED else ("⏹" if final_state == ScanState.CANCELLED else "⚠"))
+        headline_label = CTkLabel(
             header,
-            text=headline,
+            text=f"{icon}  {headline}",
             font=("", 19, "bold"),
             text_color=theme_color("base.foreground"),
             anchor="w",
-        ).pack(side="left")
+        )
+        headline_label.pack(side="left")
 
         dismiss = CTkButton(
             header,
@@ -162,14 +233,53 @@ class _ScanCompleteBanner(CTkFrame):
         )
         dismiss.pack(side="right")
 
+        stats = CTkFrame(row, fg_color="transparent")
+        stats.pack(fill="x", pady=(Spacing.XS, 0))
+
+        stat_value_labels: List[CTkLabel] = []
+
+        def _stat_chip(label: str, value: str) -> None:
+            chip = CTkFrame(stats, fg_color=theme_color("base.backgroundTertiary"), corner_radius=8)
+            chip.pack(side="left", padx=(0, Spacing.SM), pady=(0, Spacing.XS))
+            value_label = CTkLabel(
+                chip,
+                text=value,
+                font=("", 16, "bold"),
+                text_color=theme_color("base.foreground"),
+            )
+            value_label.pack(anchor="w", padx=Spacing.SM, pady=(Spacing.XS, 0))
+            stat_value_labels.append(value_label)
+            CTkLabel(
+                chip,
+                text=label,
+                font=Typography.FONT_XS,
+                text_color=theme_color("base.foregroundSecondary"),
+            ).pack(anchor="w", padx=Spacing.SM, pady=(0, Spacing.XS))
+
+        _stat_chip("Groups", f"{groups_found:,}")
+        _stat_chip("Duplicates", f"{duplicates_found:,}")
+        _stat_chip("Reclaimable", format_bytes(bytes_reclaimable))
+        _stat_chip("Elapsed", dur)
+
         actions = CTkFrame(row, fg_color="transparent")
-        actions.pack(side="bottom", fill="x", pady=(Spacing.XS, 0))
+        actions.pack(side="bottom", fill="x", pady=(Spacing.SM, 0))
+        review_btn = CTkButton(
+            actions,
+            text="Review results",
+            width=126,
+            height=30,
+            font=Typography.FONT_SM,
+            fg_color=theme_color("button.secondary"),
+            hover_color=theme_color("button.secondaryHover"),
+            command=self._on_dismiss,
+        )
+        review_btn.pack(side="right")
         if final_state == ScanState.COMPLETED and groups_found > 0:
             self._auto_btn = CTkButton(
                 actions,
                 text="Auto-mark",
                 width=100,
-                height=28,
+                height=30,
                 font=Typography.FONT_SM,
                 fg_color=theme_color("button.primary"),
                 hover_color=theme_color("button.primaryHover"),
@@ -187,10 +297,20 @@ class _ScanCompleteBanner(CTkFrame):
         )
         self._text_label.pack(side="top", fill="x", pady=(Spacing.XS, 0))
 
+        # Subtle entrance: slide up + text fade from muted to target.
+        muted = theme_color("base.foregroundMuted")
+        self._anim_targets = [(headline_label, muted, theme_color("base.foreground"))]
+        for lbl in stat_value_labels:
+            self._anim_targets.append((lbl, muted, theme_color("base.foreground")))
+        self._anim_targets.append((self._text_label, muted, theme_color("base.foregroundSecondary")))
+        self._anim_step = 0
+        self._anim_after_id = self.after(16, self._animate_in)
+
         if not self.winfo_ismapped():
             self.pack(fill="x", padx=Spacing.XS, pady=(Spacing.XS, 0), before=self.master._status_frame)
 
     def hide(self) -> None:
+        self._cancel_animation_jobs()
         if self.winfo_ismapped():
             self.pack_forget()
 
@@ -1021,7 +1141,7 @@ class ResultsPanel(CTkFrame):
 
         self._refresh_treeview()
 
-    def _refresh_treeview(self) -> None:
+    def _refresh_treeview(self, *, precheck_non_keepers: bool = True) -> None:
         """Refresh treeview with filtered results."""
         self._treeview.clear()
 
@@ -1050,7 +1170,7 @@ class ResultsPanel(CTkFrame):
                 item_id = f"{group.group_id}_{i}"
                 # Non-keepers are pre-checked (marked for deletion)
                 is_keeper = (i == group.get_keeper_index()) or file_data.is_keeper
-                checked = not is_keeper
+                checked = (not is_keeper) if precheck_non_keepers else False
 
                 # Format values — mode-aware
                 path = Path(file_data.path)
@@ -1277,7 +1397,8 @@ class ResultsPanel(CTkFrame):
         bytes_reclaimable: int,
         elapsed_seconds: float,
     ) -> None:
-        self._complete_banner.show(
+        self._complete_banner.schedule_show(
+            delay_ms=320,
             final_state=final_state,
             groups_found=groups_found,
             duplicates_found=duplicates_found,
@@ -1396,7 +1517,7 @@ class ResultsPanel(CTkFrame):
                     want = iid in checked_set
                     cur = self._treeview._item_states.get(iid, False)
                     if cur != want:
-                        self._treeview.set_check(iid, want)
+                        self._treeview.set_check(iid, want, notify=False)
             self._selected_count = len(self._treeview.get_checked())
         finally:
             self._syncing_checks = False
@@ -1454,11 +1575,11 @@ class ResultsPanel(CTkFrame):
         self._bulk_selection_in_progress = True
         try:
             # Clear current selection
-            self._treeview.uncheck_all()
+            self._treeview.uncheck_all(notify=False)
             self._selected_count = 0
 
             if rule == "select_all":
-                self._treeview.check_all()
+                self._treeview.check_all(notify=False)
 
             elif rule == "select_except_largest":
                 # Keep largest in each group, select others
@@ -1467,7 +1588,7 @@ class ResultsPanel(CTkFrame):
                     for i, _file_data in enumerate(group.files):
                         if i != keeper_idx:
                             item_id = f"{group.group_id}_{i}"
-                            self._treeview.set_check(item_id, True)
+                            self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_except_smallest":
                 # Keep smallest in each group, select others
@@ -1479,7 +1600,7 @@ class ResultsPanel(CTkFrame):
                     for i in range(len(group.files)):
                         if i != keeper_idx:
                             item_id = f"{group.group_id}_{i}"
-                            self._treeview.set_check(item_id, True)
+                            self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_except_newest":
                 # Keep newest in each group, select others
@@ -1491,7 +1612,7 @@ class ResultsPanel(CTkFrame):
                     for i in range(len(group.files)):
                         if i != keeper_idx:
                             item_id = f"{group.group_id}_{i}"
-                            self._treeview.set_check(item_id, True)
+                            self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_except_oldest":
                 # Keep oldest in each group, select others
@@ -1503,14 +1624,14 @@ class ResultsPanel(CTkFrame):
                     for i in range(len(group.files)):
                         if i != keeper_idx:
                             item_id = f"{group.group_id}_{i}"
-                            self._treeview.set_check(item_id, True)
+                            self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_except_first":
                 # Keep first file in each group (index 0), select all others
                 for group in self._filtered_groups:
                     for i in range(1, len(group.files)):
                         item_id = f"{group.group_id}_{i}"
-                        self._treeview.set_check(item_id, True)
+                        self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_except_highest_resolution":
                 # For image/video groups: keep highest resolution, select others
@@ -1528,7 +1649,7 @@ class ResultsPanel(CTkFrame):
                     for i in range(len(group.files)):
                         if i != best_idx:
                             item_id = f"{group.group_id}_{i}"
-                            self._treeview.set_check(item_id, True)
+                            self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "select_in_folder":
                 # Prompt user for a folder; select all files inside it
@@ -1542,7 +1663,7 @@ class ResultsPanel(CTkFrame):
                             try:
                                 if Path(path_str).is_relative_to(folder_path):
                                     item_id = f"{group.group_id}_{i}"
-                                    self._treeview.set_check(item_id, True)
+                                    self._treeview.set_check(item_id, True, notify=False)
                             except (OSError, ValueError) as exc:
                                 logger.debug("Path '%s' folder match failed: %s", path_str, exc)
 
@@ -1561,13 +1682,13 @@ class ResultsPanel(CTkFrame):
                             path_str = fd.get("path", "") if isinstance(fd, dict) else str(getattr(fd, "path", ""))
                             if Path(path_str).suffix.lower() in exts:
                                 item_id = f"{group.group_id}_{i}"
-                                self._treeview.set_check(item_id, True)
+                                self._treeview.set_check(item_id, True, notify=False)
 
             elif rule == "clear_all":
                 pass  # already cleared above
 
             elif rule == "invert_selection":
-                self._treeview.invert_checks()
+                self._treeview.invert_checks(notify=False)
         finally:
             self._bulk_selection_in_progress = False
 
