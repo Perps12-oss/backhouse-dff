@@ -992,7 +992,7 @@ class ResultsPanel(CTkFrame):
         folder = str(Path(path).parent)
         try:
             if sys.platform == "win32":
-                subprocess.Popen(["explorer", "/select,", path])
+                subprocess.Popen(["explorer", f"/select,{path}"])
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", "-R", path])
             else:

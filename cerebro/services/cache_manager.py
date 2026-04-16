@@ -5,7 +5,6 @@ import sqlite3
 import hashlib
 import json
 import gzip
-import pickle
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple

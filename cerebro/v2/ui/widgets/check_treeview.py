@@ -529,10 +529,18 @@ class CheckTreeview(ttk.Treeview):
         for group_id in self._group_rows:
             children = self.get_children(group_id)
 
-            # Sort children by their values
+            # Sort children by their values.
+            # Use _item_values cache (file values without checkbox icon) so that
+            # re-inserting via insert_item doesn't prepend a second icon (H-2 fix).
             children_with_values = []
             for child_id in children:
-                values = self.item(child_id, "values") or ()
+                cached = self._item_values.get(child_id)
+                if cached is not None:
+                    values = cached
+                else:
+                    # Fallback: strip leading icon from stored values
+                    raw = self.item(child_id, "values") or ()
+                    values = tuple(raw[1:]) if raw else ()
                 children_with_values.append((child_id, values))
 
             try:

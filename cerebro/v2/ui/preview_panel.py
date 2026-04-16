@@ -239,7 +239,7 @@ class PreviewPanel(CTkFrame):
         self._expand_btn.pack(side="left", padx=Spacing.XS)
         self._expand_btn.configure(command=self._toggle)
 
-        # Diff switch (right side of header)
+        # Diff switch — hidden until pixel-diff overlay is implemented (M-2)
         self._diff_switch = CTkSwitch(
             self._header, text="Diff",
             font=Typography.FONT_XS,
@@ -247,7 +247,7 @@ class PreviewPanel(CTkFrame):
             onvalue=True, offvalue=False,
             command=self._on_diff_toggled,
         )
-        self._diff_switch.pack(side="right", padx=Spacing.SM)
+        # self._diff_switch.pack(side="right", padx=Spacing.SM)
 
         # Sync button
         self._sync_btn = CTkButton(

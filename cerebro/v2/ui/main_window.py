@@ -1086,17 +1086,26 @@ class MainWindow(CTk, CTkMessageInterface):
             self._preview_collapsed = not self._preview_collapsed
 
     def _on_refresh(self) -> None:
-        """Handle F5 refresh."""
-        logger.info("Refresh / re-scan requested")
-        # TODO: Re-scan current folders
+        """Handle F5 refresh — re-run the last scan if folders are configured."""
+        if self._scanning:
+            return
+        folders = self._folder_panel.get_scan_folders()
+        if folders:
+            logger.info("F5 refresh: re-running scan on %d folder(s)", len(folders))
+            self._scan_controller.start_search()
+        else:
+            self._status_bar.flash_message("Add a folder first, then press F5 to scan.")
 
     def _on_escape(self) -> None:
         """Handle Escape key."""
         if self._scanning:
             self._on_stop_search()
         else:
-            # TODO: Close dialogs, cancel active operations
-            pass
+            # Dismiss the scan-complete banner if it is visible
+            try:
+                self._results_panel.hide_scan_complete()
+            except (AttributeError, tk.TclError):
+                pass
 
     def _on_configure(self, event) -> None:
         """Handle window resize."""

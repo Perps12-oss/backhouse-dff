@@ -30,7 +30,6 @@ from typing import Dict, List, Optional, Set, Tuple, Callable, Any, Generator
 from collections import defaultdict
 import sqlite3
 import mmap
-import pickle
 
 from cerebro.core.models import FileMetadata
 from cerebro.services.hash_cache import HashCache, StatSignature
