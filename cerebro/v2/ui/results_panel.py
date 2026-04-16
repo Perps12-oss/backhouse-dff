@@ -881,7 +881,9 @@ class ResultsPanel(CTkFrame):
         """Handle checkbox state change."""
         if self._syncing_checks or self._bulk_selection_in_progress:
             return
-        self._selected_count = len(self._treeview.get_checked())
+        # Single O(n) scan — reused for count, status bar, and callback.
+        checked_ids = self._get_checked_item_ids()
+        self._selected_count = len(checked_ids)
 
         if (
             self._results_view_mode == "grid"
@@ -889,10 +891,9 @@ class ResultsPanel(CTkFrame):
             and getattr(self._thumbnail_grid, "_cards", None)
         ):
             self._sync_thumbnail_checks_from_tree()
-        self._update_status()
-        # Notify callback
+        self._update_status(checked_ids)
         if self._on_selection_changed:
-            self._on_selection_changed(self._get_checked_item_ids())
+            self._on_selection_changed(checked_ids)
 
     def _get_file_data_for_item(self, item_id: str) -> Optional[DuplicateFile]:
         """Return the DuplicateFile for a treeview item_id, or None if it's a group row."""
@@ -1526,10 +1527,10 @@ class ResultsPanel(CTkFrame):
                     cur = self._treeview._item_states.get(iid, False)
                     if cur != want:
                         self._treeview.set_check(iid, want, notify=False)
-            self._selected_count = len(self._treeview.get_checked())
+            self._selected_count = len(checked)
         finally:
             self._syncing_checks = False
-        self._update_status()
+        self._update_status(list(checked_set))
 
     def get_selected_files(self) -> List[Dict[str, Any]]:
         """

@@ -177,6 +177,13 @@ class DirectoryCache:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_checksum ON directory_cache(checksum)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS file_cache (
+                dir_path TEXT PRIMARY KEY,
+                files_json TEXT,
+                cached_at REAL
+            )
+        """)
         conn.commit()
         conn.close()
         
@@ -230,12 +237,42 @@ class DirectoryCache:
         cached_sig = self.get(path)
         if not cached_sig:
             return True  # No cache = assume changed
-        
+
         current_sig = DirectorySignature.from_directory(path)
         if not current_sig:
             return True
-        
+
         return cached_sig.checksum != current_sig.checksum
+
+    def get_files(self, path: Path) -> Optional[List[Tuple[Path, int, float]]]:
+        """Return cached file list for *path*, or None if not cached."""
+        import json
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.execute(
+            "SELECT files_json FROM file_cache WHERE dir_path = ?",
+            (str(path),),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        try:
+            data = json.loads(row[0])
+            return [(Path(item[0]), int(item[1]), float(item[2])) for item in data]
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    def set_files(self, path: Path, files: List[Tuple[Path, int, float]]) -> None:
+        """Persist the file list for *path* so it can be restored on the next scan."""
+        import json
+        files_data = [[str(p), sz, mt] for p, sz, mt in files]
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute(
+            "INSERT OR REPLACE INTO file_cache (dir_path, files_json, cached_at) VALUES (?, ?, ?)",
+            (str(path), json.dumps(files_data), time.time()),
+        )
+        conn.commit()
+        conn.close()
 
 
 # ============================================================================
@@ -605,9 +642,12 @@ class TurboScanner:
 
             if self.config.incremental and self.dir_cache:
                 if not self.dir_cache.has_changed(root):
-                    self.stats['directories_skipped'] += 1
-                    # TODO: Load files from cache
-                    continue
+                    cached_files = self.dir_cache.get_files(root)
+                    if cached_files is not None:
+                        self.stats['directories_skipped'] += 1
+                        all_files.extend(cached_files)
+                        continue
+                    # Signature unchanged but no file cache yet — fall through to scan.
 
             dirs_to_scan.append(root)
 
@@ -625,45 +665,45 @@ class TurboScanner:
             for d in dirs_to_scan
         ]
 
+        def _collect(future_to_root, warn_prefix: str) -> None:
+            """Drain futures, extend all_files, and populate dir/file caches."""
+            nonlocal discovered_so_far
+            for future in as_completed(future_to_root):
+                root_dir = future_to_root[future]
+                try:
+                    results = future.result()
+                    all_files.extend(results)
+                    discovered_so_far += len(results)
+                    if emit and discovered_so_far % 1000 <= len(results):
+                        emit("discovering", discovered_so_far, 0)
+                    # Persist signature + file list so the next scan can skip this root.
+                    if self.dir_cache and results:
+                        sig = DirectorySignature.from_directory(root_dir)
+                        if sig:
+                            self.dir_cache.put(sig)
+                            self.dir_cache.set_files(root_dir, results)
+                except OSError as e:
+                    logger.warning("%s: %s", warn_prefix, e)
+
         if self.config.use_multiprocessing and len(dirs_to_scan) > 1:
             workers = min(self.config.dir_workers, len(dirs_to_scan))
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(walk_directory_worker, args) for args in worker_args
-                ]
-
-                for future in as_completed(futures):
-                    try:
-                        results = future.result()
-                        all_files.extend(results)
-                        discovered_so_far += len(results)
-                        if emit and discovered_so_far % 1000 <= len(results):
-                            emit("discovering", discovered_so_far, 0)
-                    except OSError as e:
-                        logger.warning("[Turbo] Worker error: %s", e)
-                        continue
+                future_to_root = {
+                    executor.submit(walk_directory_worker, args): d
+                    for args, d in zip(worker_args, dirs_to_scan)
+                }
+                _collect(future_to_root, "[Turbo] Worker error")
         else:
             # Threads are sufficient and avoid the spawn overhead of processes.
             # Hash work is GIL-bound but directory traversal is I/O-bound, so
             # threads give true parallelism here.
             workers = min(self.config.dir_workers, max(1, len(dirs_to_scan)))
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(walk_directory_worker, args)
-                    for args in worker_args
-                ]
-                for future in as_completed(futures):
-                    try:
-                        results = future.result()
-                        all_files.extend(results)
-                        discovered_so_far += len(results)
-                        if emit and discovered_so_far % 1000 <= len(results):
-                            emit("discovering", discovered_so_far, 0)
-                    except OSError as e:
-                        logger.warning(
-                            "[Turbo] Worker error walking directory: %s", e
-                        )
-                        continue
+                future_to_root = {
+                    executor.submit(walk_directory_worker, args): d
+                    for args, d in zip(worker_args, dirs_to_scan)
+                }
+                _collect(future_to_root, "[Turbo] Worker error walking directory")
 
         return all_files
     
