@@ -915,34 +915,46 @@ class MainWindow(CTk, CTkMessageInterface):
             )
 
         if confirm:
-            try:
-                from send2trash import send2trash
-            except ImportError:
-                self.show_error(
-                    "Dependency Missing",
-                    "send2trash package is required.\n\n"
-                    "Install with: pip install send2trash"
-                )
-                return
-
             self._toolbar.set_has_selection(False)
             self._status_bar.flash_message("Deleting selected files...")
 
             def _delete_worker() -> None:
+                from cerebro.core.deletion import DeletionEngine, DeletionPolicy, DeletionRequest
+
+                engine = DeletionEngine()
+                request = DeletionRequest(
+                    policy=DeletionPolicy.TRASH,
+                    metadata={
+                        "scan_id": getattr(self, "_current_scan_id", "") or "",
+                        "source": "ui_selected",
+                        "mode": "trash",
+                    },
+                )
+
                 success_count = 0
                 failed_files: List[tuple[str, str]] = []
                 deleted_paths: List[str] = []
                 deleted_entries: List[Any] = []
 
                 for file_data in selected_files:
-                    file_path = Path(_fd_path(file_data))
                     try:
-                        send2trash(str(file_path))
-                        success_count += 1
-                        deleted_paths.append(str(file_path))
-                        deleted_entries.append(file_data)
-                        log_deletion_event(str(file_path), _fd_size(file_data), self.get_scan_mode())
-                    except OSError as e:
+                        file_path = Path(_fd_path(file_data)).resolve()
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                        file_path = Path(_fd_path(file_data))
+                    try:
+                        res = engine.delete_one(file_path, request)
+                        if res.success:
+                            success_count += 1
+                            deleted_paths.append(str(file_path))
+                            deleted_entries.append(file_data)
+                            log_deletion_event(
+                                str(file_path),
+                                _fd_size(file_data),
+                                self.get_scan_mode(),
+                            )
+                        else:
+                            failed_files.append((str(file_path), res.error or "Unknown error"))
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
                         failed_files.append((str(file_path), str(e)))
 
                 self.after(

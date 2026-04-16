@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 
+import secrets
 import threading
 import time
 import json
@@ -402,7 +403,7 @@ class SessionManager:
                 return None
             
             # Use provided token or generate one
-            plan_token = token or f"ui_{int(time.time() * 1000)}"
+            plan_token = token or f"ui_{secrets.token_urlsafe(16)}"
             
             # Build items from intents
             items = []

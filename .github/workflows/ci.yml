@@ -27,8 +27,18 @@ jobs:
       - name: Ruff (scoped)
         run: |
           python -m ruff check \
+            cerebro/core/safety/deletion_gate.py \
+            cerebro/core/session.py \
+            cerebro/core/pipeline.py \
+            cerebro/core/preview.py \
             cerebro/engines/orchestrator.py \
             cerebro/engines/turbo_file_engine.py \
+            cerebro/v2/ui/main_window.py \
+            tests/test_deletion_gate.py \
+            tests/test_session_tokens.py \
+            tests/test_deletion_engine.py \
+            tests/test_deletion_gate_integration.py \
+            tests/test_preview_manager.py \
             main.py
 
       - name: Mypy (scoped)

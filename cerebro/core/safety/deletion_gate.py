@@ -41,7 +41,8 @@ class DeletionGate:
         self._token_reason: str = ""
 
     def issue_token(self, reason: str = "") -> str:
-        token = secrets.token_hex(3).upper()  # short, human-typable
+        # Security token for high-risk deletes. This must be unguessable.
+        token = secrets.token_urlsafe(16)
         self._active_token = token
         self._token_expires_at = time.time() + max(10, int(self.config.token_ttl_seconds))
         self._token_reason = (reason or "").strip()
@@ -68,7 +69,7 @@ class DeletionGate:
         if self._active_token:
             if now >= self._token_expires_at:
                 return False
-            return t.upper() == self._active_token
+            return secrets.compare_digest(t, self._active_token)
 
         # Fallback: accept pipeline plan.token (uuid hex)
         if self.config.allow_plan_uuid_token and _UUID_HEX_RE.match(t):

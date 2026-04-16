@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .deletion import DeletionEngine, DeletionPolicy, DeletionRequest, BatchDeletionResult
+from .safety.deletion_gate import DeletionGate, DeletionGateConfig, DeletionGateError
 from ..history.store import HistoryStore
 
 
@@ -230,6 +231,26 @@ class CerebroPipeline:
         """
         self._log(f"Executing delete plan scan={plan.scan_id} mode={plan.mode} ops={plan.total_files}")
 
+        # Safety latch: permanent deletions must be gated by a token.
+        if str(plan.mode) == "permanent":
+            token = None
+            try:
+                token = (plan.policy or {}).get("token")
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                token = None
+            gate = DeletionGate(
+                DeletionGateConfig(
+                    enabled=True,
+                    require_validation_mode=False,
+                    require_token=True,
+                    allow_plan_uuid_token=True,
+                )
+            )
+            if not token:
+                raise DeletionGateError("Permanent deletion blocked: missing token.")
+            if not gate.verify_token(str(token)):
+                raise DeletionGateError("Permanent deletion blocked: invalid or expired token.")
+
         policy = DeletionPolicy.PERMANENT if plan.mode == "permanent" else DeletionPolicy.TRASH
         request = DeletionRequest(
             policy=policy,
@@ -238,6 +259,7 @@ class CerebroPipeline:
                 "source": plan.source,
                 "mode": plan.mode,
                 "operation_count": plan.total_files,
+                "token": (plan.policy or {}).get("token") if isinstance(plan.policy, dict) else None,
             },
         )
 
