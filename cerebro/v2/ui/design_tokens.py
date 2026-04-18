@@ -29,8 +29,9 @@ TEXT_DISABLED  = "#4A6070"
 # Semantic colours
 # ---------------------------------------------------------------------------
 
-RED    = "#E74C3C"   # danger, delete
-GREEN  = "#27AE60"   # success, safe
+RED      = "#E74C3C"   # danger, delete
+RED_DARK = "#B03020"   # danger button hover / pressed state
+GREEN    = "#27AE60"   # success, safe
 BLUE   = "#2980B9"   # info, link
 YELLOW = "#F39C12"   # warning
 
@@ -58,3 +59,24 @@ SECTION_HEADER_H = 36   # px — dark header bar above each section
 ROW_H            = 26   # px — default treeview row height
 PAD_X            = 16   # px — standard horizontal padding
 PAD_Y            = 10   # px — standard vertical padding
+
+# ---------------------------------------------------------------------------
+# PRD-required canonical aliases
+# (used by HistoryPage, DiagnosticsPage, and any future pages)
+# ---------------------------------------------------------------------------
+
+NAVY_DEEP  = NAVY         # deepest dark background
+NAVY_BAR   = NAVY_MID     # header / toolbar bar colour
+RED_ACCENT = RED          # danger / delete accent
+GREEN_STAT = GREEN        # success / stat highlight
+WHITE      = TEXT_PRIMARY # primary white text
+SURFACE    = CARD_BG      # card / panel surface
+ROW_ALT    = "#1A2E42"    # alternate treeview row stripe
+ROW_SEL    = "#2E558E"    # selected treeview row
+
+# Font aliases matching PRD names
+FONT_SM      = FONT_SMALL
+FONT_MD      = FONT_BODY
+FONT_LG      = FONT_HEADER
+FONT_SM_BOLD = (FONT_SMALL[0], FONT_SMALL[1], "bold")
+FONT_MD_BOLD = (FONT_BODY[0],  FONT_BODY[1],  "bold")

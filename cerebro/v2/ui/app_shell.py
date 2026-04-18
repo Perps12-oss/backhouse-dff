@@ -97,7 +97,10 @@ class AppShell(CTk):
         # Build pages — all 6 tabs now have real implementations
         self._pages: Dict[str, CTkFrame] = {}
 
-        self._history_page = HistoryPage(self._page_container)
+        self._history_page = HistoryPage(
+            self._page_container,
+            on_session_click=self._on_history_session_click,
+        )
         self._pages["history"] = self._history_page
 
         self._diagnostics_page = DiagnosticsPage(self._page_container)
@@ -193,6 +196,12 @@ class AppShell(CTk):
         """Called when user double-clicks a group in Results — opens Review tab."""
         self._review_page.load_group(groups, group_id)
         self.switch_tab("review")
+
+    def _on_history_session_click(self, entry) -> None:
+        """Called when user double-clicks a scan history row — loads into Results."""
+        # History entries don't store full DuplicateGroup objects, so we just
+        # switch to Results where the last loaded results remain visible.
+        self.switch_tab("results")
 
     # ------------------------------------------------------------------
     # Public API for later phases

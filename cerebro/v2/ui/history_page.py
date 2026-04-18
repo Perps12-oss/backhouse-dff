@@ -18,8 +18,8 @@ from typing import List
 
 from cerebro.v2.ui.design_tokens import (
     BORDER, CARD_BG, FONT_BODY, FONT_HEADER, FONT_SMALL, FONT_TITLE,
-    NAVY, NAVY_MID, PAD_X, PAD_Y, RED, TEXT_MUTED, TEXT_PRIMARY,
-    TEXT_SECONDARY,
+    NAVY, NAVY_MID, PAD_X, PAD_Y, RED, RED_DARK, ROW_SEL, TEXT_MUTED,
+    TEXT_PRIMARY, TEXT_SECONDARY,
 )
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ class _SectionHeader(tk.Frame):
         if btn_text and btn_cmd:
             tk.Button(
                 self, text=btn_text, command=btn_cmd,
-                bg=RED, fg=TEXT_PRIMARY, activebackground="#C0392B",
+                bg=RED, fg=TEXT_PRIMARY, activebackground=RED_DARK,
                 activeforeground=TEXT_PRIMARY, relief="flat",
                 font=FONT_SMALL, cursor="hand2", padx=10,
             ).pack(side="right", padx=PAD_X, pady=5)
@@ -121,8 +121,10 @@ class _ScanHistoryPanel(tk.Frame):
         "duration":    ("Duration",      80),
     }
 
-    def __init__(self, parent: tk.Widget) -> None:
+    def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
         super().__init__(parent, bg=NAVY)
+        self._on_session_click = on_session_click
+        self._entries: list = []
         self._build()
 
     def _build(self) -> None:
@@ -152,7 +154,7 @@ class _ScanHistoryPanel(tk.Frame):
             background=NAVY_MID, foreground=TEXT_PRIMARY,
             font=FONT_SMALL, relief="flat",
         )
-        style.map("History.Treeview", background=[("selected", "#2E558E")])
+        style.map("History.Treeview", background=[("selected", ROW_SEL)])
 
         self._tree = ttk.Treeview(
             tree_frame, columns=self._COLS, show="headings",
@@ -168,7 +170,10 @@ class _ScanHistoryPanel(tk.Frame):
         sb.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True)
 
-        # Footer count label
+        # Double-click opens session in Results
+        self._tree.bind("<Double-1>", self._on_row_double_click)
+
+        # Footer count label + hint
         self._count_lbl = tk.Label(
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
         )
@@ -187,8 +192,10 @@ class _ScanHistoryPanel(tk.Frame):
         self.after(0, lambda: self._populate(entries))
 
     def _populate(self, entries) -> None:
+        self._entries = list(entries)
+        self._iid_to_idx: dict[str, int] = {}
         self._tree.delete(*self._tree.get_children())
-        for entry in entries:
+        for idx, entry in enumerate(entries):
             ts  = entry.timestamp or 0
             date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts else "—"
             mode = entry.mode.replace("_", " ").title()
@@ -197,11 +204,23 @@ class _ScanHistoryPanel(tk.Frame):
             files   = str(entry.files_found)
             rec     = _fmt_bytes(entry.bytes_reclaimable)
             dur     = _fmt_dur(entry.duration_seconds)
-            self._tree.insert("", "end", values=(date, mode, folders, groups, files, rec, dur))
+            iid = self._tree.insert("", "end", values=(date, mode, folders, groups, files, rec, dur))
+            self._iid_to_idx[iid] = idx
         count = len(entries)
+        hint = "  Double-click a row to load session" if count and self._on_session_click else ""
         self._count_lbl.configure(
-            text=f"  {count} scan{'s' if count != 1 else ''} recorded"
+            text=f"  {count} scan{'s' if count != 1 else ''} recorded{hint}"
         )
+
+    def _on_row_double_click(self, event) -> None:
+        if not self._on_session_click:
+            return
+        sel = self._tree.selection()
+        if not sel:
+            return
+        idx = self._iid_to_idx.get(sel[0])
+        if idx is not None and idx < len(self._entries):
+            self._on_session_click(self._entries[idx])
 
     def _clear(self) -> None:
         from cerebro.v2.ui.feedback import confirm_yes_no
@@ -260,7 +279,7 @@ class _DeletionHistoryPanel(tk.Frame):
             background=NAVY_MID, foreground=TEXT_PRIMARY,
             font=FONT_SMALL, relief="flat",
         )
-        style.map("Deletion.Treeview", background=[("selected", "#2E558E")])
+        style.map("Deletion.Treeview", background=[("selected", ROW_SEL)])
 
         self._tree = ttk.Treeview(
             tree_frame, columns=list(self._COLS), show="headings",
@@ -335,10 +354,15 @@ class HistoryPage(tk.Frame):
 
     Replaces the 'history' placeholder frame.  Contains two sub-tabs:
     Scan History and Deletion History, styled with Phase-6 design tokens.
+
+    on_session_click(entry) — optional callback fired when the user
+    double-clicks a scan history row.  The caller (AppShell) should load
+    the session into ResultsPage and switch to the Results tab.
     """
 
-    def __init__(self, parent: tk.Widget) -> None:
+    def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
         super().__init__(parent, bg=NAVY)
+        self._on_session_click = on_session_click
         self._panels: dict[str, tk.Frame] = {}
         self._current: str = "scan"
         self._build()
@@ -368,7 +392,10 @@ class HistoryPage(tk.Frame):
         self._container.rowconfigure(0, weight=1)
 
         # Build panels
-        self._panels["scan"] = _ScanHistoryPanel(self._container)
+        self._panels["scan"] = _ScanHistoryPanel(
+            self._container,
+            on_session_click=self._on_session_click,
+        )
         self._panels["deletion"] = _DeletionHistoryPanel(self._container)
 
         for panel in self._panels.values():
