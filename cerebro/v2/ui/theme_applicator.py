@@ -15,14 +15,26 @@ together, so theme changes propagate everywhere consistently.
 """
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Callable, List, Optional
+
+_log = logging.getLogger(__name__)
 
 
 def _tc(slot: str) -> str:
     """Read a color slot from the active theme."""
     from cerebro.v2.core.theme_bridge_v2 import theme_color
     return theme_color(slot)
+
+
+def theme_token(t: dict, key: str, default: str) -> str:
+    """Safe token lookup with a static-constant fallback.
+
+    Shared by page modules so they don't each duplicate this helper.
+    """
+    value = t.get(key) if isinstance(t, dict) else None
+    return value if isinstance(value, str) and value else default
 
 
 class ThemeApplicator:
@@ -155,7 +167,7 @@ class ThemeApplicator:
             try:
                 hook(tokens)
             except Exception as e:
-                print(f"[ThemeApplicator] hook error: {e}")
+                _log.warning("[ThemeApplicator] hook error: %s", e)
 
 
-__all__ = ["ThemeApplicator"]
+__all__ = ["ThemeApplicator", "theme_token"]

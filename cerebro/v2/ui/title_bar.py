@@ -117,10 +117,10 @@ class TitleBar(tk.Frame):
     # ------------------------------------------------------------------
     # Public API
 
-    def set_settings_callback(self, cb: Callable[[], None]) -> None:
+    def set_settings_callback(self, cb: Callable[[tk.Widget], None]) -> None:
         self._on_settings = cb
 
-    def set_themes_callback(self, cb: Callable[[], None]) -> None:
+    def set_themes_callback(self, cb: Callable[[tk.Widget], None]) -> None:
         self._on_themes = cb
 
     def get_themes_anchor(self) -> Optional[tk.Label]:

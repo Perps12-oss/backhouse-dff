@@ -11,8 +11,11 @@ Later phases call replace_page(key, real_frame) to fill each slot.
 """
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from typing import Callable, Dict, Optional
+
+_log = logging.getLogger(__name__)
 
 try:
     import customtkinter as ctk
@@ -228,7 +231,7 @@ class AppShell(CTk):
                 on_pick=self.switch_theme,
             )
         except Exception as e:
-            print(f"Theme dropdown error: {e}")
+            _log.warning("Theme dropdown error: %s", e)
 
     def switch_theme(self, theme_name: str) -> None:
         """Apply a theme globally through the single ThemeApplicator entry point."""
@@ -524,7 +527,7 @@ class _ThemeQuickDropdown(tk.Toplevel):
         try:
             self._on_pick(name)
         except Exception as e:
-            print(f"Theme pick error: {e}")
+            _log.warning("Theme pick error: %s", e)
         self._close()
 
     def _close(self) -> None:

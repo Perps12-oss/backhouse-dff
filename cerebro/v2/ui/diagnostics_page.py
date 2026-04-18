@@ -27,29 +27,24 @@ from cerebro.v2.ui.design_tokens import (
     FONT_TITLE, GREEN, NAVY, NAVY_MID, PAD_X, PAD_Y, RED, TEXT_MUTED,
     TEXT_PRIMARY, TEXT_SECONDARY, YELLOW,
 )
-from cerebro.v2.ui.theme_applicator import ThemeApplicator
+from cerebro.v2.ui.theme_applicator import ThemeApplicator, theme_token
 
 
 # ---------------------------------------------------------------------------
 # Token helpers
 # ---------------------------------------------------------------------------
 
-def _tk(t: dict, key: str, default: str) -> str:
-    value = t.get(key) if isinstance(t, dict) else None
-    return value if isinstance(value, str) and value else default
-
-
 def _page_colors(t: dict) -> dict:
     return {
-        "bg":       _tk(t, "bg",       NAVY),
-        "bar":      _tk(t, "nav_bar",  NAVY_MID),
-        "card":     _tk(t, "bg2",      CARD_BG),
-        "border":   _tk(t, "border",   BORDER),
-        "fg":       _tk(t, "fg",       TEXT_PRIMARY),
-        "fg2":      _tk(t, "fg2",      TEXT_SECONDARY),
-        "fg_muted": _tk(t, "fg_muted", TEXT_MUTED),
-        "success":  _tk(t, "success",  GREEN),
-        "danger":   _tk(t, "danger",   RED),
+        "bg":       theme_token(t, "bg",       NAVY),
+        "bar":      theme_token(t, "nav_bar",  NAVY_MID),
+        "card":     theme_token(t, "bg2",      CARD_BG),
+        "border":   theme_token(t, "border",   BORDER),
+        "fg":       theme_token(t, "fg",       TEXT_PRIMARY),
+        "fg2":      theme_token(t, "fg2",      TEXT_SECONDARY),
+        "fg_muted": theme_token(t, "fg_muted", TEXT_MUTED),
+        "success":  theme_token(t, "success",  GREEN),
+        "danger":   theme_token(t, "danger",   RED),
     }
 
 
@@ -198,7 +193,7 @@ class DiagnosticsPage(tk.Frame):
             "<Configure>",
             lambda e: self._canvas.itemconfigure(self._win_id, width=e.width),
         )
-        self._canvas.bind_all(
+        self._canvas.bind(
             "<MouseWheel>",
             lambda e: self._canvas.yview_scroll(-1 * (e.delta // 120), "units"),
         )

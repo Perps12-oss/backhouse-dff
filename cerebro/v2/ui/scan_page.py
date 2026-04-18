@@ -952,48 +952,48 @@ class ScanPage(tk.Frame):
         self.configure(bg=bg)
         try:
             self._right_col.configure(bg=bg)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._v_divider.configure(bg=border)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._sub_tab_bar.configure(bg=bg2)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._sub_tab_border.configure(bg=border)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._content.configure(bg=bg)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._tree.apply_theme(t)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._mode_bar.apply_theme(t)
-        except Exception:
+        except tk.TclError:
             pass
         for tab in getattr(self, "_sub_tabs", {}).values():
             try:
                 tab.apply_theme(t)
-            except Exception:
+            except tk.TclError:
                 pass
         try:
             self._folders_list.apply_theme(t)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._progress_view.apply_theme(t)
-        except Exception:
+        except tk.TclError:
             pass
         try:
             self._action_bar.apply_theme(t)
-        except Exception:
+        except tk.TclError:
             pass
 
     # ------------------------------------------------------------------
