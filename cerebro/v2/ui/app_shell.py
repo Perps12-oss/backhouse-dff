@@ -46,7 +46,6 @@ class AppShell(CTk):
 
     def __init__(self) -> None:
         super().__init__()
-        # Engine reference — never modified, only read/called by page widgets
         self._orchestrator = ScanOrchestrator()
         self._setup_window()
         self._build_ui()
@@ -64,7 +63,6 @@ class AppShell(CTk):
             _ctk.set_default_color_theme("blue")
         except (ImportError, AttributeError):
             pass
-        # Centre on screen
         self.update_idletasks()
         w = self.winfo_width()
         h = self.winfo_height()
@@ -78,7 +76,6 @@ class AppShell(CTk):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        # Title bar
         self._title_bar = TitleBar(
             self,
             on_settings=self._open_settings,
@@ -86,15 +83,12 @@ class AppShell(CTk):
         )
         self._title_bar.pack(fill="x")
 
-        # Tab bar
         self._tab_bar = TabBar(self, on_tab_changed=self._on_tab_changed)
         self._tab_bar.pack(fill="x")
 
-        # Page container — all pages sit here, stacked via place
         self._page_container = CTkFrame(self, fg_color=_PAGE_BG)
         self._page_container.pack(fill="both", expand=True)
 
-        # Build pages — all 6 tabs now have real implementations
         self._pages: Dict[str, CTkFrame] = {}
 
         self._history_page = HistoryPage(
@@ -130,7 +124,6 @@ class AppShell(CTk):
             on_scan_complete=self._on_scan_complete,
         )
 
-        # Show Welcome
         self._current_page: str = "welcome"
         self._pages["welcome"].place(relwidth=1, relheight=1)
 
@@ -198,9 +191,6 @@ class AppShell(CTk):
         self.switch_tab("review")
 
     def _on_history_session_click(self, entry) -> None:
-        """Called when user double-clicks a scan history row — loads into Results."""
-        # History entries don't store full DuplicateGroup objects, so we just
-        # switch to Results where the last loaded results remain visible.
         self.switch_tab("results")
 
     # ------------------------------------------------------------------

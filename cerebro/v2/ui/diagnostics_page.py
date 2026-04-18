@@ -192,7 +192,6 @@ class DiagnosticsPage(tk.Frame):
     # ------------------------------------------------------------------
 
     def on_show(self) -> None:
-        """Called by AppShell when this page becomes active."""
         self._load()
 
     def _load(self) -> None:
@@ -204,8 +203,6 @@ class DiagnosticsPage(tk.Frame):
         eng_rows   = self._collect_engine_status()
         db_rows    = self._collect_db_info()
         self.after(0, lambda: self._render(app_rows, eng_rows, db_rows))
-
-    # ------ App info ------
 
     def _collect_app_info(self) -> List[Tuple[str, str, str]]:
         rows: List[Tuple[str, str, str]] = []
@@ -224,8 +221,6 @@ class DiagnosticsPage(tk.Frame):
         rows.append(("tkinter", str(tk.TkVersion), TEXT_SECONDARY))
         return rows
 
-    # ------ Engine status ------
-
     def _collect_engine_status(self) -> List[Tuple[str, str, bool]]:
         rows: List[Tuple[str, str, bool]] = []
         engine_probes = [
@@ -241,7 +236,6 @@ class DiagnosticsPage(tk.Frame):
                 mod = importlib.import_module(mod_path)
                 cls = getattr(mod, cls_name)
                 obj = cls()
-                # Try a lightweight readiness check if available
                 ready = True
                 status = "available"
                 if hasattr(obj, "_ffmpeg") and not obj._ffmpeg:
@@ -256,8 +250,6 @@ class DiagnosticsPage(tk.Frame):
             rows.append((label, status, ready))
         return rows
 
-    # ------ DB info ------
-
     def _collect_db_info(self) -> List[Tuple[str, str, str]]:
         rows: List[Tuple[str, str, str]] = []
 
@@ -271,21 +263,18 @@ class DiagnosticsPage(tk.Frame):
             except Exception:
                 rows.append((label + " path", str(path), TEXT_MUTED))
 
-        # Scan history
         scan_path = Path.home() / ".cerebro" / "scan_history.db"
         def _scan_count():
             from cerebro.v2.core.scan_history_db import get_scan_history_db
             return len(get_scan_history_db().get_recent(limit=99999))
         _db_entry("Scan history DB", scan_path, _scan_count)
 
-        # Deletion history
         del_path = Path.home() / ".cerebro" / "deletion_history.db"
         def _del_count():
             from cerebro.v2.core.deletion_history_db import get_default_history_manager
             return len(get_default_history_manager().get_recent_history(limit=99999))
         _db_entry("Deletion history DB", del_path, _del_count)
 
-        # Hash cache
         cache_path = Path.home() / ".cerebro" / "hash_cache.db"
         rows.append(("Hash cache DB path", str(cache_path), TEXT_SECONDARY))
         if cache_path.exists():
@@ -295,17 +284,12 @@ class DiagnosticsPage(tk.Frame):
 
         return rows
 
-    # ------------------------------------------------------------------
-    # Render (main thread)
-    # ------------------------------------------------------------------
-
     def _render(
         self,
         app_rows:  List[Tuple[str, str, str]],
         eng_rows:  List[Tuple[str, str, bool]],
         db_rows:   List[Tuple[str, str, str]],
     ) -> None:
-        # App info
         for w in self._app_grid.winfo_children():
             w.destroy()
         grid = _InfoGrid(self._app_grid)
@@ -313,7 +297,6 @@ class DiagnosticsPage(tk.Frame):
         for label, value, color in app_rows:
             grid.add_row(label, value, color)
 
-        # Engine status
         for w in self._engine_container.winfo_children():
             w.destroy()
         for label, status, ok in eng_rows:
@@ -321,7 +304,6 @@ class DiagnosticsPage(tk.Frame):
                 fill="x", padx=2, pady=1,
             )
 
-        # DB info
         for w in self._db_grid.winfo_children():
             w.destroy()
         db_grid = _InfoGrid(self._db_grid)

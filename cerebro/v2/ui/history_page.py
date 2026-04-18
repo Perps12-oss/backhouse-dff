@@ -133,11 +133,8 @@ class _ScanHistoryPanel(tk.Frame):
             btn_text="Clear History", btn_cmd=self._clear,
         )
         header.pack(fill="x")
-
-        # Separator
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        # Treeview container
         tree_frame = tk.Frame(self, bg=NAVY)
         tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
 
@@ -169,18 +166,14 @@ class _ScanHistoryPanel(tk.Frame):
         self._tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True)
-
-        # Double-click opens session in Results
         self._tree.bind("<Double-1>", self._on_row_double_click)
 
-        # Footer count label + hint
         self._count_lbl = tk.Label(
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
         )
         self._count_lbl.pack(fill="x", side="bottom", pady=(PAD_Y, 0))
 
     def load(self) -> None:
-        """Reload from SQLite in a background thread."""
         threading.Thread(target=self._worker, daemon=True).start()
 
     def _worker(self) -> None:
@@ -349,16 +342,7 @@ class _DeletionHistoryPanel(tk.Frame):
 # ---------------------------------------------------------------------------
 
 class HistoryPage(tk.Frame):
-    """
-    Full-page History tab for AppShell.
-
-    Replaces the 'history' placeholder frame.  Contains two sub-tabs:
-    Scan History and Deletion History, styled with Phase-6 design tokens.
-
-    on_session_click(entry) — optional callback fired when the user
-    double-clicks a scan history row.  The caller (AppShell) should load
-    the session into ResultsPage and switch to the Results tab.
-    """
+    """Full-page History tab for AppShell (Scan History + Deletion History sub-tabs)."""
 
     def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
         super().__init__(parent, bg=NAVY)
@@ -368,7 +352,6 @@ class HistoryPage(tk.Frame):
         self._build()
 
     def _build(self) -> None:
-        # Page title header
         title_bar = tk.Frame(self, bg=NAVY, height=48)
         title_bar.pack(fill="x")
         title_bar.pack_propagate(False)
@@ -377,21 +360,17 @@ class HistoryPage(tk.Frame):
             font=FONT_TITLE,
         ).pack(side="left", padx=PAD_X, pady=PAD_Y)
 
-        # Separator
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        # Sub-tab bar
         self._tab_bar = _SubTabBar(self, self._on_subtab)
         self._tab_bar.pack(fill="x")
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        # Panel container
         self._container = tk.Frame(self, bg=NAVY)
         self._container.pack(fill="both", expand=True)
         self._container.columnconfigure(0, weight=1)
         self._container.rowconfigure(0, weight=1)
 
-        # Build panels
         self._panels["scan"] = _ScanHistoryPanel(
             self._container,
             on_session_click=self._on_session_click,
@@ -401,7 +380,6 @@ class HistoryPage(tk.Frame):
         for panel in self._panels.values():
             panel.grid(row=0, column=0, sticky="nsew")
 
-        # Show scan panel first
         self._panels["scan"].tkraise()
 
     def _on_subtab(self, key: str) -> None:
