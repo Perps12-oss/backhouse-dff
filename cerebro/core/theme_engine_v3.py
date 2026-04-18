@@ -290,6 +290,12 @@ class ThemeEngineV3:
         for key, slot in SLOT_REGISTRY.items():
             self._resolve_slot(key, slot, theme_colors, defaults)
 
+        # Phase 2: pass through extra keys from theme JSON not in SLOT_REGISTRY
+        # (e.g., shell.*, tabs.activeIndicator)
+        for key, value in theme_colors.items():
+            if key not in self._resolved and isinstance(value, str):
+                self._resolved[key] = value
+
     def _resolve_slot(self, key: str, slot: ColorSlot,
                       theme_colors: Dict[str, str],
                       defaults: Dict[str, str]) -> None:
