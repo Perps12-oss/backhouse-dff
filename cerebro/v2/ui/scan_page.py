@@ -443,12 +443,13 @@ class _SubTab(tk.Frame):
 
 
 class _SearchFoldersList(tk.Frame):
-    """Scrollable list of folders added to the scan."""
+    """Scrollable list of folders added to the scan, with inline action strip and drop zone."""
 
-    def __init__(self, master, **kwargs) -> None:
+    def __init__(self, master, tree: Optional["_FolderTree"] = None, **kwargs) -> None:
         t = ThemeApplicator.get().build_tokens()
         kwargs.setdefault("bg", t.get("bg", _WHITE))
         super().__init__(master, **kwargs)
+        self._tree = tree
         self._folders: List[Path] = []
         self._on_changed: Optional[Callable[[List[Path]], None]] = None
         self._t = t
@@ -456,7 +457,34 @@ class _SearchFoldersList(tk.Frame):
         self._build()
 
     def _build(self) -> None:
-        bg = self._t.get("bg", _WHITE)
+        bg  = self._t.get("bg",      _WHITE)
+        nav = self._t.get("nav_bar", _NAVY_BAR)
+
+        # --- Action strip pinned to bottom ---
+        self._strip_sep = tk.Frame(self, bg=self._t.get("border", _BORDER), height=1)
+        self._strip_sep.pack(side="bottom", fill="x")
+        self._action_strip = tk.Frame(self, bg=nav, height=36)
+        self._action_strip.pack(side="bottom", fill="x")
+        self._action_strip.pack_propagate(False)
+        self._strip_btns: List[tk.Button] = []
+        for text, cmd in [
+            ("ADD FOLDERS", self._add_folders),
+            ("PASTE PATH",  self.paste_path),
+            ("CLEAR ALL",   self.clear_all),
+        ]:
+            b = tk.Button(
+                self._action_strip, text=text, bg=nav,
+                fg=_WHITE, font=("Segoe UI", 9), relief="flat",
+                padx=10, pady=0, cursor="hand2",
+                activebackground="#3A6BAE", activeforeground=_WHITE,
+                command=cmd,
+            )
+            b.pack(side="left", fill="y", padx=1)
+            b.bind("<Enter>", lambda _e, w=b: w.configure(bg="#3A6BAE"))
+            b.bind("<Leave>", lambda _e, w=b, n=nav: w.configure(bg=n))
+            self._strip_btns.append(b)
+
+        # --- Scrollable area ---
         self._canvas = tk.Canvas(self, bg=bg, highlightthickness=0)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=vsb.set)
@@ -464,35 +492,60 @@ class _SearchFoldersList(tk.Frame):
         self._canvas.pack(fill="both", expand=True)
 
         self._inner = tk.Frame(self._canvas, bg=bg)
-        self._win = self._canvas.create_window((0, 0), window=self._inner,
-                                               anchor="nw")
+        self._win = self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
         self._inner.bind("<Configure>", self._on_inner_configure)
         self._canvas.bind("<Configure>", self._on_canvas_configure)
-        self._canvas.bind("<MouseWheel>",
-                          lambda e: self._canvas.yview_scroll(-1 * (e.delta // 120), "units"))
-
-        self._empty_lbl = tk.Label(
-            self._inner,
-            text="No folders added yet.\nSelect from the tree or use Add Folders below.",
-            bg=bg, fg=self._t.get("fg_muted", _DIMGRAY),
-            font=("Segoe UI", 10), justify="center",
+        self._canvas.bind(
+            "<MouseWheel>",
+            lambda e: self._canvas.yview_scroll(-1 * (e.delta // 120), "units"),
         )
-        self._empty_lbl.pack(expand=True, pady=40)
+
+        self._drop_zone = _DropZone(self._inner, t=self._t, on_add=self._add_folders)
+        self._drop_zone.pack(expand=True, fill="both")
+        self._drop_zone.try_register_dnd(self._on_dnd_drop)
+
+    def _on_dnd_drop(self, data: str) -> None:
+        """Parse tkinterdnd2 brace-wrapped paths and add any valid directories."""
+        raw = data.strip()
+        tokens = raw.split("} {") if "} {" in raw else [raw]
+        for token in tokens:
+            p = Path(token.strip().strip("{}"))
+            if p.is_dir():
+                self.add(p)
+
+    def _add_folders(self) -> None:
+        """ADD FOLDERS: use tree selection or fall back to file dialog."""
+        if self._tree is not None:
+            sel = self._tree.get_selected()
+            if sel:
+                self.add(sel)
+                return
+        path = filedialog.askdirectory(title="Select folder to scan")
+        if path:
+            self.add(Path(path))
 
     def apply_theme(self, t: dict) -> None:
         self._t = t
-        bg = t.get("bg", _WHITE)
+        bg  = t.get("bg",      _WHITE)
+        nav = t.get("nav_bar", _NAVY_BAR)
+        acc = t.get("accent",  "#3A6BAE")
         self.configure(bg=bg)
         self._canvas.configure(bg=bg)
         self._inner.configure(bg=bg)
-        self._empty_lbl.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
+        self._action_strip.configure(bg=nav)
+        self._strip_sep.configure(bg=t.get("border", _BORDER))
+        for b in self._strip_btns:
+            b.configure(bg=nav, fg=_WHITE, activebackground=acc)
+            b.bind("<Enter>", lambda _e, w=b, a=acc: w.configure(bg=a))
+            b.bind("<Leave>", lambda _e, w=b, n=nav: w.configure(bg=n))
+        self._drop_zone.apply_theme(t)
         for r in self._rows:
             self._paint_row(r)
 
     def _paint_row(self, r: Dict[str, tk.Widget]) -> None:
-        t = self._t
-        bg  = t.get("bg",     _WHITE)
-        fg  = t.get("fg",     "#333333")
+        t      = self._t
+        bg     = t.get("bg",     _WHITE)
+        fg     = t.get("fg",     "#333333")
         danger = t.get("danger", _RED)
         r["row"].configure(bg=bg)
         r["icon"].configure(bg=bg)
@@ -510,13 +563,13 @@ class _SearchFoldersList(tk.Frame):
         if path in self._folders:
             return
         self._folders.append(path)
-        self._empty_lbl.pack_forget()
+        self._drop_zone.pack_forget()
         self._render_row(path)
         if self._on_changed:
             self._on_changed(list(self._folders))
 
     def _render_row(self, path: Path) -> None:
-        t = self._t
+        t  = self._t
         bg = t.get("bg", _WHITE)
         row = tk.Frame(self._inner, bg=bg)
         row.pack(fill="x", padx=8, pady=2)
@@ -528,11 +581,12 @@ class _SearchFoldersList(tk.Frame):
                             fg=t.get("fg", "#333333"),
                             font=("Segoe UI", 10), anchor="w")
         path_lbl.pack(side="left", fill="x", expand=True)
-        x_btn = tk.Button(row, text="×", bg=bg, fg=t.get("danger", _RED),
-                          activebackground=bg, activeforeground=t.get("danger", _RED),
-                          font=("Segoe UI", 12, "bold"),
-                          relief="flat", cursor="hand2",
-                          command=lambda p=path: self._remove(p))
+        x_btn = tk.Button(
+            row, text="×", bg=bg, fg=t.get("danger", _RED),
+            activebackground=bg, activeforeground=t.get("danger", _RED),
+            font=("Segoe UI", 12, "bold"), relief="flat", cursor="hand2",
+            command=lambda p=path: self._remove(p),
+        )
         x_btn.pack(side="right")
         entry = {"path_obj": path, "row": row, "icon": icon,
                  "path": path_lbl, "x": x_btn}
@@ -548,7 +602,7 @@ class _SearchFoldersList(tk.Frame):
                 self._rows.remove(r)
                 break
         if not self._folders:
-            self._empty_lbl.pack(expand=True, pady=40)
+            self._drop_zone.pack(expand=True, fill="both")
         if self._on_changed:
             self._on_changed(list(self._folders))
 
@@ -557,7 +611,7 @@ class _SearchFoldersList(tk.Frame):
         for r in self._rows:
             r["row"].destroy()
         self._rows.clear()
-        self._empty_lbl.pack(expand=True, pady=40)
+        self._drop_zone.pack(expand=True, fill="both")
         if self._on_changed:
             self._on_changed([])
 
@@ -577,70 +631,99 @@ class _SearchFoldersList(tk.Frame):
         self._on_changed = cb
 
 
-class _ActionBar(tk.Frame):
-    """40 px navy action bar: ADD FOLDERS | PASTE PATH | CLEAR ALL | OPEN | SAVE."""
+class _DropZone(tk.Frame):
+    """Dashed-border drop zone displayed in the folder list when it is empty."""
 
-    def __init__(self, master, folders_list: _SearchFoldersList,
-                 tree: _FolderTree, **kwargs) -> None:
-        kwargs.setdefault("bg", _NAVY_BAR)
-        kwargs.setdefault("height", 40)
+    def __init__(self, master, t: dict, on_add: Callable, **kwargs) -> None:
+        bg = t.get("bg", _WHITE)
+        kwargs.setdefault("bg", bg)
         super().__init__(master, **kwargs)
-        self.pack_propagate(False)
-        self._folders_list = folders_list
-        self._tree         = tree
+        self._t     = t
+        self._on_add = on_add
         self._build()
 
     def _build(self) -> None:
-        def _btn(text: str, cmd) -> tk.Button:
-            b = tk.Button(
-                self, text=text, bg=_NAVY_BAR, fg=_WHITE,
-                font=("Segoe UI", 9), relief="flat",
-                padx=10, pady=0, cursor="hand2",
-                activebackground="#3A6BAE", activeforeground=_WHITE,
-                command=cmd,
-            )
-            b.pack(side="left", fill="y", padx=1)
-            b.bind("<Enter>", lambda _e: b.configure(bg="#3A6BAE"))
-            b.bind("<Leave>", lambda _e: b.configure(bg=_NAVY_BAR))
-            return b
+        self._canvas = tk.Canvas(
+            self, bg=self._t.get("bg", _WHITE),
+            highlightthickness=0, bd=0,
+            width=260, height=150,
+        )
+        self._canvas.pack(pady=24, padx=24)
+        self._canvas.bind("<Configure>", lambda _e: self._draw())
+        self._canvas.bind("<Button-1>", lambda _e: self._on_add())
+        self._canvas.configure(cursor="hand2")
+        self._draw()
 
-        _btn("ADD FOLDERS", self._add_folders)
-        _btn("PASTE PATH",  self._paste_path)
-        _btn("CLEAR ALL",   self._clear_all)
-
-        # Right side
-        tk.Label(self, text="+ Send suggestions", bg=_NAVY_BAR,
-                 fg="#7A9EC0", font=("Segoe UI", 9)).pack(side="right", padx=12)
+    def _draw(self) -> None:
+        c = self._canvas
+        c.delete("all")
+        w = c.winfo_width() or 260
+        h = c.winfo_height() or 150
+        t       = self._t
+        bg      = t.get("bg",       _WHITE)
+        border  = t.get("border",   _BORDER)
+        fg_mute = t.get("fg_muted", _DIMGRAY)
+        fg      = t.get("fg",       "#333333")
+        c.configure(bg=bg)
+        pad = 10
+        c.create_rectangle(
+            pad, pad, w - pad, h - pad,
+            outline=border, dash=(6, 4), width=2,
+        )
+        cx, cy = w // 2, h // 2 - 14
+        c.create_text(cx, cy, text="📂",
+                      font=("Segoe UI", 24), fill=fg_mute)
+        c.create_text(cx, cy + 34, text="Drop folders here",
+                      font=("Segoe UI", 10, "bold"), fill=fg)
+        c.create_text(cx, cy + 50, text="or click to browse",
+                      font=("Segoe UI", 9), fill=fg_mute)
 
     def apply_theme(self, t: dict) -> None:
+        self._t = t
+        self.configure(bg=t.get("bg", _WHITE))
+        self._draw()
+
+    def try_register_dnd(self, on_drop: Callable[[str], None]) -> None:
+        """Register as DnD drop target if tkinterdnd2 is available; silent no-op otherwise."""
+        try:
+            import tkinterdnd2 as _dnd  # type: ignore[import]
+            self._canvas.drop_target_register(_dnd.DND_FILES)  # type: ignore[attr-defined]
+            self._canvas.dnd_bind("<<Drop>>", lambda e: on_drop(e.data))  # type: ignore[attr-defined]
+        except (ImportError, AttributeError, tk.TclError):
+            pass
+
+
+class _SuggestionsFooter(tk.Frame):
+    """Slim 24 px footer showing only '+ Send suggestions'. No action buttons."""
+
+    HEIGHT = 24
+
+    def __init__(self, master, **kwargs) -> None:
+        t = ThemeApplicator.get().build_tokens()
+        kwargs.setdefault("bg",     t.get("nav_bar", _NAVY_BAR))
+        kwargs.setdefault("height", self.HEIGHT)
+        super().__init__(master, **kwargs)
+        self.pack_propagate(False)
+        self._t = t
+        self._build()
+
+    def _build(self) -> None:
+        nav = self._t.get("nav_bar", _NAVY_BAR)
+        self._top_border = tk.Frame(self, bg=self._t.get("border", _BORDER), height=1)
+        self._top_border.pack(side="top", fill="x")
+        self._lbl = tk.Label(
+            self, text="+ Send suggestions",
+            bg=nav, fg="#7A9EC0",
+            font=("Segoe UI", 9), cursor="hand2",
+        )
+        self._lbl.pack(side="right", padx=12)
+
+    def apply_theme(self, t: dict) -> None:
+        self._t = t
         nav = t.get("nav_bar", _NAVY_BAR)
-        acc = t.get("accent", _NAVY_MID)
         self.configure(bg=nav)
-        for w in self.winfo_children():
-            try:
-                if isinstance(w, tk.Button):
-                    w.configure(bg=nav, activebackground=acc)
-                elif isinstance(w, tk.Frame):
-                    w.configure(bg=nav)
-                elif isinstance(w, tk.Label):
-                    w.configure(bg=nav)
-            except Exception:
-                pass
-
-    def _add_folders(self) -> None:
-        sel = self._tree.get_selected()
-        if sel:
-            self._folders_list.add(sel)
-        else:
-            path = filedialog.askdirectory(title="Select folder to scan")
-            if path:
-                self._folders_list.add(Path(path))
-
-    def _paste_path(self) -> None:
-        self._folders_list.paste_path()
-
-    def _clear_all(self) -> None:
-        self._folders_list.clear_all()
+        self._top_border.configure(bg=t.get("border", _BORDER))
+        self._lbl.configure(bg=nav, fg=t.get("fg_muted", _DIMGRAY))
 
 
 class _ScanProgressView(tk.Frame):
@@ -821,14 +904,14 @@ class ScanPage(tk.Frame):
         self._content = tk.Frame(self._right_col, bg=_WHITE)
         self._content.pack(fill="both", expand=True)
 
-        self._folders_list = _SearchFoldersList(self._content)
+        self._folders_list = _SearchFoldersList(self._content, tree=self._tree)
         self._folders_list.place(relwidth=1, relheight=1)
 
         self._progress_view = _ScanProgressView(self._content)
 
-        # Action bar (pinned to bottom of right column)
-        self._action_bar = _ActionBar(self._right_col, self._folders_list, self._tree)
-        self._action_bar.pack(side="bottom", fill="x")
+        # Slim footer (pinned to bottom of right column) — suggestions link only
+        self._suggestions_footer = _SuggestionsFooter(self._right_col)
+        self._suggestions_footer.pack(side="bottom", fill="x")
 
     def _build_sub_tab_bar(self, parent: tk.Frame) -> tk.Frame:
         bar = tk.Frame(parent, bg=_SURFACE, height=32)
@@ -855,9 +938,9 @@ class ScanPage(tk.Frame):
         self._sub_tabs[self._active_sub].set_active(False)
         self._active_sub = key
         self._sub_tabs[key].set_active(True)
-        # Only Search Folders has real content; others are stubs for now
-        if key == "search_folders":
-            self._progress_view.place_forget()
+        self._folders_list.place_forget()
+        self._progress_view.place_forget()
+        if key == "search_folders" and not self._scanning:
             self._folders_list.place(relwidth=1, relheight=1)
 
     # ------------------------------------------------------------------
@@ -992,7 +1075,7 @@ class ScanPage(tk.Frame):
         except tk.TclError:
             pass
         try:
-            self._action_bar.apply_theme(t)
+            self._suggestions_footer.apply_theme(t)
         except tk.TclError:
             pass
 
