@@ -362,10 +362,6 @@ class HistoryPage(tk.Frame):
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-        self._tab_bar = _SubTabBar(self, self._on_subtab)
-        self._tab_bar.pack(fill="x")
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
-
         self._container = tk.Frame(self, bg=NAVY)
         self._container.pack(fill="both", expand=True)
         self._container.columnconfigure(0, weight=1)
@@ -379,6 +375,11 @@ class HistoryPage(tk.Frame):
 
         for panel in self._panels.values():
             panel.grid(row=0, column=0, sticky="nsew")
+
+        # Build sub-tab bar after panels exist; _SubTabBar.__init__ triggers on_change.
+        self._tab_bar = _SubTabBar(self, self._on_subtab)
+        self._tab_bar.pack(fill="x", before=self._container)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", before=self._container)
 
         self._panels["scan"].tkraise()
 

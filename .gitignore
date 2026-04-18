@@ -8,3 +8,4 @@ logs/
 .ruff_cache/
 .venv/
 _holding_cleanup_review/
+.omc/
