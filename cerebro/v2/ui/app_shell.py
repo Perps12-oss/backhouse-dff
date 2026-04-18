@@ -12,7 +12,7 @@ Later phases call replace_page(key, real_frame) to fill each slot.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 try:
     import customtkinter as ctk
@@ -35,7 +35,7 @@ from cerebro.v2.ui.diagnostics_page import DiagnosticsPage
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.engines.orchestrator   import ScanOrchestrator
 
-_PAGE_BG = "#F0F0F0"
+_PAGE_BG_FALLBACK = "#F0F0F0"
 
 
 class AppShell(CTk):
@@ -77,6 +77,11 @@ class AppShell(CTk):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        # Register root with ThemeApplicator so any caller (Settings dialog,
+        # quick dropdown, etc.) can trigger a global re-dispatch without
+        # threading a reference all the way through.
+        ThemeApplicator.get().set_root(self)
+
         self._title_bar = TitleBar(
             self,
             on_settings=self._open_settings,
@@ -87,8 +92,12 @@ class AppShell(CTk):
         self._tab_bar = TabBar(self, on_tab_changed=self._on_tab_changed)
         self._tab_bar.pack(fill="x")
 
-        self._page_container = CTkFrame(self, fg_color=_PAGE_BG)
+        self._page_container = CTkFrame(self, fg_color=_PAGE_BG_FALLBACK)
         self._page_container.pack(fill="both", expand=True)
+
+        # Re-paint shell chrome (root window + page container) whenever the
+        # theme changes so no surface is left at the hard-coded fallback color.
+        ThemeApplicator.get().register(self._apply_shell_theme)
 
         self._pages: Dict[str, CTkFrame] = {}
 
@@ -128,7 +137,8 @@ class AppShell(CTk):
         self._current_page: str = "welcome"
         self._pages["welcome"].place(relwidth=1, relheight=1)
 
-        # Wire ThemeApplicator and apply initial theme
+        # Apply the initial theme globally. This also fires engine listeners,
+        # syncs CTk appearance mode, and dispatches tokens to every shell hook.
         ta = ThemeApplicator.get()
         initial_theme = "Cerebro Dark"
         try:
@@ -140,7 +150,7 @@ class AppShell(CTk):
 
     def _make_placeholder(self, key: str) -> CTkFrame:
         """Muted label placeholder shown until a later phase provides real content."""
-        frame = CTkFrame(self._page_container, fg_color=_PAGE_BG)
+        frame = CTkFrame(self._page_container, fg_color=_PAGE_BG_FALLBACK)
         CTkLabel(
             frame,
             text=key.upper(),
@@ -148,6 +158,28 @@ class AppShell(CTk):
             text_color="#CCCCCC",
         ).place(relx=0.5, rely=0.5, anchor="center")
         return frame
+
+    # ------------------------------------------------------------------
+    # Shell chrome theming (root window + page container)
+    # ------------------------------------------------------------------
+
+    def _apply_shell_theme(self, t: dict) -> None:
+        """Paint the root window and page container with the active theme."""
+        bg = t.get("bg", _PAGE_BG_FALLBACK)
+        try:
+            self.configure(fg_color=bg)
+        except (tk.TclError, AttributeError):
+            try:
+                self.configure(bg=bg)
+            except tk.TclError:
+                pass
+        try:
+            self._page_container.configure(fg_color=bg)
+        except (tk.TclError, AttributeError):
+            try:
+                self._page_container.configure(bg=bg)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -172,26 +204,34 @@ class AppShell(CTk):
     # Title bar actions
     # ------------------------------------------------------------------
 
-    def _open_settings(self) -> None:
+    def _open_settings(self, anchor: Optional[tk.Widget] = None) -> None:
         if hasattr(self, "_settings_win") and self._settings_win.winfo_exists():
             self._settings_win.lift()
             return
         from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings, get_settings_path
         self._settings_win = SettingsDialog(self, Settings.load(get_settings_path()))
 
-    def _open_themes(self) -> None:
-        if hasattr(self, "_themes_win") and self._themes_win.winfo_exists():
-            self._themes_win.lift()
-            return
+    def _open_themes(self, anchor: Optional[tk.Widget] = None) -> None:
+        """Open the one-click quick theme dropdown anchored to the title bar link."""
+        if hasattr(self, "_themes_win") and self._themes_win is not None:
+            try:
+                if self._themes_win.winfo_exists():
+                    self._themes_win.destroy()
+            except tk.TclError:
+                pass
+            self._themes_win = None
+        anchor_widget = anchor or self._title_bar.get_themes_anchor()
         try:
-            chooser = _ThemeChooser(self, app_shell=self)
-            chooser.transient(self)
-            chooser.grab_set()
-            self._themes_win = chooser
+            self._themes_win = _ThemeQuickDropdown(
+                self,
+                anchor=anchor_widget,
+                on_pick=self.switch_theme,
+            )
         except Exception as e:
-            print(f"Theme chooser error: {e}")
+            print(f"Theme dropdown error: {e}")
 
     def switch_theme(self, theme_name: str) -> None:
+        """Apply a theme globally through the single ThemeApplicator entry point."""
         ThemeApplicator.get().apply(theme_name, self)
 
     def _on_open_session(self, session) -> None:
@@ -260,84 +300,244 @@ def run_app() -> None:
     app.run()
 
 
-class _ThemeChooser(tk.Toplevel):
-    """Scrollable swatch grid for picking a theme."""
+class _ThemeQuickDropdown(tk.Toplevel):
+    """Lightweight one-click theme picker anchored under the title-bar link.
 
-    def __init__(self, master, app_shell, **kw) -> None:
+    Behavior:
+      - Borderless popup (``overrideredirect``).
+      - Scrollable list of theme names, current theme shown with a check mark.
+      - Click a row -> apply theme globally and close.
+      - Losing focus or pressing ``Escape`` closes without changes.
+    """
+
+    ROW_H = 26
+    WIDTH = 220
+    MAX_VISIBLE = 14
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        anchor: Optional[tk.Widget],
+        on_pick: Callable[[str], None],
+        **kw,
+    ) -> None:
         super().__init__(master, **kw)
-        self._app = app_shell
-        self.title("Choose Theme")
-        self.geometry("420x520")
-        self.resizable(False, True)
+        self._on_pick = on_pick
+        self._master  = master
+        self._outside_bind_id: Optional[str] = None
+        self._dismissed = False
+        self.overrideredirect(True)
+
+        try:
+            from cerebro.core.theme_engine_v3 import ThemeEngineV3
+            engine = ThemeEngineV3.get()
+            self._names = engine.all_theme_names()
+            self._active = engine.active_theme_name
+        except Exception:
+            self._names = []
+            self._active = ""
+
+        # Use current theme tokens so the dropdown matches the rest of the UI.
+        tokens = ThemeApplicator.get().build_tokens()
+        self._bg      = tokens.get("bg2", "#1C2333")
+        self._fg      = tokens.get("fg", "#E6EDF3")
+        self._fg_mute = tokens.get("fg2", "#8B949E")
+        self._hover   = tokens.get("bg3", "#161B22")
+        self._accent  = tokens.get("accent", "#22D3EE")
+        self._border  = tokens.get("border", "#30363D")
+
+        self.configure(bg=self._border)  # acts as 1 px border around inner frame
+
         self._build()
+        self._place_under(anchor)
+
+        # Keep the borderless popup above the main window on Windows, where
+        # overrideredirect + transient can otherwise z-order the popup behind
+        # its parent and swallow the pick click.
+        try:
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(200, lambda: self._safe_topmost(False))
+        except tk.TclError:
+            pass
+
+        self.bind("<Escape>", lambda _e: self._close())
+        # Detect clicks anywhere outside the popup (the FocusOut channel is
+        # unreliable for overrideredirect Toplevels on Windows — it can fire
+        # spuriously before a row click lands, dismissing the dropdown).
+        # Deferred so the Button-1 event that opened the popup doesn't also
+        # bubble up into this handler and dismiss it immediately.
+        self.after(0, self._install_outside_click_guard)
+
+    # ------------------------------------------------------------------
 
     def _build(self) -> None:
-        from cerebro.core.theme_engine_v3 import ThemeEngineV3
-        engine = ThemeEngineV3.get()
-        names  = engine.all_theme_names()
-        active = engine.active_theme_name
+        outer = tk.Frame(self, bg=self._border)
+        outer.pack(fill="both", expand=True, padx=1, pady=1)
 
-        canvas = tk.Canvas(self, highlightthickness=0)
-        vsb    = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        canvas = tk.Canvas(
+            outer, bg=self._bg, highlightthickness=0, bd=0,
+            width=self.WIDTH - 2,
+        )
+        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(fill="both", expand=True)
 
-        inner = tk.Frame(canvas)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        inner = tk.Frame(canvas, bg=self._bg)
         win   = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        def _resize(e): canvas.itemconfig(win, width=e.width)
-        def _cfg(_e):   canvas.configure(scrollregion=canvas.bbox("all"))
+        def _cfg(_e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _resize(e):
+            canvas.itemconfig(win, width=e.width)
         inner.bind("<Configure>", _cfg)
         canvas.bind("<Configure>", _resize)
-        canvas.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
+        canvas.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"),
+        )
 
-        COLS = 3
-        for idx, name in enumerate(names):
-            row, col = divmod(idx, COLS)
-            self._make_card(inner, engine, name, active).grid(
-                row=row, column=col, padx=6, pady=6)
+        for name in self._names:
+            self._make_row(inner, name)
 
-    def _make_card(self, parent, engine, name: str, active: str) -> tk.Frame:
-        was = engine.active_theme_name
-        engine.set_theme(name)
-        title_bg = engine.get_color("shell.titleBarBackground", "#111111")
-        acc1     = engine.get_color("shell.accentPrimary",      "#22D3EE")
-        acc2     = engine.get_color("shell.accentSecondary",    "#06B6D4")
-        danger   = engine.get_color("shell.accentDanger",       "#F85149")
-        base_bg  = engine.get_color("base.background",          "#1E1E1E")
-        base_fg  = engine.get_color("base.foreground",          "#E6EDF3")
-        border_c = acc1 if name == active else engine.get_color("base.border", "#30363D")
-        bd       = 2   if name == active else 1
-        engine.set_theme(was)
+    def _make_row(self, parent: tk.Widget, name: str) -> None:
+        is_active = name == self._active
+        row = tk.Frame(parent, bg=self._bg, height=self.ROW_H, cursor="hand2")
+        row.pack(fill="x")
+        row.pack_propagate(False)
 
-        card = tk.Frame(parent, width=120, height=80, bg=base_bg,
-                        highlightbackground=border_c, highlightthickness=bd,
-                        cursor="hand2")
-        card.pack_propagate(False)
+        check = tk.Label(
+            row,
+            text="\u2713" if is_active else " ",
+            bg=self._bg,
+            fg=self._accent,
+            font=("Segoe UI", 10, "bold"),
+            width=2,
+            anchor="center",
+        )
+        check.pack(side="left", padx=(4, 0))
 
-        # Top area with title bg + 3 dots
-        top = tk.Frame(card, bg=title_bg, height=50)
-        top.pack(fill="x")
-        top.pack_propagate(False)
-        dot_row = tk.Frame(top, bg=title_bg)
-        dot_row.place(relx=0.5, rely=0.55, anchor="center")
-        for color in (acc1, acc2, danger):
-            c = tk.Canvas(dot_row, width=10, height=10,
-                          bg=title_bg, highlightthickness=0)
-            c.pack(side="left", padx=2)
-            c.create_oval(1, 1, 9, 9, fill=color, outline="")
+        lbl = tk.Label(
+            row,
+            text=name,
+            bg=self._bg,
+            fg=self._fg if is_active else self._fg_mute,
+            font=("Segoe UI", 10, "bold") if is_active else ("Segoe UI", 10),
+            anchor="w",
+        )
+        lbl.pack(side="left", fill="x", expand=True, padx=(2, 8))
 
-        # Bottom label
-        lbl = tk.Label(card, text=name, bg=base_bg, fg=base_fg,
-                       font=("Segoe UI", 9), wraplength=110, justify="center")
-        lbl.pack(expand=True)
+        def _enter(_e=None, r=row, l=lbl, c=check):
+            r.configure(bg=self._hover)
+            l.configure(bg=self._hover, fg=self._fg)
+            c.configure(bg=self._hover)
+        def _leave(_e=None, r=row, l=lbl, c=check, active=is_active):
+            r.configure(bg=self._bg)
+            l.configure(
+                bg=self._bg,
+                fg=self._fg if active else self._fg_mute,
+            )
+            c.configure(bg=self._bg)
+        def _click(_e=None, n=name):
+            self._pick(n)
 
-        for w in (card, top, dot_row, lbl):
-            w.bind("<Button-1>", lambda _e, n=name: self._pick(n))
-        return card
+        for w in (row, check, lbl):
+            w.bind("<Enter>", _enter)
+            w.bind("<Leave>", _leave)
+            w.bind("<Button-1>", _click)
+
+    # ------------------------------------------------------------------
+
+    def _place_under(self, anchor: Optional[tk.Widget]) -> None:
+        visible_rows = min(len(self._names), self.MAX_VISIBLE)
+        visible_rows = max(1, visible_rows)
+        height = visible_rows * self.ROW_H + 2  # +2 for the 1 px border frame
+
+        if anchor is not None and anchor.winfo_exists():
+            try:
+                anchor.update_idletasks()
+                # Anchor the popup's left edge to the Themes label's left edge
+                # so the dropdown falls directly beneath the button instead of
+                # drifting far to the left. Only shift left if that would push
+                # the popup past the right edge of the screen.
+                x = anchor.winfo_rootx()
+                y = anchor.winfo_rooty() + anchor.winfo_height() + 4
+            except tk.TclError:
+                x = self.master.winfo_rootx() + 40
+                y = self.master.winfo_rooty() + 40
+        else:
+            x = self.master.winfo_rootx() + 40
+            y = self.master.winfo_rooty() + 40
+
+        # Keep the popup on-screen horizontally.
+        try:
+            screen_w = self.winfo_screenwidth()
+            if x + self.WIDTH > screen_w - 4:
+                x = max(4, screen_w - self.WIDTH - 4)
+            if x < 4:
+                x = 4
+        except tk.TclError:
+            pass
+
+        self.geometry(f"{self.WIDTH}x{height}+{x}+{y}")
+        # Force the position to be realised before the popup is shown; on
+        # Windows, ``overrideredirect`` Toplevels can otherwise briefly render
+        # at (0, 0) before picking up the requested geometry.
+        self.update_idletasks()
+
+    def _safe_topmost(self, flag: bool) -> None:
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", flag)
+        except tk.TclError:
+            pass
+
+    def _install_outside_click_guard(self) -> None:
+        if self._dismissed:
+            return
+        try:
+            self._outside_bind_id = self._master.bind(
+                "<Button-1>", self._on_outside_click, add="+",
+            )
+        except tk.TclError:
+            self._outside_bind_id = None
+
+    def _on_outside_click(self, event) -> None:
+        """Close the popup when a click lands on any widget outside it."""
+        if self._dismissed:
+            return
+        w = event.widget
+        try:
+            path = str(w)
+            if path.startswith(str(self)):
+                return
+        except Exception:
+            pass
+        self._close()
 
     def _pick(self, name: str) -> None:
-        self._app.switch_theme(name)
-        self.destroy()
+        # Run the pick BEFORE closing so the applicator still has a live root
+        # to schedule after_idle on, and so any exception surfaces before the
+        # popup is torn down.
+        try:
+            self._on_pick(name)
+        except Exception as e:
+            print(f"Theme pick error: {e}")
+        self._close()
+
+    def _close(self) -> None:
+        if self._dismissed:
+            return
+        self._dismissed = True
+        try:
+            if self._outside_bind_id is not None:
+                self._master.unbind("<Button-1>", self._outside_bind_id)
+        except tk.TclError:
+            pass
+        self._outside_bind_id = None
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass

@@ -1,7 +1,7 @@
 """
 ResultsPage — post-scan results with canvas-based virtual file grid.
 
-Stats bar · Action toolbar · Filter tabs · VirtualFileGrid
+Stats bar · Action toolbar · Filter list · VirtualFileGrid
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ _GRAY     = "#666666"
 _DIMGRAY  = "#AAAAAA"
 _HDR_BG   = "#E8E8E8"
 
-# File-type extension sets for filter tabs
+# File-type extension sets for the filter list
 _EXT_MUSIC  = {".mp3",".flac",".ogg",".wav",".aac",".m4a",".wma",".opus",".aiff",".ape"}
 _EXT_PIC    = {".jpg",".jpeg",".png",".gif",".bmp",".webp",".heic",".tiff",".tif",
                ".cr2",".cr3",".nef",".arw",".dng"}
@@ -351,20 +351,29 @@ class _ColHeader(tk.Canvas):
     H = 28
 
     def __init__(self, parent, on_sort: Callable[[str], None], **kw) -> None:
-        kw.setdefault("bg", _HDR_BG)
+        t = ThemeApplicator.get().build_tokens()
+        kw.setdefault("bg", t.get("bg2", _HDR_BG))
         kw.setdefault("height", self.H)
         kw.setdefault("highlightthickness", 0)
         super().__init__(parent, **kw)
         self._on_sort   = on_sort
         self._sort_col  = "Name"
         self._sort_asc  = True
+        self._t         = t
         self.bind("<Configure>", lambda _e: self._render())
         self.bind("<Button-1>",  self._on_click)
+
+    def apply_theme(self, t: dict) -> None:
+        self._t = t
+        self.configure(bg=t.get("bg2", _HDR_BG))
+        self._render()
 
     def _render(self) -> None:
         self.delete("all")
         w = self.winfo_width() or 800
         cols = _col_x_widths(w)
+        fg     = self._t.get("fg2",    "#555555")
+        border = self._t.get("border", _BORDER)
         for col_name, cx, cw in cols:
             if cw <= 0:
                 continue
@@ -372,11 +381,11 @@ class _ColHeader(tk.Canvas):
             if col_name == self._sort_col and col_name not in ("☐",):
                 label += " ▲" if self._sort_asc else " ▼"
             self.create_text(cx + 4, self.H // 2, text=label,
-                             fill="#555555", anchor="w",
+                             fill=fg, anchor="w",
                              font=("Segoe UI", 9, "bold"))
             # column divider
             self.create_line(cx + cw - 1, 4, cx + cw - 1, self.H - 4,
-                             fill=_BORDER)
+                             fill=border)
 
     def _on_click(self, event) -> None:
         w = self.winfo_width() or 800
@@ -405,51 +414,79 @@ class _StatsBar(tk.Frame):
     H = 48
 
     def __init__(self, master, **kw) -> None:
-        kw.setdefault("bg", _WHITE)
+        t = ThemeApplicator.get().build_tokens()
+        kw.setdefault("bg", t.get("bg", _WHITE))
         kw.setdefault("height", self.H)
         super().__init__(master, **kw)
         self.pack_propagate(False)
+        self._t = t
+        self._last_counts = (0, 0)
         self._build()
 
     def _build(self) -> None:
-        tk.Frame(self, bg=_BORDER, height=1).pack(side="bottom", fill="x")
-        inner = tk.Frame(self, bg=_WHITE)
-        inner.pack(fill="both", expand=True, padx=16)
+        bg     = self._t.get("bg",     _WHITE)
+        border = self._t.get("border", _BORDER)
 
-        # Pie chart placeholder (24×24 canvas)
-        pie = tk.Canvas(inner, width=24, height=24,
-                        bg=_WHITE, highlightthickness=0)
-        pie.pack(side="left", padx=(0, 12))
-        self._pie = pie
+        self._bottom_border = tk.Frame(self, bg=border, height=1)
+        self._bottom_border.pack(side="bottom", fill="x")
 
-        # 3 stat groups
+        self._inner = tk.Frame(self, bg=bg)
+        self._inner.pack(fill="both", expand=True, padx=16)
+
+        self._pie = tk.Canvas(self._inner, width=24, height=24,
+                              bg=bg, highlightthickness=0)
+        self._pie.pack(side="left", padx=(0, 12))
+
         self._labels: Dict[str, tk.Label] = {}
+        self._caption_labels: List[tk.Label] = []
+        self._columns: List[tk.Frame] = []
+        self._separators: List[tk.Frame] = []
         groups = [
-            ("files_scanned",  "#111111", "Files scanned"),
-            ("duplicates",     _RED,      "Duplicates found"),
-            ("recoverable",    _GREEN,    "Space recoverable"),
+            ("files_scanned",  self._t.get("fg",        "#111111"), "Files scanned"),
+            ("duplicates",     self._t.get("stat_dupes", _RED),     "Duplicates found"),
+            ("recoverable",    self._t.get("stat_space", _GREEN),   "Space recoverable"),
         ]
         for i, (key, fg, lbl_text) in enumerate(groups):
             if i:
-                tk.Frame(inner, bg=_BORDER, width=1).pack(side="left", fill="y",
-                                                           padx=20, pady=8)
-            col = tk.Frame(inner, bg=_WHITE)
+                sep = tk.Frame(self._inner, bg=border, width=1)
+                sep.pack(side="left", fill="y", padx=20, pady=8)
+                self._separators.append(sep)
+            col = tk.Frame(self._inner, bg=bg)
             col.pack(side="left")
-            val_lbl = tk.Label(col, text="0", bg=_WHITE, fg=fg,
+            self._columns.append(col)
+            val_lbl = tk.Label(col, text="0", bg=bg, fg=fg,
                                font=("Segoe UI", 18, "bold"))
             val_lbl.pack()
-            tk.Label(col, text=lbl_text, bg=_WHITE, fg=_GRAY,
-                     font=("Segoe UI", 9)).pack()
+            cap = tk.Label(col, text=lbl_text, bg=bg,
+                           fg=self._t.get("fg2", _GRAY),
+                           font=("Segoe UI", 9))
+            cap.pack()
             self._labels[key] = val_lbl
+            self._caption_labels.append(cap)
 
     def apply_theme(self, t: dict) -> None:
-        bg = t.get("bg", _WHITE)
+        self._t = t
+        bg     = t.get("bg",     _WHITE)
+        border = t.get("border", _BORDER)
+        muted  = t.get("fg2",    _GRAY)
         self.configure(bg=bg)
-        self._labels["duplicates"].configure(fg=t.get("stat_dupes", _RED))
-        self._labels["recoverable"].configure(fg=t.get("stat_space", _GREEN))
-        self._labels["files_scanned"].configure(fg=t.get("fg", "#111111"))
+        self._bottom_border.configure(bg=border)
+        self._inner.configure(bg=bg)
+        self._pie.configure(bg=bg)
+        for col in self._columns:
+            col.configure(bg=bg)
+        for sep in self._separators:
+            sep.configure(bg=border)
+        for cap in self._caption_labels:
+            cap.configure(bg=bg, fg=muted)
+        self._labels["files_scanned"].configure(bg=bg, fg=t.get("fg",        "#111111"))
+        self._labels["duplicates"]   .configure(bg=bg, fg=t.get("stat_dupes", _RED))
+        self._labels["recoverable"]  .configure(bg=bg, fg=t.get("stat_space", _GREEN))
+        files, dupes = self._last_counts
+        self._draw_pie(files, dupes)
 
     def update(self, files: int, dupes: int, recoverable: int) -> None:
+        self._last_counts = (files, dupes)
         self._labels["files_scanned"].configure(text=f"{files:,}")
         self._labels["duplicates"].configure(text=f"{dupes:,}")
         self._labels["recoverable"].configure(text=_fmt_size(recoverable))
@@ -458,13 +495,16 @@ class _StatsBar(tk.Frame):
     def _draw_pie(self, files: int, dupes: int) -> None:
         c = self._pie
         c.delete("all")
-        c.create_oval(2, 2, 22, 22, fill=_SURFACE, outline=_BORDER)
+        pie_bg = self._t.get("bg3",    _SURFACE)
+        border = self._t.get("border", _BORDER)
+        danger = self._t.get("stat_dupes", _RED)
+        c.create_oval(2, 2, 22, 22, fill=pie_bg, outline=border)
         if files > 0:
             pct = min(1.0, dupes / files)
             extent = pct * 360
             if extent > 0:
                 c.create_arc(2, 2, 22, 22, start=90,
-                             extent=-extent, fill=_RED, outline="")
+                             extent=-extent, fill=danger, outline="")
 
 
 # ===========================================================================
@@ -479,7 +519,8 @@ class _ActionToolbar(tk.Frame):
                  on_move:   Callable,
                  on_auto_mark: Callable[[str], None],
                  **kw) -> None:
-        kw.setdefault("bg", _WHITE)
+        t = ThemeApplicator.get().build_tokens()
+        kw.setdefault("bg", t.get("bg", _WHITE))
         kw.setdefault("height", self.H)
         super().__init__(master, **kw)
         self.pack_propagate(False)
@@ -487,40 +528,74 @@ class _ActionToolbar(tk.Frame):
         self._on_move      = on_move
         self._on_auto_mark = on_auto_mark
         self._has_sel      = False
+        self._t            = t
+        self._buttons: List[Dict[str, object]] = []
         self._build()
 
     def _build(self) -> None:
-        tk.Frame(self, bg=_BORDER, height=1).pack(side="bottom", fill="x")
-        inner = tk.Frame(self, bg=_WHITE)
-        inner.pack(fill="both", expand=True, padx=8)
+        bg     = self._t.get("bg",     _WHITE)
+        border = self._t.get("border", _BORDER)
 
-        def _btn(text, cmd, **extra):
-            opts: dict = {
-                "text": text,
-                "command": cmd,
-                "bg": _WHITE,
-                "fg": "#333333",
-                "font": ("Segoe UI", 10),
-                "relief": "flat",
-                "cursor": "hand2",
-                "padx": 10,
-                "pady": 4,
-                "highlightbackground": _BTN_BD,
-                "highlightthickness": 1,
-            }
-            opts.update(extra)
-            b = tk.Button(inner, **opts)
-            b.pack(side="left", padx=3)
-            b.bind("<Enter>", lambda _e: b.configure(bg=_SURFACE))
-            b.bind("<Leave>", lambda _e: b.configure(bg=_WHITE))
-            return b
+        self._bottom_border = tk.Frame(self, bg=border, height=1)
+        self._bottom_border.pack(side="bottom", fill="x")
+        self._inner = tk.Frame(self, bg=bg)
+        self._inner.pack(fill="both", expand=True, padx=8)
 
-        self._auto_btn = _btn("Auto Mark ▼", self._show_auto_mark)
-        self._del_btn  = _btn("DELETE",      self._on_delete,
-                              fg=_RED)
-        _btn("MOVE",         self._on_move)
-        _btn("COPY",         self._noop)
-        _btn("Export results", self._noop)
+        self._auto_btn = self._mk_btn("Auto Mark ▼", self._show_auto_mark)
+        self._del_btn  = self._mk_btn("DELETE",      self._on_delete, role="danger")
+        self._mk_btn("MOVE",            self._on_move)
+        self._mk_btn("COPY",            self._noop)
+        self._mk_btn("Export results",  self._noop)
+
+    def _mk_btn(self, text: str, cmd, *, role: str = "default") -> tk.Button:
+        t   = self._t
+        bg  = t.get("bg",  _WHITE)
+        fg  = t.get("danger", _RED) if role == "danger" else t.get("fg", "#333333")
+        bd  = t.get("border", _BTN_BD)
+        b = tk.Button(
+            self._inner,
+            text=text, command=cmd,
+            bg=bg, fg=fg,
+            activebackground=t.get("bg3", _SURFACE),
+            activeforeground=fg,
+            font=("Segoe UI", 10), relief="flat",
+            cursor="hand2", padx=10, pady=4,
+            highlightbackground=bd, highlightthickness=1,
+        )
+        b.pack(side="left", padx=3)
+        entry = {"btn": b, "role": role}
+        self._buttons.append(entry)
+        b.bind("<Enter>", lambda _e, en=entry: self._hover(en, True))
+        b.bind("<Leave>", lambda _e, en=entry: self._hover(en, False))
+        return b
+
+    def _hover(self, entry: Dict[str, object], inside: bool) -> None:
+        t = self._t
+        base = t.get("bg", _WHITE)
+        hover = t.get("bg3", _SURFACE)
+        btn = entry["btn"]  # type: ignore[assignment]
+        btn.configure(bg=hover if inside else base)  # type: ignore[union-attr]
+
+    def apply_theme(self, t: dict) -> None:
+        self._t = t
+        bg     = t.get("bg",     _WHITE)
+        border = t.get("border", _BORDER)
+        fg     = t.get("fg",     "#333333")
+        danger = t.get("danger", _RED)
+        hover  = t.get("bg3",    _SURFACE)
+        self.configure(bg=bg)
+        self._inner.configure(bg=bg)
+        self._bottom_border.configure(bg=border)
+        for entry in self._buttons:
+            btn = entry["btn"]  # type: ignore[assignment]
+            role = entry["role"]
+            btn_fg = danger if role == "danger" else fg  # type: ignore[assignment]
+            btn.configure(  # type: ignore[union-attr]
+                bg=bg, fg=btn_fg,
+                activebackground=hover, activeforeground=btn_fg,
+                highlightbackground=border,
+            )
+        self.set_has_selection(self._has_sel)
 
     def _show_auto_mark(self) -> None:
         opts = [
@@ -537,17 +612,31 @@ class _ActionToolbar(tk.Frame):
         win.title("Auto Mark")
         win.resizable(False, False)
         win.geometry("280x220")
+        t = self._t
+        bg = t.get("bg", _WHITE)
+        fg = t.get("fg", "#333333")
+        hover = t.get("bg3", _SURFACE)
+        try:
+            win.configure(bg=bg)  # type: ignore[attr-defined]
+        except Exception:
+            pass
         for label, rule in opts:
-            tk.Button(win, text=label, bg=_WHITE, fg="#333333",
-                      relief="flat", anchor="w", padx=12, pady=6,
-                      font=("Segoe UI", 10), cursor="hand2",
-                      command=lambda r=rule, w=win: (self._on_auto_mark(r), w.destroy())
-                      ).pack(fill="x")
+            b = tk.Button(
+                win, text=label, bg=bg, fg=fg,
+                activebackground=hover, activeforeground=fg,
+                relief="flat", anchor="w", padx=12, pady=6,
+                font=("Segoe UI", 10), cursor="hand2",
+                command=lambda r=rule, w=win: (self._on_auto_mark(r), w.destroy()),
+            )
+            b.pack(fill="x")
 
     def set_has_selection(self, has: bool) -> None:
         self._has_sel = has
+        t = self._t
+        border = t.get("border", _BTN_BD)
+        danger = t.get("danger", _RED)
         self._del_btn.configure(
-            highlightbackground=_RED if has else _BTN_BD,
+            highlightbackground=danger if has else border,
             highlightthickness=2 if has else 1,
         )
 
@@ -556,63 +645,107 @@ class _ActionToolbar(tk.Frame):
 
 
 # ===========================================================================
-# Filter tab bar
+# Filter list (plain row — matches virtual list, no block/tab chrome)
 # ===========================================================================
 
-class _FilterTabBar(tk.Frame):
-    H = 32
-    TABS = [("all","All"), ("music","Music"), ("pictures","Pictures"),
-            ("videos","Videos"), ("documents","Documents"), ("archives","Archives")]
+class _FilterListBar(tk.Frame):
+    """File-type filter as a single horizontal list of labels (no boxes or tab fills)."""
+
+    H = 28
+    TABS = [
+        ("all", "All"),
+        ("music", "Music"),
+        ("pictures", "Pictures"),
+        ("videos", "Videos"),
+        ("documents", "Documents"),
+        ("archives", "Archives"),
+    ]
 
     def __init__(self, master, on_filter: Callable[[str], None], **kw) -> None:
         kw.setdefault("bg", _WHITE)
         kw.setdefault("height", self.H)
         super().__init__(master, **kw)
         self.pack_propagate(False)
-        self._on_filter   = on_filter
-        self._active      = "all"
-        self._ftabs: Dict[str, tk.Label] = {}
+        self._on_filter = on_filter
+        self._active = "all"
+        self._lbls: Dict[str, tk.Label] = {}
+        self._seps: List[tk.Label] = []
+        self._t_theme: dict = {}
         self._build()
 
     def _build(self) -> None:
-        tk.Frame(self, bg=_BORDER, height=1).pack(side="bottom", fill="x")
-        left = tk.Frame(self, bg=_WHITE)
-        left.pack(side="left", fill="y")
-        for key, lbl in self.TABS:
-            w = tk.Label(left, text=lbl, bg=_WHITE, fg=_GRAY,
-                         font=("Segoe UI", 10), padx=12, cursor="hand2",
-                         relief="flat",
-                         highlightbackground=_BTN_BD, highlightthickness=1)
-            w.pack(side="left", padx=2, pady=4)
-            w.bind("<Button-1>", lambda _e, k=key: self._click(k))
-            self._ftabs[key] = w
+        self._bottom_border = tk.Frame(self, bg=_BORDER, height=1)
+        self._bottom_border.pack(side="bottom", fill="x")
+        self._inner = tk.Frame(self, bg=_WHITE)
+        self._inner.pack(side="left", fill="y")
+
+        for i, (key, text) in enumerate(self.TABS):
+            if i:
+                sep = tk.Label(
+                    self._inner,
+                    text="·",
+                    bg=_WHITE,
+                    fg=_DIMGRAY,
+                    font=("Segoe UI", 10),
+                )
+                sep.pack(side="left")
+                self._seps.append(sep)
+            pad_l = 12 if i == 0 else 6
+            lbl = tk.Label(
+                self._inner,
+                text=text,
+                bg=_WHITE,
+                fg=_GRAY,
+                font=("Segoe UI", 10),
+                cursor="hand2",
+            )
+            lbl.pack(side="left", padx=(pad_l, 6))
+            lbl.bind("<Button-1>", lambda _e, k=key: self._click(k))
+            lbl.bind("<Enter>", lambda _e, k=key: self._hover(k, True))
+            lbl.bind("<Leave>", lambda _e, k=key: self._hover(k, False))
+            self._lbls[key] = lbl
         self._set_active("all")
 
     def apply_theme(self, t: dict) -> None:
         self._t_theme = t
-        self.configure(bg=t.get("bg", _WHITE))
+        bg = t.get("bg", _WHITE)
+        br = t.get("border", _BORDER)
+        self.configure(bg=bg)
+        self._inner.configure(bg=bg)
+        self._bottom_border.configure(bg=br)
+        for sep in self._seps:
+            sep.configure(bg=bg, fg=br)
         self._set_active(self._active)
 
     def _click(self, key: str) -> None:
         self._set_active(key)
         self._on_filter(key)
 
-    def _set_active(self, key: str) -> None:
-        t          = getattr(self, "_t_theme", {})
-        inactive_bg = t.get("bg",     _WHITE)
-        inactive_fg = t.get("fg2",    _GRAY)
-        active_bg   = t.get("accent", _NAVY_MID)
-        active_fg   = t.get("bg",     _WHITE) if t else _WHITE
+    def _hover(self, key: str, inside: bool) -> None:
+        if key == self._active:
+            return
+        t = self._t_theme
+        bg = t.get("bg", _WHITE)
+        fg2 = t.get("fg2", _GRAY)
+        fg = t.get("fg", "#333333")
+        self._lbls[key].configure(
+            bg=bg,
+            fg=fg if inside else fg2,
+        )
 
-        if self._active in self._ftabs:
-            self._ftabs[self._active].configure(
-                bg=inactive_bg, fg=inactive_fg, font=("Segoe UI", 10),
-                highlightbackground=_BTN_BD)
+    def _set_active(self, key: str) -> None:
         self._active = key
-        if key in self._ftabs:
-            self._ftabs[key].configure(
-                bg=active_bg, fg=active_fg, font=("Segoe UI", 10, "bold"),
-                highlightbackground=active_bg)
+        t = self._t_theme
+        bg = t.get("bg", _WHITE)
+        acc = t.get("accent", _NAVY_MID)
+        fg2 = t.get("fg2", _GRAY)
+        for k, w in self._lbls.items():
+            on = k == key
+            w.configure(
+                bg=bg,
+                fg=acc if on else fg2,
+                font=("Segoe UI", 10, "bold") if on else ("Segoe UI", 10),
+            )
 
 
 # ===========================================================================
@@ -625,15 +758,16 @@ class ResultsPage(tk.Frame):
     def __init__(self, master,
                  on_open_group: Optional[Callable[[int, List[DuplicateGroup]], None]] = None,
                  **kw) -> None:
-        kw.setdefault("bg", _WHITE)
+        initial = ThemeApplicator.get().build_tokens()
+        kw.setdefault("bg", initial.get("bg", _WHITE))
         super().__init__(master, **kw)
         self._on_open_group = on_open_group
         self._groups:   List[DuplicateGroup] = []
         self._all_rows: List[Dict]           = []  # flat, unfiltered
         self._filter    = "all"
-        self._t: dict = {}
+        self._t: dict = initial
         self._build()
-        self._t = ThemeApplicator.get().build_tokens()
+        self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
 
     # ------------------------------------------------------------------
@@ -649,21 +783,21 @@ class ResultsPage(tk.Frame):
         )
         self._toolbar.pack(fill="x")
 
-        self._filter_bar = _FilterTabBar(self, on_filter=self._apply_filter)
+        self._filter_bar = _FilterListBar(self, on_filter=self._apply_filter)
         self._filter_bar.pack(fill="x")
 
         self._col_hdr = _ColHeader(self, on_sort=self._on_sort)
         self._col_hdr.pack(fill="x")
 
         # Canvas grid + scrollbar
-        grid_frame = tk.Frame(self, bg=_WHITE)
-        grid_frame.pack(fill="both", expand=True)
+        self._grid_frame = tk.Frame(self, bg=self._t.get("bg", _WHITE))
+        self._grid_frame.pack(fill="both", expand=True)
 
         self._grid = VirtualFileGrid(
-            grid_frame,
+            self._grid_frame,
             on_open_group=self._open_group_by_id,
         )
-        vsb = ttk.Scrollbar(grid_frame, orient="vertical",
+        vsb = ttk.Scrollbar(self._grid_frame, orient="vertical",
                              command=self._grid.yview)
         self._grid.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -674,7 +808,8 @@ class ResultsPage(tk.Frame):
         self._empty_lbl = tk.Label(
             self._grid,
             text="No scan results yet.\nRun a scan from the Scan tab.",
-            bg=_WHITE, fg=_DIMGRAY,
+            bg=self._t.get("bg", _WHITE),
+            fg=self._t.get("fg_muted", _DIMGRAY),
             font=("Segoe UI", 11), justify="center",
         )
         self._empty_lbl.place(relx=0.5, rely=0.4, anchor="center")
@@ -684,16 +819,29 @@ class ResultsPage(tk.Frame):
 
     def _apply_theme(self, t: dict) -> None:
         self._t = t
-        self.configure(bg=t.get("bg", _WHITE))
+        bg = t.get("bg", _WHITE)
+        self.configure(bg=bg)
+        try:
+            self._grid_frame.configure(bg=bg)
+        except Exception:
+            pass
+        try:
+            self._empty_lbl.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
+        except Exception:
+            pass
         self._grid.apply_theme(t)
-        try:
-            self._stats_bar.apply_theme(t)
-        except Exception:
-            pass
-        try:
-            self._filter_bar.apply_theme(t)
-        except Exception:
-            pass
+        for child in (
+            getattr(self, "_stats_bar",  None),
+            getattr(self, "_toolbar",    None),
+            getattr(self, "_filter_bar", None),
+            getattr(self, "_col_hdr",    None),
+        ):
+            if child is None:
+                continue
+            try:
+                child.apply_theme(t)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Public API

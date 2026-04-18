@@ -1,14 +1,22 @@
 """
-ThemeApplicator — applies the active theme to all shell pages.
+ThemeApplicator — single global entry point for applying the active theme.
 
 Every page registers its themed widgets here. When the theme changes,
-ThemeApplicator.apply(theme_name) reconfigures all registered widgets
-in a single pass via after_idle() to avoid blocking.
+ThemeApplicator.apply(theme_name) drives:
+
+  1. ThemeEngineV3.set_theme(name)   — updates all engine subscribers
+                                       (legacy MainWindow/CTk widgets).
+  2. set_ctk_appearance_mode()       — syncs CTk dark/light mode.
+  3. _dispatch(tokens)               — fires shell page hooks (new AppShell).
+
+Using ``apply()`` from every call-site (top-bar dropdown, Settings dialog,
+initial AppShell bootstrap) guarantees that both notification channels run
+together, so theme changes propagate everywhere consistently.
 """
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 
 def _tc(slot: str) -> str:
@@ -31,21 +39,80 @@ class ThemeApplicator:
     def __init__(self) -> None:
         self._hooks: List[Callable[[dict], None]] = []
         self._current: str = "Cerebro Dark"
+        self._root: Optional[tk.Misc] = None
 
     def register(self, hook: Callable[[dict], None]) -> None:
-        """Register a callback that receives the full theme token dict."""
-        self._hooks.append(hook)
+        """Register a callback that receives the full theme token dict.
 
-    def apply(self, theme_name: str, root: tk.Misc) -> None:
-        """Switch to a new theme and notify all registered pages."""
+        The hook is NOT invoked immediately; callers are expected to either
+        consume ``build_tokens()`` during their own construction, or wait for
+        the next ``apply()`` / ``refresh()`` dispatch.
+        """
+        if hook not in self._hooks:
+            self._hooks.append(hook)
+
+    def unregister(self, hook: Callable[[dict], None]) -> None:
+        """Remove a previously registered hook (no-op if absent)."""
+        try:
+            self._hooks.remove(hook)
+        except ValueError:
+            pass
+
+    @property
+    def current_theme(self) -> str:
+        return self._current
+
+    def set_root(self, root: tk.Misc) -> None:
+        """Remember the app root so callers don't have to pass it every time."""
+        self._root = root
+
+    def apply(self, theme_name: str, root: Optional[tk.Misc] = None) -> None:
+        """Switch to a new theme globally and notify every listener.
+
+        - Updates ThemeEngineV3 (legacy engine subscribers refresh).
+        - Syncs CTk appearance mode (Dark/Light).
+        - Dispatches token dict to shell hooks via ``after_idle``.
+        """
+        engine_ok = False
         try:
             from cerebro.core.theme_engine_v3 import ThemeEngineV3
-            ThemeEngineV3.get().set_theme(theme_name)
-            self._current = theme_name
+            engine_ok = ThemeEngineV3.get().set_theme(theme_name)
+            if engine_ok:
+                self._current = theme_name
         except Exception:
             pass
+
+        try:
+            from cerebro.v2.core.theme_bridge_v2 import set_ctk_appearance_mode
+            set_ctk_appearance_mode()
+        except Exception:
+            pass
+
+        if root is not None:
+            self._root = root
+
         tokens = self.build_tokens()
-        root.after_idle(lambda: self._dispatch(tokens))
+        target = self._root
+        if target is not None:
+            try:
+                target.after_idle(lambda: self._dispatch(tokens))
+                return
+            except Exception:
+                pass
+        # Fallback: dispatch synchronously if we can't schedule idle work.
+        self._dispatch(tokens)
+
+    def refresh(self) -> None:
+        """Re-dispatch the currently active theme to all listeners (no engine change)."""
+        tokens = self.build_tokens()
+        target = self._root
+        if target is not None:
+            try:
+                target.after_idle(lambda: self._dispatch(tokens))
+                return
+            except Exception:
+                pass
+        self._dispatch(tokens)
 
     def build_tokens(self) -> dict:
         """Build a flat token dict from the currently active theme."""

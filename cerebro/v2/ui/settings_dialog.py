@@ -450,13 +450,16 @@ class SettingsDialog(CTkToplevel):
             return ""
 
     def _on_theme_changed(self, theme_name: str) -> None:
-        """Apply theme immediately when selected from the dropdown."""
+        """Apply theme immediately when selected from the dropdown.
+
+        Routes through :class:`ThemeApplicator` so the change propagates to
+        **both** engine subscribers (legacy MainWindow/CTk widgets) **and**
+        AppShell page hooks (title bar, tabs, backgrounds, Welcome/Scan/
+        Results/Review/History/Diagnostics) in a single pass.
+        """
         try:
-            from cerebro.core.theme_engine_v3 import ThemeEngineV3
-            ThemeEngineV3.get().set_theme(theme_name)
-            from cerebro.v2.core.theme_bridge_v2 import set_ctk_appearance_mode
-            set_ctk_appearance_mode()
-            # Persist selection
+            from cerebro.v2.ui.theme_applicator import ThemeApplicator
+            ThemeApplicator.get().apply(theme_name)
             self._settings.appearance["theme"] = theme_name
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass

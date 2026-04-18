@@ -4,11 +4,15 @@ TitleBar — 32 px dark-navy bar.
 Left:   decorative macOS-style traffic-light dots (non-functional).
 Center: "C E R E B R O" wordmark in white.
 Right:  "Themes" and "Settings" text links.
+
+``Themes`` is a **single-click quick dropdown** anchored to its label; the
+label widget is exposed via :py:meth:`TitleBar.get_themes_anchor` so the
+shell can position the popup directly beneath it.
 """
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 
@@ -33,6 +37,7 @@ class TitleBar(tk.Frame):
         self._on_settings = on_settings
         self._on_themes   = on_themes
         self._link_labels: List[tk.Label] = []
+        self._named_links: Dict[str, tk.Label] = {}
         self._t = ThemeApplicator.get().build_tokens()
         self._build()
         ThemeApplicator.get().register(self._apply_theme)
@@ -69,8 +74,12 @@ class TitleBar(tk.Frame):
         fg2 = t.get("fg2", _LINK)
         fg  = t.get("fg", "#FFFFFF")
         self._link_labels = []
+        self._named_links = {}
         # packed right-to-left so Settings appears rightmost
-        for text, cb_attr in [("Settings", "_on_settings"), ("Themes", "_on_themes")]:
+        for key, text, cb_attr in [
+            ("settings", "Settings", "_on_settings"),
+            ("themes",   "Themes",   "_on_themes"),
+        ]:
             lbl = tk.Label(
                 self._right_frame, text=text, bg=bg, fg=fg2,
                 font=("Segoe UI", 9), cursor="hand2",
@@ -78,10 +87,11 @@ class TitleBar(tk.Frame):
             lbl.pack(side="right", padx=6)
             cb = getattr(self, cb_attr)
             if cb:
-                lbl.bind("<Button-1>", lambda _e, c=cb: c())
+                lbl.bind("<Button-1>", lambda _e, c=cb, w=lbl: c(w))
             lbl.bind("<Enter>", lambda _e, w=lbl, f=fg:  w.configure(fg=f))
             lbl.bind("<Leave>", lambda _e, w=lbl, f=fg2: w.configure(fg=f))
             self._link_labels.append(lbl)
+            self._named_links[key] = lbl
 
     # ------------------------------------------------------------------
 
@@ -112,3 +122,11 @@ class TitleBar(tk.Frame):
 
     def set_themes_callback(self, cb: Callable[[], None]) -> None:
         self._on_themes = cb
+
+    def get_themes_anchor(self) -> Optional[tk.Label]:
+        """Return the ``Themes`` label widget so popups can anchor under it."""
+        return self._named_links.get("themes")
+
+    def get_settings_anchor(self) -> Optional[tk.Label]:
+        """Return the ``Settings`` label widget."""
+        return self._named_links.get("settings")

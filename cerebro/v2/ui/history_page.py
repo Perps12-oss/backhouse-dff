@@ -5,8 +5,9 @@ Content (two sub-tabs):
   • Scan History    — replicates ScanHistoryDialog treeview, in-page
   • Deletion History — replicates DeletionHistoryDialog treeview, in-page
 
-Design tokens applied: NAVY bg, NAVY_MID headers, BORDER separators,
-FONT_* typography, PANEL_BG sub-tab strip.
+All surfaces are driven by :class:`ThemeApplicator` tokens so the page
+repaints whenever the active theme changes (top-bar quick dropdown or
+Settings > Appearance).
 """
 from __future__ import annotations
 
@@ -21,6 +22,34 @@ from cerebro.v2.ui.design_tokens import (
     NAVY, NAVY_MID, PAD_X, PAD_Y, RED, RED_DARK, ROW_SEL, TEXT_MUTED,
     TEXT_PRIMARY, TEXT_SECONDARY,
 )
+from cerebro.v2.ui.theme_applicator import ThemeApplicator
+
+
+# ---------------------------------------------------------------------------
+# Token helpers — map ThemeApplicator tokens onto the HistoryPage surfaces.
+# ---------------------------------------------------------------------------
+
+def _tk(t: dict, key: str, default: str) -> str:
+    """Safe token lookup with a fallback to the old static constant."""
+    value = t.get(key) if isinstance(t, dict) else None
+    return value if isinstance(value, str) and value else default
+
+
+def _page_colors(t: dict) -> dict:
+    return {
+        "bg":        _tk(t, "bg",        NAVY),
+        "bar":       _tk(t, "nav_bar",   NAVY_MID),
+        "card":      _tk(t, "bg2",       CARD_BG),
+        "border":    _tk(t, "border",    BORDER),
+        "fg":        _tk(t, "fg",        TEXT_PRIMARY),
+        "fg2":       _tk(t, "fg2",       TEXT_SECONDARY),
+        "fg_muted":  _tk(t, "fg_muted",  TEXT_MUTED),
+        "danger":    _tk(t, "danger",    RED),
+        "danger_hover": _tk(t, "accent2", RED_DARK),
+        "row_sel":   _tk(t, "row_sel",   ROW_SEL),
+        "row_sel_fg": _tk(t, "row_sel_fg", TEXT_PRIMARY),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Tiny format helpers (same logic as scan_history_dialog.py)
@@ -53,19 +82,32 @@ class _SectionHeader(tk.Frame):
                  btn_cmd=None) -> None:
         super().__init__(parent, bg=NAVY_MID, height=36)
         self.pack_propagate(False)
-
-        tk.Label(
+        self._title_lbl = tk.Label(
             self, text=title, bg=NAVY_MID, fg=TEXT_PRIMARY,
             font=FONT_HEADER,
-        ).pack(side="left", padx=PAD_X)
+        )
+        self._title_lbl.pack(side="left", padx=PAD_X)
 
+        self._btn: tk.Button | None = None
         if btn_text and btn_cmd:
-            tk.Button(
+            self._btn = tk.Button(
                 self, text=btn_text, command=btn_cmd,
                 bg=RED, fg=TEXT_PRIMARY, activebackground=RED_DARK,
                 activeforeground=TEXT_PRIMARY, relief="flat",
                 font=FONT_SMALL, cursor="hand2", padx=10,
-            ).pack(side="right", padx=PAD_X, pady=5)
+            )
+            self._btn.pack(side="right", padx=PAD_X, pady=5)
+
+    def apply_theme(self, colors: dict) -> None:
+        self.configure(bg=colors["bar"])
+        self._title_lbl.configure(bg=colors["bar"], fg=colors["fg"])
+        if self._btn is not None:
+            self._btn.configure(
+                bg=colors["danger"],
+                fg=colors["row_sel_fg"],
+                activebackground=colors["danger_hover"],
+                activeforeground=colors["row_sel_fg"],
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +123,7 @@ class _SubTabBar(tk.Frame):
         self._on_change = on_change
         self._active = "scan"
         self._btns: dict[str, tk.Label] = {}
+        self._colors = _page_colors({})
 
         for key, label in self.TABS:
             lbl = tk.Label(
@@ -94,13 +137,26 @@ class _SubTabBar(tk.Frame):
         self._select("scan")
 
     def _select(self, key: str) -> None:
-        for k, lbl in self._btns.items():
-            lbl.configure(
-                fg=TEXT_PRIMARY if k == key else TEXT_SECONDARY,
-                font=(FONT_BODY[0], FONT_BODY[1], "bold") if k == key else FONT_BODY,
-            )
         self._active = key
+        self._paint()
         self._on_change(key)
+
+    def _paint(self) -> None:
+        bar = self._colors["bar"]
+        fg  = self._colors["fg"]
+        fg2 = self._colors["fg2"]
+        self.configure(bg=bar)
+        for k, lbl in self._btns.items():
+            is_active = k == self._active
+            lbl.configure(
+                bg=bar,
+                fg=fg if is_active else fg2,
+                font=(FONT_BODY[0], FONT_BODY[1], "bold") if is_active else FONT_BODY,
+            )
+
+    def apply_theme(self, colors: dict) -> None:
+        self._colors = colors
+        self._paint()
 
 
 # ---------------------------------------------------------------------------
@@ -121,48 +177,55 @@ class _ScanHistoryPanel(tk.Frame):
         "duration":    ("Duration",      80),
     }
 
+    _STYLE_NAME = "History.Treeview"
+
     def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
         super().__init__(parent, bg=NAVY)
         self._on_session_click = on_session_click
         self._entries: list = []
+        self._header: _SectionHeader | None = None
+        self._sep: tk.Frame | None = None
+        self._tree_frame: tk.Frame | None = None
+        self._colors = _page_colors({})
         self._build()
 
     def _build(self) -> None:
-        header = _SectionHeader(
+        self._header = _SectionHeader(
             self, "Scan History",
             btn_text="Clear History", btn_cmd=self._clear,
         )
-        header.pack(fill="x")
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        self._header.pack(fill="x")
+        self._sep = tk.Frame(self, bg=BORDER, height=1)
+        self._sep.pack(fill="x")
 
-        tree_frame = tk.Frame(self, bg=NAVY)
-        tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
+        self._tree_frame = tk.Frame(self, bg=NAVY)
+        self._tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
 
         style = ttk.Style()
         style.theme_use("default")
         style.configure(
-            "History.Treeview",
+            self._STYLE_NAME,
             background=CARD_BG, foreground=TEXT_PRIMARY,
             fieldbackground=CARD_BG, rowheight=26,
             font=FONT_BODY,
         )
         style.configure(
-            "History.Treeview.Heading",
+            f"{self._STYLE_NAME}.Heading",
             background=NAVY_MID, foreground=TEXT_PRIMARY,
             font=FONT_SMALL, relief="flat",
         )
-        style.map("History.Treeview", background=[("selected", ROW_SEL)])
+        style.map(self._STYLE_NAME, background=[("selected", ROW_SEL)])
 
         self._tree = ttk.Treeview(
-            tree_frame, columns=self._COLS, show="headings",
-            selectmode="browse", style="History.Treeview",
+            self._tree_frame, columns=self._COLS, show="headings",
+            selectmode="browse", style=self._STYLE_NAME,
         )
         for col, (text, width) in self._HEADINGS.items():
             self._tree.heading(col, text=text)
             anchor = "w" if col == "date" else "center"
             self._tree.column(col, width=width, anchor=anchor)
 
-        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        sb = ttk.Scrollbar(self._tree_frame, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True)
@@ -172,6 +235,39 @@ class _ScanHistoryPanel(tk.Frame):
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
         )
         self._count_lbl.pack(fill="x", side="bottom", pady=(PAD_Y, 0))
+
+    def apply_theme(self, colors: dict) -> None:
+        self._colors = colors
+        self.configure(bg=colors["bg"])
+        if self._header is not None:
+            self._header.apply_theme(colors)
+        if self._sep is not None:
+            self._sep.configure(bg=colors["border"])
+        if self._tree_frame is not None:
+            self._tree_frame.configure(bg=colors["bg"])
+        self._count_lbl.configure(bg=colors["bar"], fg=colors["fg_muted"])
+
+        style = ttk.Style()
+        style.configure(
+            self._STYLE_NAME,
+            background=colors["card"],
+            foreground=colors["fg"],
+            fieldbackground=colors["card"],
+            rowheight=26,
+            font=FONT_BODY,
+        )
+        style.configure(
+            f"{self._STYLE_NAME}.Heading",
+            background=colors["bar"],
+            foreground=colors["fg"],
+            font=FONT_SMALL,
+            relief="flat",
+        )
+        style.map(
+            self._STYLE_NAME,
+            background=[("selected", colors["row_sel"])],
+            foreground=[("selected", colors["row_sel_fg"])],
+        )
 
     def load(self) -> None:
         threading.Thread(target=self._worker, daemon=True).start()
@@ -245,45 +341,52 @@ class _DeletionHistoryPanel(tk.Frame):
         "mode":     ("Mode",           90),
     }
 
+    _STYLE_NAME = "Deletion.Treeview"
+
     def __init__(self, parent: tk.Widget) -> None:
         super().__init__(parent, bg=NAVY)
+        self._header: _SectionHeader | None = None
+        self._sep: tk.Frame | None = None
+        self._tree_frame: tk.Frame | None = None
+        self._colors = _page_colors({})
         self._build()
 
     def _build(self) -> None:
-        header = _SectionHeader(
+        self._header = _SectionHeader(
             self, "Deletion History",
             btn_text="Clear History", btn_cmd=self._clear,
         )
-        header.pack(fill="x")
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        self._header.pack(fill="x")
+        self._sep = tk.Frame(self, bg=BORDER, height=1)
+        self._sep.pack(fill="x")
 
-        tree_frame = tk.Frame(self, bg=NAVY)
-        tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
+        self._tree_frame = tk.Frame(self, bg=NAVY)
+        self._tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
 
         style = ttk.Style()
         style.configure(
-            "Deletion.Treeview",
+            self._STYLE_NAME,
             background=CARD_BG, foreground=TEXT_PRIMARY,
             fieldbackground=CARD_BG, rowheight=26,
             font=FONT_BODY,
         )
         style.configure(
-            "Deletion.Treeview.Heading",
+            f"{self._STYLE_NAME}.Heading",
             background=NAVY_MID, foreground=TEXT_PRIMARY,
             font=FONT_SMALL, relief="flat",
         )
-        style.map("Deletion.Treeview", background=[("selected", ROW_SEL)])
+        style.map(self._STYLE_NAME, background=[("selected", ROW_SEL)])
 
         self._tree = ttk.Treeview(
-            tree_frame, columns=list(self._COLS), show="headings",
-            selectmode="browse", style="Deletion.Treeview",
+            self._tree_frame, columns=list(self._COLS), show="headings",
+            selectmode="browse", style=self._STYLE_NAME,
         )
         for col, (text, width) in self._HEADINGS.items():
             self._tree.heading(col, text=text)
             anchor = "e" if col == "size" else "w" if col in ("date", "filename", "path") else "center"
             self._tree.column(col, width=width, anchor=anchor)
 
-        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        sb = ttk.Scrollbar(self._tree_frame, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True)
@@ -292,6 +395,39 @@ class _DeletionHistoryPanel(tk.Frame):
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
         )
         self._count_lbl.pack(fill="x", side="bottom", pady=(PAD_Y, 0))
+
+    def apply_theme(self, colors: dict) -> None:
+        self._colors = colors
+        self.configure(bg=colors["bg"])
+        if self._header is not None:
+            self._header.apply_theme(colors)
+        if self._sep is not None:
+            self._sep.configure(bg=colors["border"])
+        if self._tree_frame is not None:
+            self._tree_frame.configure(bg=colors["bg"])
+        self._count_lbl.configure(bg=colors["bar"], fg=colors["fg_muted"])
+
+        style = ttk.Style()
+        style.configure(
+            self._STYLE_NAME,
+            background=colors["card"],
+            foreground=colors["fg"],
+            fieldbackground=colors["card"],
+            rowheight=26,
+            font=FONT_BODY,
+        )
+        style.configure(
+            f"{self._STYLE_NAME}.Heading",
+            background=colors["bar"],
+            foreground=colors["fg"],
+            font=FONT_SMALL,
+            relief="flat",
+        )
+        style.map(
+            self._STYLE_NAME,
+            background=[("selected", colors["row_sel"])],
+            foreground=[("selected", colors["row_sel_fg"])],
+        )
 
     def load(self) -> None:
         threading.Thread(target=self._worker, daemon=True).start()
@@ -349,18 +485,22 @@ class HistoryPage(tk.Frame):
         self._on_session_click = on_session_click
         self._panels: dict[str, tk.Frame] = {}
         self._current: str = "scan"
+        self._colors = _page_colors({})
         self._build()
+        ThemeApplicator.get().register(self._apply_theme)
 
     def _build(self) -> None:
-        title_bar = tk.Frame(self, bg=NAVY, height=48)
-        title_bar.pack(fill="x")
-        title_bar.pack_propagate(False)
-        tk.Label(
-            title_bar, text="History", bg=NAVY, fg=TEXT_PRIMARY,
+        self._title_bar = tk.Frame(self, bg=NAVY, height=48)
+        self._title_bar.pack(fill="x")
+        self._title_bar.pack_propagate(False)
+        self._title_lbl = tk.Label(
+            self._title_bar, text="History", bg=NAVY, fg=TEXT_PRIMARY,
             font=FONT_TITLE,
-        ).pack(side="left", padx=PAD_X, pady=PAD_Y)
+        )
+        self._title_lbl.pack(side="left", padx=PAD_X, pady=PAD_Y)
 
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        self._title_sep = tk.Frame(self, bg=BORDER, height=1)
+        self._title_sep.pack(fill="x")
 
         self._container = tk.Frame(self, bg=NAVY)
         self._container.pack(fill="both", expand=True)
@@ -379,9 +519,28 @@ class HistoryPage(tk.Frame):
         # Build sub-tab bar after panels exist; _SubTabBar.__init__ triggers on_change.
         self._tab_bar = _SubTabBar(self, self._on_subtab)
         self._tab_bar.pack(fill="x", before=self._container)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", before=self._container)
+        self._sub_sep = tk.Frame(self, bg=BORDER, height=1)
+        self._sub_sep.pack(fill="x", before=self._container)
 
         self._panels["scan"].tkraise()
+
+    def _apply_theme(self, tokens: dict) -> None:
+        colors = _page_colors(tokens)
+        self._colors = colors
+        self.configure(bg=colors["bg"])
+        self._title_bar.configure(bg=colors["bg"])
+        self._title_lbl.configure(bg=colors["bg"], fg=colors["fg"])
+        self._title_sep.configure(bg=colors["border"])
+        self._sub_sep.configure(bg=colors["border"])
+        self._container.configure(bg=colors["bg"])
+        self._tab_bar.apply_theme(colors)
+        for panel in self._panels.values():
+            apply = getattr(panel, "apply_theme", None)
+            if callable(apply):
+                try:
+                    apply(colors)
+                except tk.TclError:
+                    pass
 
     def _on_subtab(self, key: str) -> None:
         self._current = key
