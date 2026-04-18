@@ -24,13 +24,15 @@ except ImportError:
     CTkFrame = tk.Frame    # type: ignore[misc,assignment]
     CTkLabel = tk.Label    # type: ignore[misc,assignment]
 
-from cerebro.v2.ui.title_bar    import TitleBar
-from cerebro.v2.ui.tab_bar      import TabBar
-from cerebro.v2.ui.welcome_page import WelcomePage
-from cerebro.v2.ui.scan_page    import ScanPage
-from cerebro.v2.ui.results_page import ResultsPage
-from cerebro.v2.ui.review_page  import ReviewPage
-from cerebro.engines.orchestrator import ScanOrchestrator
+from cerebro.v2.ui.title_bar       import TitleBar
+from cerebro.v2.ui.tab_bar         import TabBar
+from cerebro.v2.ui.welcome_page    import WelcomePage
+from cerebro.v2.ui.scan_page       import ScanPage
+from cerebro.v2.ui.results_page    import ResultsPage
+from cerebro.v2.ui.review_page     import ReviewPage
+from cerebro.v2.ui.history_page    import HistoryPage
+from cerebro.v2.ui.diagnostics_page import DiagnosticsPage
+from cerebro.engines.orchestrator  import ScanOrchestrator
 
 _PAGE_BG = "#F0F0F0"
 
@@ -92,10 +94,14 @@ class AppShell(CTk):
         self._page_container = CTkFrame(self, fg_color=_PAGE_BG)
         self._page_container.pack(fill="both", expand=True)
 
-        # Build pages — Welcome, Scan, Results, Review are real; rest placeholders
+        # Build pages — all 6 tabs now have real implementations
         self._pages: Dict[str, CTkFrame] = {}
-        for key in ("history", "diagnostics"):
-            self._pages[key] = self._make_placeholder(key)
+
+        self._history_page = HistoryPage(self._page_container)
+        self._pages["history"] = self._history_page
+
+        self._diagnostics_page = DiagnosticsPage(self._page_container)
+        self._pages["diagnostics"] = self._diagnostics_page
 
         self._review_page = ReviewPage(
             self._page_container,
@@ -146,6 +152,10 @@ class AppShell(CTk):
         self._pages[self._current_page].place_forget()
         self._current_page = key
         self._pages[key].place(relwidth=1, relheight=1)
+        # Notify pages that support lazy loading
+        page = self._pages[key]
+        if hasattr(page, "on_show"):
+            page.on_show()
 
     def switch_tab(self, key: str) -> None:
         """Programmatically navigate to a tab (called by page widgets)."""
