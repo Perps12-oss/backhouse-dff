@@ -160,19 +160,26 @@ class _PreviewArea(tk.Frame):
     def __init__(self, master, **kw) -> None:
         kw.setdefault("bg", _WHITE)
         super().__init__(master, **kw)
-        self._img_ref = None   # keep PIL image reference alive
+        self._img_ref = None
+        self._t: dict = {}
+        self._current_path: Optional[Path] = None
         self._build()
 
     def _build(self) -> None:
-        self._canvas = tk.Canvas(self, bg=_WHITE, highlightthickness=0,
-                                 cursor="hand2")
+        self._canvas = tk.Canvas(self, bg=_WHITE, highlightthickness=0, cursor="hand2")
         self._canvas.pack(fill="both", expand=True)
         self._canvas.bind("<Button-1>", self._on_click)
         self._canvas.bind("<Configure>", lambda _e: self._redraw())
-        self._meta_lbl = tk.Label(self, text="", bg=_WHITE, fg=_GRAY,
-                                  font=("Segoe UI", 9))
+        self._meta_lbl = tk.Label(self, text="", bg=_WHITE, fg=_GRAY, font=("Segoe UI", 9))
         self._meta_lbl.pack(pady=6)
-        self._current_path: Optional[Path] = None
+
+    def apply_theme(self, t: dict) -> None:
+        self._t = t
+        bg    = t.get("bg",       _WHITE)
+        muted = t.get("fg_muted", _GRAY)
+        self.configure(bg=bg)
+        self._canvas.configure(bg=bg)
+        self._meta_lbl.configure(bg=bg, fg=muted)
 
     def load(self, f: DuplicateFile) -> None:
         self._current_path = Path(f.path)
@@ -204,7 +211,6 @@ class _PreviewArea(tk.Frame):
         w = self._canvas.winfo_width()  or 400
         h = self._canvas.winfo_height() or 300
         self._canvas.create_image(w // 2, h // 2, image=photo, anchor="center")
-        # Update meta with dimensions
         cur = self._meta_lbl.cget("text")
         if dims and dims not in cur:
             self._meta_lbl.configure(text=f"{dims}  ·  {cur}")
@@ -215,10 +221,10 @@ class _PreviewArea(tk.Frame):
         w = self._canvas.winfo_width()  or 400
         h = self._canvas.winfo_height() or 300
         self._canvas.create_text(w // 2, h // 2, text=icon,
-                                 font=("Segoe UI", 64), fill=_DIMGRAY)
+                                 font=("Segoe UI", 64),
+                                 fill=self._t.get("fg_muted", _DIMGRAY))
 
     def _redraw(self) -> None:
-        # Re-render if image is loaded
         if self._img_ref:
             self._show_image(self._img_ref, "")
 
@@ -242,51 +248,48 @@ class _CopyCard(tk.Frame):
     """Single file card in the copy list."""
 
     def __init__(self, master, f: DuplicateFile, is_original: bool,
-                 on_select: Callable[[DuplicateFile], None], **kw) -> None:
-        kw.setdefault("bg", _WHITE)
+                 on_select: Callable[[DuplicateFile], None],
+                 t: Optional[dict] = None, **kw) -> None:
+        t = t or {}
+        kw.setdefault("bg", t.get("bg2", _WHITE))
         super().__init__(master, cursor="hand2", **kw)
         self._file      = f
         self._on_select = on_select
-        self._build(f, is_original)
+        self._build(f, is_original, t)
         self.bind("<Button-1>", lambda _e: on_select(f))
 
-    def _build(self, f: DuplicateFile, is_original: bool) -> None:
-        accent_color = _GREEN if is_original else _RED
+    def _build(self, f: DuplicateFile, is_original: bool, t: dict) -> None:
+        bg     = t.get("bg2",      _WHITE)
+        fg     = t.get("fg",       "#111111")
+        fg2    = t.get("fg2",      _GRAY)
+        fg_mut = t.get("fg_muted", _DIMGRAY)
+        border = t.get("border",   _BORDER)
+        accent = _GREEN if is_original else _RED
 
-        # Left accent bar (2 px)
-        tk.Frame(self, bg=accent_color, width=3).pack(side="left", fill="y")
+        tk.Frame(self, bg=accent, width=3).pack(side="left", fill="y")
 
-        body = tk.Frame(self, bg=_WHITE, padx=8, pady=6)
+        body = tk.Frame(self, bg=bg, padx=8, pady=6)
         body.pack(fill="both", expand=True)
         body.bind("<Button-1>", lambda _e: self._on_select(self._file))
 
-        # Filename row + badge
-        top = tk.Frame(body, bg=_WHITE)
+        top = tk.Frame(body, bg=bg)
         top.pack(fill="x")
-        tk.Label(top, text=Path(f.path).name, bg=_WHITE, fg="#111111",
+        tk.Label(top, text=Path(f.path).name, bg=bg, fg=fg,
                  font=("Segoe UI", 11, "bold"), anchor="w").pack(side="left")
-        badge_text  = "ORIGINAL" if is_original else "DUPLICATE"
-        badge_color = _GREEN     if is_original else _RED
-        tk.Label(top, text=badge_text, bg=badge_color, fg=_WHITE,
-                 font=("Segoe UI", 8, "bold"), padx=4, pady=1
-                 ).pack(side="right")
+        tk.Label(top, text="ORIGINAL" if is_original else "DUPLICATE",
+                 bg=accent, fg=_WHITE,
+                 font=("Segoe UI", 8, "bold"), padx=4, pady=1).pack(side="right")
 
-        # Full path
         path_str = str(f.path)
         if len(path_str) > 55:
             path_str = "…" + path_str[-53:]
-        tk.Label(body, text=path_str, bg=_WHITE, fg=_GRAY,
-                 font=("Segoe UI", 9), anchor="w", justify="left"
-                 ).pack(fill="x")
+        tk.Label(body, text=path_str, bg=bg, fg=fg2,
+                 font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
 
-        # Size + date
-        tk.Label(body,
-                 text=f"{_fmt_size(f.size)}  ·  {_fmt_date(f.modified)}",
-                 bg=_WHITE, fg=_DIMGRAY,
-                 font=("Segoe UI", 9)).pack(anchor="w")
+        tk.Label(body, text=f"{_fmt_size(f.size)}  ·  {_fmt_date(f.modified)}",
+                 bg=bg, fg=fg_mut, font=("Segoe UI", 9)).pack(anchor="w")
 
-        # Divider
-        tk.Frame(self, bg=_BORDER, height=1).pack(fill="x", side="bottom")
+        tk.Frame(self, bg=border, height=1).pack(fill="x", side="bottom")
 
 
 class _CopyList(tk.Frame):
@@ -296,21 +299,21 @@ class _CopyList(tk.Frame):
         kw.setdefault("bg", _F8)
         super().__init__(master, **kw)
         self._on_select: Optional[Callable[[DuplicateFile], None]] = None
+        self._t: dict = {}
         self._build()
 
     def _build(self) -> None:
-        # Header
         self._hdr = tk.Label(self, text="All copies — 0 files",
                              bg=_F8, fg="#111111",
                              font=("Segoe UI", 11, "bold"),
                              anchor="w", padx=16, pady=10)
         self._hdr.pack(fill="x")
-        tk.Frame(self, bg=_BORDER, height=1).pack(fill="x")
+        self._hdr_sep = tk.Frame(self, bg=_BORDER, height=1)
+        self._hdr_sep.pack(fill="x")
 
-        # Scrollable body
         from tkinter import ttk
         canvas = tk.Canvas(self, bg=_WHITE, highlightthickness=0)
-        vsb    = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         canvas.pack(fill="both", expand=True)
@@ -318,13 +321,22 @@ class _CopyList(tk.Frame):
         self._inner = tk.Frame(canvas, bg=_WHITE)
         win = canvas.create_window((0, 0), window=self._inner, anchor="nw")
 
-        def _cfg(e): canvas.configure(scrollregion=canvas.bbox("all"))
-        def _resize(e): canvas.itemconfig(win, width=e.width)
-        self._inner.bind("<Configure>", _cfg)
-        canvas.bind("<Configure>", _resize)
-        canvas.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(-1*(e.delta//120), "units"))
+        self._inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
         self._canvas = canvas
+
+    def apply_theme(self, t: dict) -> None:
+        self._t = t
+        bg  = t.get("bg2",    _F8)
+        fg  = t.get("fg",     "#111111")
+        bg2 = t.get("bg",     _WHITE)
+        br  = t.get("border", _BORDER)
+        self.configure(bg=bg)
+        self._hdr.configure(bg=bg, fg=fg)
+        self._hdr_sep.configure(bg=br)
+        self._canvas.configure(bg=bg2)
+        self._inner.configure(bg=bg2)
 
     def load(self, group: DuplicateGroup,
              on_select: Callable[[DuplicateFile], None]) -> None:
@@ -333,14 +345,12 @@ class _CopyList(tk.Frame):
             w.destroy()
         n = len(group.files)
         self._hdr.configure(text=f"All copies — {n} file{'s' if n != 1 else ''}")
-
-        # Determine "original" = file with is_keeper True, or oldest by modified
-        keeper_idx = group.keeper_index()
+        keeper_idx = group.get_keeper_index()
         for i, f in enumerate(group.files):
-            card = _CopyCard(self._inner, f,
-                             is_original=(i == keeper_idx),
-                             on_select=on_select)
-            card.pack(fill="x")
+            _CopyCard(self._inner, f,
+                      is_original=(i == keeper_idx),
+                      on_select=on_select,
+                      t=self._t).pack(fill="x")
 
 
 # ===========================================================================
@@ -375,6 +385,22 @@ class _GroupNav(tk.Frame):
                                    cursor="hand2", padx=14,
                                    command=on_next)
         self._next_btn.pack(side="right", fill="y")
+
+    def apply_theme(self, t: dict) -> None:
+        bg    = t.get("bg",       _WHITE)
+        fg    = t.get("fg",       "#333333")
+        muted = t.get("fg_muted", _GRAY)
+        br    = t.get("border",   _BORDER)
+        self.configure(bg=bg)
+        self._prev_btn.configure(bg=bg, fg=fg, activebackground=bg)
+        self._next_btn.configure(bg=bg, fg=fg, activebackground=bg)
+        self._nav_lbl.configure(bg=bg, fg=muted)
+        for w in self.winfo_children():
+            if isinstance(w, tk.Frame):
+                try:
+                    w.configure(bg=br)
+                except tk.TclError:
+                    pass
 
     def update(self, idx: int, total: int) -> None:
         self._nav_lbl.configure(text=f"{idx + 1} / {total}")
@@ -455,15 +481,26 @@ class ReviewPage(tk.Frame):
     # ------------------------------------------------------------------
     def _apply_theme(self, t: dict) -> None:
         self._t = t
-        self.configure(bg=t.get("bg", _WHITE))
-        self._left_col.configure(bg=t.get("bg", _WHITE))
-        self._right_col.configure(bg=t.get("bg2", _F8))
-        self._breadcrumb.configure(bg=t.get("nav_bar", _NAVY_MID))
+        bg  = t.get("bg",     _WHITE)
+        bg2 = t.get("bg2",    _F8)
+        fg  = t.get("fg",     "#333333")
+        br  = t.get("border", _BORDER)
+        self.configure(bg=bg)
+        self._left_col.configure(bg=bg)
+        self._right_col.configure(bg=bg2)
         self._breadcrumb.apply_theme(t)
-        self._preview.configure(bg=t.get("bg", _WHITE))
-        self._acts_bar.configure(bg=t.get("bg", _WHITE))
-        self._copy_list.configure(bg=t.get("bg2", _F8))
-        self._group_nav.configure(bg=t.get("bg", _WHITE))
+        self._preview.apply_theme(t)
+        self._acts_bar.configure(bg=bg)
+        for w in self._acts_bar.winfo_children():
+            try:
+                if isinstance(w, tk.Button):
+                    w.configure(bg=bg, fg=fg, activebackground=bg)
+                else:
+                    w.configure(bg=br)
+            except tk.TclError:
+                pass
+        self._copy_list.apply_theme(t)
+        self._group_nav.apply_theme(t)
 
     def _bind_keys(self) -> None:
         self.bind("<Left>",  lambda _e: self._prev_group())
