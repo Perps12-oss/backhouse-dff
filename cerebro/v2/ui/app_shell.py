@@ -24,8 +24,9 @@ except ImportError:
     CTkFrame = tk.Frame    # type: ignore[misc,assignment]
     CTkLabel = tk.Label    # type: ignore[misc,assignment]
 
-from cerebro.v2.ui.title_bar import TitleBar
-from cerebro.v2.ui.tab_bar   import TabBar
+from cerebro.v2.ui.title_bar    import TitleBar
+from cerebro.v2.ui.tab_bar      import TabBar
+from cerebro.v2.ui.welcome_page import WelcomePage
 from cerebro.engines.orchestrator import ScanOrchestrator
 
 _PAGE_BG = "#F0F0F0"
@@ -88,10 +89,16 @@ class AppShell(CTk):
         self._page_container = CTkFrame(self, fg_color=_PAGE_BG)
         self._page_container.pack(fill="both", expand=True)
 
-        # Build one placeholder per tab
+        # Build pages — Welcome is real; rest are placeholders for now
         self._pages: Dict[str, CTkFrame] = {}
-        for key in ("welcome", "scan", "results", "review", "history", "diagnostics"):
+        for key in ("scan", "results", "review", "history", "diagnostics"):
             self._pages[key] = self._make_placeholder(key)
+
+        self._pages["welcome"] = WelcomePage(
+            self._page_container,
+            on_start_scan=lambda: self.switch_tab("scan"),
+            on_open_session=self._on_open_session,
+        )
 
         # Show Welcome
         self._current_page: str = "welcome"
@@ -132,6 +139,10 @@ class AppShell(CTk):
 
     def _open_themes(self) -> None:
         pass  # Phase 7
+
+    def _on_open_session(self, session) -> None:
+        """Load a past session into the Results page and switch to it (Phase 4+)."""
+        self.switch_tab("results")
 
     # ------------------------------------------------------------------
     # Public API for later phases
