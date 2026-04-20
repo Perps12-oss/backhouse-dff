@@ -65,6 +65,48 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
         pass
 
 
+def _assert_no_self_duplicates(group_paths: list, group_key: str = "?") -> tuple:
+    """Regression guard: no emit-ready group may contain two paths resolving
+    to the same canonical file.
+
+    Phase 2a (dedupe_roots) fixes the root-overlap variant of Bug 1. This guard
+    is defense-in-depth — catches any future regression where two paths resolve
+    to the same inode through a mechanism dedupe_roots does not cover (hardlinks,
+    junctions, symlinks, cross-drive aliases).
+
+    Returns (kept_paths, regression_count).
+    Debug builds: raises AssertionError with context.
+    Release builds: logs warning and drops the offending entry.
+    """
+    canonicals: dict = {}
+    kept: list = []
+    regressions = 0
+    for path, mtime in group_paths:
+        try:
+            canonical = os.path.normcase(os.path.realpath(str(path)))
+        except OSError as e:
+            logger.warning("[GUARD] realpath failed for %s: %s — keeping as-is", path, e)
+            kept.append((path, mtime))
+            continue
+
+        if canonical in canonicals:
+            msg = (
+                f"[GUARD] self-duplicate regression: group {group_key[:16]} "
+                f"contains {path} resolving to {canonical}, already present "
+                f"via {canonicals[canonical]}"
+            )
+            if __debug__:
+                raise AssertionError(msg)
+            logger.warning(msg)
+            regressions += 1
+            continue
+
+        canonicals[canonical] = str(path)
+        kept.append((path, mtime))
+
+    return kept, regressions
+
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -662,8 +704,15 @@ class TurboScanner:
         )
         emitted_count = 0
         meta_errors = 0
+        _guard_regressions = 0
+        _guard_checked = 0
+        _guard_files_checked = 0
 
-        for group_paths in final_groups.values():
+        for h, group_paths in final_groups.items():
+            group_paths, _r = _assert_no_self_duplicates(group_paths, group_key=h)
+            _guard_regressions += _r
+            _guard_checked += 1
+            _guard_files_checked += len(group_paths)
             if len(group_paths) < 2:
                 continue
             for path, _ in group_paths:
@@ -688,6 +737,10 @@ class TurboScanner:
         self.stats['metadata_errors'] = meta_errors
 
         logger.info("[Turbo] Scan complete")
+        logger.info(
+            "[DIAG:GUARD] groups_checked=%d total_files_checked=%d regressions=%d",
+            _guard_checked, _guard_files_checked, _guard_regressions,
+        )
         logger.info("Discovered: %d", discovered_count)
         logger.info("Candidates: %d", candidate_count)
         logger.info("Emitted: %d", emitted_count)
