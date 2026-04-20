@@ -1,4 +1,12 @@
-"""Phase 1 diagnostic scan — run once, saves log to diagnostics/."""
+"""Phase 1 diagnostic scan runner — re-run capability for post-v1 audit.
+
+Relocated from diagnostics/_run_phase1_scan.py (Phase 1 closure commit).
+Log output written to diagnostics/ (gitignored).
+
+Usage:
+    python scripts/dev/phase1_scan_runner.py <path>
+    python scripts/dev/phase1_scan_runner.py  # defaults to jhjl test tree
+"""
 import sys
 import os
 import logging
@@ -11,7 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-log_path = Path(__file__).parent / f"phase1_scan_{stamp}.log"
+log_dir = ROOT / "diagnostics"
+log_dir.mkdir(exist_ok=True)
+log_path = log_dir / f"phase1_scan_{stamp}.log"
 
 from cerebro.services.logger import get_logger, configure  # noqa: E402
 configure(level=logging.INFO, log_to_file=False)
@@ -24,7 +34,11 @@ diag_fh.setFormatter(
 logging.getLogger("CEREBRO").addHandler(diag_fh)
 
 logger = get_logger(__name__)
-TARGET = Path(r"C:\Users\S8633\Downloads\jhjl")
+
+if len(sys.argv) > 1:
+    TARGET = Path(sys.argv[1])
+else:
+    TARGET = Path(r"C:\Users\S8633\Downloads\jhjl")
 
 logger.info("=== Phase 1 diagnostic scan START root=%s ===", TARGET)
 

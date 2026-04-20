@@ -92,3 +92,54 @@ DIAG log markers added to all active paths at INFO level:
 | B      fast_pipeline.py   | YES | Counter added in cache-lookup loop |
 | D      file_dedup_engine.py | WAIVER | Cache accessed inside worker threads; adding a thread-safe hit counter requires non-trivial shared state. cache_hit% omitted from DIAG:SUMMARY for this path. |
 | grouping.py (dead)         | N/A | No hash cache; omitted |
+
+---
+
+## Phase 1 Closure Waivers
+
+### Waiver 1A — `[DIAG:SUMMARY]` missing `groups_dropped_self_dup` and `scan_type` fields
+
+**Original spec:** `[DIAG:SUMMARY]` to include `groups_dropped_self_dup` and `scan_type`
+fields (fresh|rescan|resume).
+
+**Actual:** These fields are absent. Existing `[DIAG:SUMMARY]` fields
+(groups_created, emitted, cache_hits, cache_misses, elapsed) are present.
+
+**Reason:** Instrumentation scope creep — tracking these fields would have required
+state propagation across phase boundaries for no diagnostic value post-Phase-2.
+The `groups_dropped_self_dup` metric is superseded by the `[DIAG:GUARD]` regression
+guard landed in Phase 2c (434fa7f). The `scan_type` field is not needed for any
+downstream phase decision.
+
+**Status:** ACCEPTED. No corrective action required.
+
+---
+
+### Waiver 1B — `_diagnose_pair()` fires at most 8 times per scan
+
+**Original spec:** `_diagnose_pair()` exhaustive coverage (implied: fires on every
+collision pair encountered).
+
+**Actual:** Capped at 8 invocations per scan.
+
+**Reason:** Prevents log flooding on corpora with many potential collisions. 8 samples
+are sufficient to characterize a collision pattern; exhaustive logging on a 16,965-file
+scan would produce hundreds of entries with no additional diagnostic value.
+
+**Status:** ACCEPTED. No corrective action required.
+
+---
+
+### Waiver 1C — Sample reproduction used `jhjl` test tree, not production dataset
+
+**Original spec:** Reproduction against production dataset.
+
+**Actual:** Phase 1 sample log (`phase1_scan_20260420_015801.log`) was captured against
+the `jhjl` test tree (1,072 files, 23 size groups, 1 final pair).
+
+**Reason:** Production reproduction was performed during Phase 2 investigation, not
+Phase 1. The 5-root overlap set (16,965 files, 5 user-specified roots, 2 descendants
+collapsed to 3 effective roots, 4,560 emitted post-fix) is documented with full inline
+log evidence in `docs/bug-investigations/bug1-canonical-path-dedup.md`.
+
+**Status:** ACCEPTED. Production evidence exists in the Phase 2 investigation doc.
