@@ -44,9 +44,14 @@ class ScanOrchestrator:
         self._register_engines()
 
     def _register_engines(self) -> None:
-        """Register all available scan engines."""
+        """Register all available scan engines.
+
+        Single entrance, single file-scan core: the "files" mode is backed
+        exclusively by TurboFileEngine -> TurboScanner. The legacy
+        "files_classic" mode (FileDedupEngine, ~600 LOC independent classic
+        pipeline) was removed in the post-v1 audit Cut 3.
+        """
         from cerebro.engines.empty_folder_engine import EmptyFolderEngine
-        from cerebro.engines.file_dedup_engine import FileDedupEngine
         from cerebro.engines.image_dedup_engine import ImageDedupEngine
         from cerebro.engines.large_file_engine import LargeFileEngine
         from cerebro.engines.music_dedup_engine import MusicDedupEngine
@@ -54,7 +59,6 @@ class ScanOrchestrator:
         from cerebro.engines.video_dedup_engine import VideoDedupEngine
 
         self._engines["files"]         = TurboFileEngine()
-        self._engines["files_classic"] = FileDedupEngine()
         self._engines["photos"]        = ImageDedupEngine()
         self._engines["videos"]        = VideoDedupEngine()
         self._engines["music"]         = MusicDedupEngine()

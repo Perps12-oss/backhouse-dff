@@ -36,8 +36,8 @@ def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list,
     (hardlinks, junctions, symlinks, cross-drive aliases).
 
     Accepts heterogeneous group formats:
-      - List of (path, mtime) tuples  — turbo_scanner (Paths A/C)
-      - List of Path objects          — file_dedup_engine (Path D)
+      - List of (path, mtime) tuples  — turbo_scanner (the sole live path)
+      - List of Path objects          — accepted for historical callers
 
     Each item is returned as-is in the kept list; only the path is extracted
     for canonicalization.

@@ -12,7 +12,6 @@ from cerebro.engines.base_engine import (
     DuplicateFile,
     EngineOption
 )
-from cerebro.engines.file_dedup_engine import FileDedupEngine
 from cerebro.engines.orchestrator import ScanOrchestrator
 from cerebro.engines.hash_cache import HashCache
 
@@ -23,7 +22,6 @@ __all__ = [
     'DuplicateGroup',
     'DuplicateFile',
     'EngineOption',
-    'FileDedupEngine',
     'ScanOrchestrator',
     'HashCache',
 ]

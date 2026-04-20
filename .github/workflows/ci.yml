@@ -53,4 +53,6 @@ jobs:
       - name: Runtime smoke
         run: |
           python -c "import main; print('import main OK')"
-          python -c "from cerebro.engines.orchestrator import ScanOrchestrator; o=ScanOrchestrator(); print(type(o._engines['files']).__name__); print('files_classic' in o.get_available_modes())"
+          # Post-v1 audit Cut 3 invariant: only "files" is registered for file
+          # scans. "files_classic" (FileDedupEngine) was removed. Assert both.
+          python -c "from cerebro.engines.orchestrator import ScanOrchestrator; o=ScanOrchestrator(); assert type(o._engines['files']).__name__ == 'TurboFileEngine'; assert 'files_classic' not in o.get_available_modes(); print('single-entrance invariant OK')"

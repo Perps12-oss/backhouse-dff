@@ -2,8 +2,11 @@
 
 This engine wires the already-optimised TurboScanner into the
 BaseEngine lifecycle so the GUI gets fast scans with proper progress
-reporting, cancellation at phase boundaries, and DuplicateGroup
-results identical to the classic FileDedupEngine output shape.
+reporting, cancellation at phase boundaries, and DuplicateGroup results.
+
+Since the post-v1 audit "single entrance" cleanup, this is the sole
+file-dedup scan core in the app. It is registered as mode "files" by
+ScanOrchestrator; there is no "files_classic" alternative anymore.
 
 Limitations (v1):
   - pause()/resume() raise NotImplementedError (TurboScanner has no

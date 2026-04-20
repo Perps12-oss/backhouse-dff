@@ -15,7 +15,9 @@ def test_orchestrator_can_open_files_mode() -> None:
 
     assert isinstance(options, list)
     assert isinstance(orchestrator.get_active_engine(), TurboFileEngine)
-    assert "files_classic" in orchestrator.get_available_modes()
+    # "files_classic" (FileDedupEngine) was removed in the post-v1 audit Cut 3.
+    # Single-entrance invariant: only "files" is registered for file scans.
+    assert "files_classic" not in orchestrator.get_available_modes()
     assert orchestrator.get_active_engine().state == ScanState.IDLE
 
 
