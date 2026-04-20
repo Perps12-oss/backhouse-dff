@@ -666,7 +666,7 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
         b_real = unicodedata.normalize("NFC", os.path.normcase(os.path.realpath(path_b))).strip()
         if a_real == b_real:
             logger.info(
-                "[DIAG:REDUCE] canonical-path collision size=%d path_a=%.80s path_b=%.80s",
+                "[DIAG:PAIR] canonical-path-collision size=%d path_a=%.80s path_b=%.80s",
                 size, path_a, path_b,
             )
             return
@@ -677,7 +677,7 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
         b_st = os.stat(path_b)
         if a_st.st_ino != 0 and a_st.st_ino == b_st.st_ino and a_st.st_dev == b_st.st_dev:
             logger.info(
-                "[DIAG:REDUCE] inode collision size=%d ino=%d dev=%d path_a=%.80s path_b=%.80s",
+                "[DIAG:PAIR] inode-collision size=%d ino=%d dev=%d path_a=%.80s path_b=%.80s",
                 size, a_st.st_ino, a_st.st_dev, path_a, path_b,
             )
     except (OSError, ValueError):

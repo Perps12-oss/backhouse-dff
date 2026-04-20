@@ -45,7 +45,7 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
         b_real = unicodedata.normalize("NFC", os.path.normcase(os.path.realpath(path_b))).strip()
         if a_real == b_real:
             logger.info(
-                "[DIAG:REDUCE] canonical-path collision size=%d path_a=%.80s path_b=%.80s",
+                "[DIAG:PAIR] canonical-path-collision size=%d path_a=%.80s path_b=%.80s",
                 size, path_a, path_b,
             )
             return
@@ -56,7 +56,7 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
         b_st = os.stat(path_b)
         if a_st.st_ino != 0 and a_st.st_ino == b_st.st_ino and a_st.st_dev == b_st.st_dev:
             logger.info(
-                "[DIAG:REDUCE] inode collision size=%d ino=%d dev=%d path_a=%.80s path_b=%.80s",
+                "[DIAG:PAIR] inode-collision size=%d ino=%d dev=%d path_a=%.80s path_b=%.80s",
                 size, a_st.st_ino, a_st.st_dev, path_a, path_b,
             )
     except (OSError, ValueError):
@@ -299,13 +299,17 @@ class FastPipeline:
             to_hash: List[FastFileInfo] = []
             cache_writes: List[Tuple[str, int, float, str]] = []
 
+            _diag_cache_hits = 0
+            _diag_cache_misses = 0
             if cache:
                 for f in candidates:
                     qh = cache.get(f.path, f.size, f.mtime)
                     if qh:
                         hash_groups.setdefault(qh, []).append(f.path)
+                        _diag_cache_hits += 1
                     else:
                         to_hash.append(f)
+                        _diag_cache_misses += 1
             else:
                 to_hash = candidates
 
@@ -369,10 +373,13 @@ class FastPipeline:
             groups.append({"hash": h, "size": None, "paths": paths, "count": len(paths)})
 
         elapsed = time.time() - start
+        _diag_total_cache = _diag_cache_hits + _diag_cache_misses
+        _diag_hit_pct = (_diag_cache_hits / _diag_total_cache * 100) if _diag_total_cache else 0.0
         logger.info(
             "[DIAG:SUMMARY] scan=fast_pipeline discovered=%d size_candidates=%d"
-            " final_groups=%d elapsed=%.2fs",
+            " final_groups=%d elapsed=%.2fs cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
             len(files), len(candidates), len(groups), elapsed,
+            _diag_cache_hits, _diag_cache_misses, _diag_hit_pct,
         )
         emit(100, f"FAST MODE done: {len(groups)} duplicate groups", {
             "phase": "completed",

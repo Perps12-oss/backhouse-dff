@@ -43,6 +43,15 @@
 
 ## Dead Paths
 
+### grouping.py — DEAD (instrumented)
+- **File**: `cerebro/core/grouping.py` `SizeGrouping.group_by_size()`
+- **Caller**: designed for the Path E `ScanWorker` → `CerebroPipeline` pipeline
+- **Status**: DEAD — `SizeGrouping` is never imported anywhere in the live app
+- **Instrumented**: YES — DIAG:DISCOVERY / DIAG:REDUCE / DIAG:PAIR / DIAG:SUMMARY added
+  for completeness; logs will not appear in normal operation
+
+---
+
 ### Path E — DEAD
 - **Entry**: `cerebro/workers/scan_worker.py` `ScanWorker.execute()`
 - **Calls**: `CerebroPipeline().run(request, ...)` — `CerebroPipeline` in `cerebro/core/pipeline.py`
@@ -70,6 +79,16 @@ each active path using `os.path.normcase(os.path.realpath(p))` +
 
 DIAG log markers added to all active paths at INFO level:
 - `[DIAG:DISCOVERY]` — file count actually passed downstream, root(s), filters
-- `[DIAG:REDUCE]` — count-in / count-out at each size/hash reduction step
-- `[DIAG:REDUCE] canonical-path collision` / `inode collision` — per `_diagnose_pair()`
-- `[DIAG:SUMMARY]` — final totals: discovered, candidates, groups, elapsed, cache hit%
+- `[DIAG:REDUCE]`    — count-in / count-out at each size/hash reduction step (no path dumps)
+- `[DIAG:PAIR]`      — fires per-pair when `_diagnose_pair()` detects a canonical-path or
+                       inode collision within a size group
+- `[DIAG:SUMMARY]`   — final totals: discovered, candidates, groups, elapsed, cache hit%
+
+### DIAG:SUMMARY cache_hit% coverage
+
+| Path | cache_hit% in SUMMARY | Notes |
+|------|-----------------------|-------|
+| A / C  turbo_scanner.py   | YES | HashCache tracks hits/misses via stats dict |
+| B      fast_pipeline.py   | YES | Counter added in cache-lookup loop |
+| D      file_dedup_engine.py | WAIVER | Cache accessed inside worker threads; adding a thread-safe hit counter requires non-trivial shared state. cache_hit% omitted from DIAG:SUMMARY for this path. |
+| grouping.py (dead)         | N/A | No hash cache; omitted |
