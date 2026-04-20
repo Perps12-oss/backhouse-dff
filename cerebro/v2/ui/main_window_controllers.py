@@ -32,6 +32,10 @@ class HistoryRecorder:
         bytes_reclaimable: int,
         duration_seconds: float,
     ) -> None:
+        logger.info(
+            "[PHASE3.0:RECORD] record_completed_scan entered mode=%s groups=%d",
+            mode, groups_found,
+        )
         try:
             from cerebro.v2.ui.scan_history_dialog import record_scan
 
@@ -91,6 +95,11 @@ class ScanController:
         self._history = history
 
     def start_search(self) -> None:
+        logger.info(
+            "[PHASE3.0:GUARD] start_search entered _scanning=%s orchestrator_scanning=%s",
+            self._window._scanning,
+            self._window._orchestrator.is_scanning(),
+        )
         if self._window._scanning or self._window._orchestrator.is_scanning():
             logger.info("Ignoring duplicate start request while scan is active")
             return
