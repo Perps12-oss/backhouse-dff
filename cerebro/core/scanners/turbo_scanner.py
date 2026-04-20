@@ -36,6 +36,7 @@ from cerebro.core.models import FileMetadata
 from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
 from cerebro.core.root_dedup import dedupe_roots
+from cerebro.core.group_invariants import _assert_no_self_duplicates
 
 logger = get_logger(__name__)
 
@@ -63,48 +64,6 @@ def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
             )
     except (OSError, ValueError):
         pass
-
-
-def _assert_no_self_duplicates(group_paths: list, group_key: str = "?") -> tuple:
-    """Regression guard: no emit-ready group may contain two paths resolving
-    to the same canonical file.
-
-    Phase 2a (dedupe_roots) fixes the root-overlap variant of Bug 1. This guard
-    is defense-in-depth — catches any future regression where two paths resolve
-    to the same inode through a mechanism dedupe_roots does not cover (hardlinks,
-    junctions, symlinks, cross-drive aliases).
-
-    Returns (kept_paths, regression_count).
-    Debug builds: raises AssertionError with context.
-    Release builds: logs warning and drops the offending entry.
-    """
-    canonicals: dict = {}
-    kept: list = []
-    regressions = 0
-    for path, mtime in group_paths:
-        try:
-            canonical = os.path.normcase(os.path.realpath(str(path)))
-        except OSError as e:
-            logger.warning("[GUARD] realpath failed for %s: %s — keeping as-is", path, e)
-            kept.append((path, mtime))
-            continue
-
-        if canonical in canonicals:
-            msg = (
-                f"[GUARD] self-duplicate regression: group {group_key[:16]} "
-                f"contains {path} resolving to {canonical}, already present "
-                f"via {canonicals[canonical]}"
-            )
-            if __debug__:
-                raise AssertionError(msg)
-            logger.warning(msg)
-            regressions += 1
-            continue
-
-        canonicals[canonical] = str(path)
-        kept.append((path, mtime))
-
-    return kept, regressions
 
 
 # ============================================================================

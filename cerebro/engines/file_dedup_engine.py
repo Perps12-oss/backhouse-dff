@@ -29,6 +29,7 @@ from cerebro.engines.base_engine import (
 )
 from cerebro.engines.hash_cache import HashCache
 from cerebro.core.root_dedup import dedupe_roots
+from cerebro.core.group_invariants import _assert_no_self_duplicates
 
 
 # Hash algorithm support
@@ -619,9 +620,26 @@ class FileDedupEngine(BaseEngine):
         """Build DuplicateGroup results from hash groups."""
         self._results = []
 
+        _d_all_groups = len(hash_groups)
+        _d_dupe_groups = sum(1 for f in hash_groups.values() if len(f) >= 2)
+        logger.info(
+            "[DIAG:EMIT] scan=files_classic total_groups=%d dupe_groups=%d singleton_groups=%d",
+            _d_all_groups, _d_dupe_groups, _d_all_groups - _d_dupe_groups,
+        )
+        _d_guard_regressions = 0
+        _d_guard_checked = 0
+        _d_guard_files = 0
+
         for group_id, files in enumerate(hash_groups.values(), 1):
             if self._is_cancelled():
                 break
+
+            files, _r = _assert_no_self_duplicates(list(files), group_key=str(group_id))
+            _d_guard_regressions += _r
+            _d_guard_checked += 1
+            _d_guard_files += len(files)
+            if len(files) < 2:
+                continue
 
             # Build DuplicateFile objects
             dup_files = []
@@ -663,6 +681,11 @@ class FileDedupEngine(BaseEngine):
                 files=dup_files,
                 similarity_type="exact"
             ))
+
+        logger.info(
+            "[DIAG:GUARD] scan=files_classic groups_checked=%d total_files_checked=%d regressions=%d",
+            _d_guard_checked, _d_guard_files, _d_guard_regressions,
+        )
 
 
 # Simple logger fallback

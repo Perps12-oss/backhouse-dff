@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
+from cerebro.core.group_invariants import _assert_no_self_duplicates
 
 ProgressCB = Callable[[int, str, Dict[str, Any]], None]
 
@@ -366,11 +367,28 @@ class FastPipeline:
 
         emit(92, "Finalizing results…", {"phase": "finalizing", "files_scanned": len(files)})
 
+        _fp_all_groups = len(hash_groups)
+        _fp_dupe_groups = sum(1 for p in hash_groups.values() if len(p) >= 2)
+        logger.info(
+            "[DIAG:EMIT] scan=fast_pipeline total_groups=%d dupe_groups=%d singleton_groups=%d",
+            _fp_all_groups, _fp_dupe_groups, _fp_all_groups - _fp_dupe_groups,
+        )
+        _fp_guard_regressions = 0
+        _fp_guard_checked = 0
+        _fp_guard_files = 0
         groups = []
         for h, paths in hash_groups.items():
+            paths, _r = _assert_no_self_duplicates(paths, group_key=h)
+            _fp_guard_regressions += _r
+            _fp_guard_checked += 1
+            _fp_guard_files += len(paths)
             if len(paths) < 2:
                 continue
             groups.append({"hash": h, "size": None, "paths": paths, "count": len(paths)})
+        logger.info(
+            "[DIAG:GUARD] scan=fast_pipeline groups_checked=%d total_files_checked=%d regressions=%d",
+            _fp_guard_checked, _fp_guard_files, _fp_guard_regressions,
+        )
 
         elapsed = time.time() - start
         _diag_total_cache = _diag_cache_hits + _diag_cache_misses
