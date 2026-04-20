@@ -647,15 +647,25 @@ class TurboScanner:
                 "recoverable_bytes": _group_recoverable(paths),
             }
             for h, paths in (final_groups.items() if final_groups else [])
+            if len(paths) >= 2
         ]
-        
+
         # Phase 5: Yield results
         discovered_count = len(discovered_files)
         candidate_count = sum(len(v) for v in final_groups.values()) if final_groups else 0
+        _all_groups = len(final_groups) if final_groups else 0
+        _dupe_groups = sum(1 for v in final_groups.values() if len(v) >= 2) if final_groups else 0
+        _files_in_dupe_groups = sum(len(v) for v in final_groups.values() if len(v) >= 2) if final_groups else 0
+        logger.info(
+            "[DIAG:EMIT] total_groups=%d dupe_groups=%d singleton_groups=%d files_in_dupe_groups=%d",
+            _all_groups, _dupe_groups, _all_groups - _dupe_groups, _files_in_dupe_groups,
+        )
         emitted_count = 0
         meta_errors = 0
 
         for group_paths in final_groups.values():
+            if len(group_paths) < 2:
+                continue
             for path, _ in group_paths:
                 try:
                     # Be robust: FileMetadata may expect a string path
