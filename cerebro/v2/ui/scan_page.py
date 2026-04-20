@@ -32,6 +32,7 @@ except ImportError:
 
 from cerebro.engines.base_engine import ScanProgress, ScanState
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
+from cerebro.v2.ui.widgets.scan_in_progress_view import ScanInProgressView
 
 # ---------------------------------------------------------------------------
 # Design tokens (local — no theme engine dependency)
@@ -726,119 +727,13 @@ class _SuggestionsFooter(tk.Frame):
         self._lbl.configure(bg=nav, fg=t.get("fg_muted", _DIMGRAY))
 
 
-class _ScanProgressView(tk.Frame):
-    """Shown in the config area while a scan is running."""
-
-    def __init__(self, master, **kwargs) -> None:
-        t = ThemeApplicator.get().build_tokens()
-        kwargs.setdefault("bg", t.get("bg", _WHITE))
-        super().__init__(master, **kwargs)
-        self._t = t
-        self._build()
-
-    def _build(self) -> None:
-        bg = self._t.get("bg", _WHITE)
-        self._outer = tk.Frame(self, bg=bg)
-        self._outer.place(relx=0.5, rely=0.4, anchor="center")
-
-        # Progress bar
-        if CTkProgressBar is not None:
-            self._pbar = CTkProgressBar(
-                self._outer, width=400, height=12,
-                progress_color=self._t.get("accent", _NAVY_MID),
-            )
-            self._pbar.pack(pady=(0, 16))
-            self._pbar.set(0)
-            self._use_ctk = True
-        else:
-            canvas = tk.Canvas(
-                self._outer, width=400, height=12,
-                bg=self._t.get("border", "#E0E0E0"), highlightthickness=0,
-            )
-            canvas.pack(pady=(0, 16))
-            self._pbar_canvas = canvas
-            self._use_ctk = False
-
-        self._status_lbl = tk.Label(
-            self._outer, text="Preparing scan…",
-            bg=bg, fg=self._t.get("fg", "#333333"), font=("Segoe UI", 12),
-        )
-        self._status_lbl.pack()
-
-        self._file_lbl = tk.Label(
-            self._outer, text="", bg=bg,
-            fg=self._t.get("fg_muted", _DIMGRAY), font=("Segoe UI", 9),
-            wraplength=420,
-        )
-        self._file_lbl.pack(pady=(4, 0))
-
-        self._elapsed_lbl = tk.Label(
-            self._outer, text="", bg=bg,
-            fg=self._t.get("fg_muted", _DIMGRAY), font=("Segoe UI", 9),
-        )
-        self._elapsed_lbl.pack(pady=(2, 0))
-
-    def apply_theme(self, t: dict) -> None:
-        self._t = t
-        bg     = t.get("bg",        _WHITE)
-        fg     = t.get("fg",        "#333333")
-        muted  = t.get("fg_muted",  _DIMGRAY)
-        accent = t.get("accent",    _NAVY_MID)
-        border = t.get("border",    "#E0E0E0")
-        self.configure(bg=bg)
-        self._outer.configure(bg=bg)
-        self._status_lbl.configure(bg=bg, fg=fg)
-        self._file_lbl.configure(bg=bg, fg=muted)
-        self._elapsed_lbl.configure(bg=bg, fg=muted)
-        if self._use_ctk:
-            try:
-                self._pbar.configure(progress_color=accent)
-            except Exception:
-                pass
-        else:
-            try:
-                self._pbar_canvas.configure(bg=border)
-            except Exception:
-                pass
-
-    def update(self, files_scanned: int, files_total: int,
-               stage: str, elapsed: float, current_file: str = "") -> None:
-        pct = (files_scanned / files_total) if files_total > 0 else 0.0
-        pct = min(1.0, max(0.0, pct))
-
-        if self._use_ctk:
-            self._pbar.set(pct)
-        else:
-            w = self._pbar_canvas.winfo_width() or 400
-            self._pbar_canvas.delete("all")
-            self._pbar_canvas.create_rectangle(
-                0, 0, int(w * pct), 12,
-                fill=self._t.get("accent", _NAVY_MID), outline="")
-
-        if files_total > 0:
-            self._status_lbl.configure(
-                text=f"Scanning… {files_scanned:,} / {files_total:,} files")
-        else:
-            self._status_lbl.configure(text=stage or "Scanning…")
-
-        if current_file:
-            self._file_lbl.configure(
-                text=Path(current_file).name[:60])
-
-        mins, secs = divmod(int(elapsed), 60)
-        self._elapsed_lbl.configure(
-            text=f"Elapsed: {mins}m {secs:02d}s" if mins else f"Elapsed: {secs}s")
-
-    def reset(self) -> None:
-        if self._use_ctk:
-            self._pbar.set(0)
-        self._status_lbl.configure(text="Preparing scan…")
-        self._file_lbl.configure(text="")
-        self._elapsed_lbl.configure(text="")
-
-
 # ===========================================================================
 # ScanPage
+#
+# The in-page scan progress view is the shared ScanInProgressView widget
+# (cerebro/v2/ui/widgets/scan_in_progress_view.py). The previous local
+# _ScanProgressView class was retired during the post-v1 audit in favour of
+# the richer styled view also used by ResultsPanel.
 # ===========================================================================
 
 class ScanPage(tk.Frame):
@@ -907,7 +802,9 @@ class ScanPage(tk.Frame):
         self._folders_list = _SearchFoldersList(self._content, tree=self._tree)
         self._folders_list.place(relwidth=1, relheight=1)
 
-        self._progress_view = _ScanProgressView(self._content)
+        self._progress_view = ScanInProgressView(
+            self._content, on_cancel=self._stop_scan
+        )
 
         # Slim footer (pinned to bottom of right column) — suggestions link only
         self._suggestions_footer = _SuggestionsFooter(self._right_col)
@@ -996,11 +893,11 @@ class ScanPage(tk.Frame):
 
     def _handle_progress(self, progress: ScanProgress) -> None:
         elapsed = time.time() - self._scan_start_time
-        self._progress_view.update(
+        self._progress_view.update_progress(
+            stage=progress.stage or "",
             files_scanned=progress.files_scanned,
             files_total=progress.files_total,
-            stage=progress.stage or "",
-            elapsed=elapsed,
+            elapsed_seconds=elapsed,
             current_file=progress.current_file or "",
         )
         if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
