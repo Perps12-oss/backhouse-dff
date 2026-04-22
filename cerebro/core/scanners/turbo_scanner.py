@@ -13,6 +13,11 @@ Optimizations:
 8. Lockless data structures where possible
 
 Performance target: 250K files in < 3 minutes (from 30 minutes)
+
+Logging (Phase 8.1, post-v1 audit): temporary ``[DIAG:*]`` INFO markers and
+``_diagnose_pair()`` sampling were removed from ``scan()``; end-of-run totals
+use ``[Turbo] summary:`` at INFO and ``[DIAG:GUARD]`` at DEBUG only. See
+``docs/architecture/scan_paths.md``.
 """
 
 from __future__ import annotations

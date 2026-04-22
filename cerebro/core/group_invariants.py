@@ -25,6 +25,12 @@ logger = get_logger(__name__)
 
 _STRICT: bool = os.environ.get("CEREBRO_STRICT", "").lower() in ("1", "true", "yes")
 
+# Defense-in-depth for Bug 1 (Phase 2c ``434fa7f``, 2026-04): catches self-duplicate
+# groups that slip past ``dedupe_roots()`` (hardlinks, junctions, symlinks).
+# Regression indicators: with DEBUG on ``turbo_scanner``, ``[DIAG:GUARD]``
+# shows regressions > 0; with ``CEREBRO_STRICT=1``, scan raises during emit.
+# Investigation: ``docs/bug-investigations/bug1-canonical-path-dedup.md``.
+
 
 def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list, int]:
     """Regression guard: no emit-ready group may contain two entries resolving

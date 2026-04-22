@@ -17,6 +17,12 @@ def dedupe_roots(roots: list[Path]) -> list[Path]:
 
     Returns a list of roots with no root being a descendant of any other root
     in the list.
+
+    Bug 1 (root overlap) — Phase 2a fix ``b0e94d6`` (2026-04, post-v1 audit).
+    Regression indicators: missing ``[ROOT_DEDUP]`` lines when the user passes
+    overlapping roots; discovery / candidate counts that jump non-monotonically
+    vs. a build without ``dedupe_roots``. Investigation:
+    ``docs/bug-investigations/bug1-canonical-path-dedup.md``.
     """
     resolved = sorted(
         {Path(r).resolve() for r in roots},

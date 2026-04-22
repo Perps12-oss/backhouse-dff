@@ -91,6 +91,12 @@ class ScanController:
         self._history = history
 
     def start_search(self) -> None:
+        # Concurrency guard: never stack two orchestrator scans. Without this,
+        # rapid double-clicks on "Search" corrupt results state and duplicate
+        # progress callbacks. Regression indicator: multiple
+        # "Starting scan in … mode" INFO lines within <1s with no intervening
+        # "Scan finished". Any new scan entry point must either call through
+        # here or replicate the same guard at the orchestrator layer.
         if self._window._scanning or self._window._orchestrator.is_scanning():
             logger.info("Ignoring duplicate start request while scan is active")
             return

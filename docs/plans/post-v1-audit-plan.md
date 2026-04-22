@@ -64,7 +64,7 @@ implementation commit lands.
 | 5     | NOT STARTED                  | —                                      |
 | 6     | NOT STARTED                  | —                                      |
 | 7     | NOT STARTED                  | —                                      |
-| 8     | NOT STARTED                  | —                                      |
+| 8     | IN PROGRESS (8.1–8.4)        | see recent commits on fix/post-v1-audit |
 
 ---
 
@@ -76,7 +76,7 @@ implementation commit lands.
 (65ce5d1, a8bb998). On-branch verification confirms: no tracked files
 under `diagnostics/` (local logs only), `.gitignore` lists `diagnostics/`,
 `scripts/dev/phase1_scan_runner.py` is the canonical runner, and
-`cerebro/core/SCAN_PATHS.md` carries Waivers 1A–1C (see §Phase 1 waivers).
+`docs/architecture/scan_paths.md` carries Waivers 1A–1C (see §Phase 1 waivers).
 
 ## Closure Commit — `chore(phase1-closure): reconcile Phase 1 artifacts`
 
@@ -95,8 +95,9 @@ One commit on `fix/post-v1-audit`. Scope:
    at Phase 8 — retained until final cleanup, then evaluated for
    deletion.
 
-4. **Append three waivers to `SCAN_PATHS.md`** (current location;
-   moves to `docs/architecture/scan_paths.md` in Phase 8):
+4. **Append three waivers to the scan-path audit doc** (was
+   `cerebro/core/SCAN_PATHS.md`; **relocated** to
+   `docs/architecture/scan_paths.md` in Phase 8.3):
 
    - **Waiver 1A:** `[DIAG:SUMMARY]` does not include
      `groups_dropped_self_dup` or `scan_type` fields as originally
@@ -122,7 +123,7 @@ One commit on `fix/post-v1-audit`. Scope:
 - [x] `git ls-files diagnostics/` returns nothing
 - [x] `.gitignore` contains `diagnostics/`
 - [x] `scripts/dev/phase1_scan_runner.py` exists (`python scripts/dev/phase1_scan_runner.py`)
-- [x] `cerebro/core/SCAN_PATHS.md` contains the three waivers above
+- [x] `docs/architecture/scan_paths.md` contains the three waivers above
 - [x] Running `python scripts/dev/phase1_scan_runner.py <path>` completes
       a turbo scan without error (log file under gitignored `diagnostics/`)
 
@@ -150,7 +151,7 @@ overlap). Defense-in-depth commits 835bc68 (singleton emit filter) and
 434fa7f (`_assert_no_self_duplicates` + guard logging) are live on the
 sole file-scan core (`TurboScanner`). **Step 3 (port to Paths B/D) is
 N/A:** `FastPipeline` (Path B) and `FileDedupEngine` (Path D) were removed
-in Cut 2 / Cut 3 — see `cerebro/core/SCAN_PATHS.md` §Historical Paths.
+in Cut 2 / Cut 3 — see `docs/architecture/scan_paths.md` §Historical Paths.
 **Step 4 (strict posture)** is implemented via `CEREBRO_STRICT` in
 `cerebro/core/group_invariants.py`. **Step 5** — investigation doc at
 `docs/bug-investigations/bug1-canonical-path-dedup.md`.
@@ -813,7 +814,7 @@ AFTER:
 
 ### 8.3 — Documentation Relocation
 
-- Move `SCAN_PATHS.md` → `docs/architecture/scan_paths.md`
+- ~~Move `SCAN_PATHS.md` → `docs/architecture/scan_paths.md`~~ **Done (Phase 8.3)**
 - Confirm `docs/bug-investigations/` contains:
   - `bug1-canonical-path-dedup.md`
   - `phase3_guard_order.log`
@@ -924,7 +925,9 @@ against `git log`.)
 | b0e94d6  | 2026-04-?? | 2a    | dedupe_roots + [ROOT_DEDUP]                |
 | 835bc68  | 2026-04-?? | 2b    | singleton filter + [DIAG:EMIT]             |
 | 434fa7f  | 2026-04-?? | 2c    | _assert_no_self_duplicates + [DIAG:GUARD]  |
-| (see git log) | 2026-04-22 | 1-closure | Phase 1 verify recorded in plan   |
+| b910578  | 2026-04-22 | 1-closure | Phase 1 verify recorded in plan        |
+| 3f1cfa0  | 2026-04-22 | 2-closure | Phase 2 Step 3 N/A + 2e/doc recorded   |
+| 1415d64  | 2026-04-22 | 8.1     | Remove TurboScanner DIAG:* INFO noise  |
 | (plan)   | 2026-04-22 | 2d    | Step 3 N/A — Paths B/D removed from tree   |
 | (code)   | —          | 2e    | CEREBRO_STRICT in group_invariants.py      |
 | (docs)   | —          | 2-doc | bug1-canonical-path-dedup.md present       |
@@ -941,12 +944,14 @@ Every edit to this file requires a line here.
   history spec. Working contract for all remaining work.
 - **2026-04-22** — Phase 1 closure verified in-tree (no tracked
   `diagnostics/` paths; runner at `scripts/dev/phase1_scan_runner.py`;
-  waivers recorded in `SCAN_PATHS.md`). Document-only reconciliation
+  waivers recorded in `docs/architecture/scan_paths.md`). Document-only reconciliation
   commit; no code delta required beyond this plan update.
 - **2026-04-22** — Phase 2 Step 3 **closed by architecture**: Paths B
   (`FastPipeline`) and D (`FileDedupEngine`) removed from the codebase
   (Cut 2 / Cut 3); port-to-B/D tasks are N/A. Step 4 (`CEREBRO_STRICT`)
   and Step 5 (bug1 investigation doc) already satisfied in-tree.
+- **2026-04-22** — Phase 8.3: `cerebro/core/SCAN_PATHS.md` relocated to
+  `docs/architecture/scan_paths.md`; all in-repo plan references updated.
 
 ---
 
