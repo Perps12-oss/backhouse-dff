@@ -5,7 +5,7 @@
 **Reviewer:** [senior advisor]
 **Branch:** fix/post-v1-audit
 **Target tag:** v1.1.0-post-audit
-**Last updated:** 2026-04-20
+**Last updated:** 2026-04-22
 
 ---
 
@@ -56,7 +56,7 @@ implementation commit lands.
 
 | Phase | Status                       | SHAs                                   |
 |-------|------------------------------|----------------------------------------|
-| 1     | CLOSURE PENDING (Step 1)     | 65ce5d1, a8bb998, + closure commit     |
+| 1     | CLOSURE COMPLETE             | 65ce5d1, a8bb998 (+ plan closure commit) |
 | 1.5   | MERGED INTO PHASE 1          | —                                      |
 | 2     | CLOSURE PENDING (Steps 2–5)  | b0e94d6, 835bc68, 434fa7f, + 2d/2e/doc |
 | 3     | NOT STARTED                  | —                                      |
@@ -72,9 +72,11 @@ implementation commit lands.
 
 ## Status
 
-Implementation commits landed (65ce5d1, a8bb998). Three blockers
-from advisor review remain open at branch tip 434fa7f. A single
-closure commit resolves them.
+**CLOSURE COMPLETE (2026-04-22).** Implementation commits landed earlier
+(65ce5d1, a8bb998). On-branch verification confirms: no tracked files
+under `diagnostics/` (local logs only), `.gitignore` lists `diagnostics/`,
+`scripts/dev/phase1_scan_runner.py` is the canonical runner, and
+`cerebro/core/SCAN_PATHS.md` carries Waivers 1A–1C (see §Phase 1 waivers).
 
 ## Closure Commit — `chore(phase1-closure): reconcile Phase 1 artifacts`
 
@@ -117,12 +119,12 @@ One commit on `fix/post-v1-audit`. Scope:
 
 ## Verify (all must be true after closure commit)
 
-- [ ] `git ls-files diagnostics/` returns nothing
-- [ ] `.gitignore` contains `diagnostics/`
-- [ ] `scripts/dev/phase1_scan_runner.py` exists and is executable
-- [ ] `SCAN_PATHS.md` contains the three waivers above
-- [ ] Running `python scripts/dev/phase1_scan_runner.py <path>`
-      produces the expected DIAG log output
+- [x] `git ls-files diagnostics/` returns nothing
+- [x] `.gitignore` contains `diagnostics/`
+- [x] `scripts/dev/phase1_scan_runner.py` exists (`python scripts/dev/phase1_scan_runner.py`)
+- [x] `cerebro/core/SCAN_PATHS.md` contains the three waivers above
+- [x] Running `python scripts/dev/phase1_scan_runner.py <path>` completes
+      a turbo scan without error (log file under gitignored `diagnostics/`)
 
 ## Original Verify Bullets (status)
 
@@ -133,7 +135,7 @@ One commit on `fix/post-v1-audit`. Scope:
 | DIAG:REDUCE at every chokepoint                         | CLOSED       |
 | DIAG:PAIR triggers on canonical collision not basename  | CLOSED       |
 | DIAG:SUMMARY on all active paths                        | CLOSED w/1A  |
-| `diagnostics/` gitignored + sample log saved            | PENDING (§1) |
+| `diagnostics/` gitignored + sample log saved            | CLOSED       |
 | `_diagnose_pair` exhaustive coverage                    | CLOSED w/1B  |
 | Reproduction against production dataset                 | CLOSED w/1C  |
 
@@ -924,7 +926,7 @@ against `git log`.)
 | b0e94d6  | 2026-04-?? | 2a    | dedupe_roots + [ROOT_DEDUP]                |
 | 835bc68  | 2026-04-?? | 2b    | singleton filter + [DIAG:EMIT]             |
 | 434fa7f  | 2026-04-?? | 2c    | _assert_no_self_duplicates + [DIAG:GUARD]  |
-| PENDING  | —          | 1-closure | diagnostics/ gitignore + waivers       |
+| (see git log) | 2026-04-22 | 1-closure | Phase 1 verify recorded in plan   |
 | PENDING  | —          | 2d    | Port guard + filter to Paths B and D       |
 | PENDING  | —          | 2e    | __debug__ posture → CEREBRO_STRICT         |
 | PENDING  | —          | 2-doc | bug1-canonical-path-dedup.md               |
@@ -939,7 +941,10 @@ Every edit to this file requires a line here.
 - **2026-04-20** — Initial version, merged advisor review
   decisions (§0–§H). Supersedes the original plan and all chat-
   history spec. Working contract for all remaining work.
-- [date] — [change] — [reason] — [who]
+- **2026-04-22** — Phase 1 closure verified in-tree (no tracked
+  `diagnostics/` paths; runner at `scripts/dev/phase1_scan_runner.py`;
+  waivers recorded in `SCAN_PATHS.md`). Document-only reconciliation
+  commit; no code delta required beyond this plan update.
 
 ---
 
