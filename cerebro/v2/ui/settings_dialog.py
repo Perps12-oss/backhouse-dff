@@ -113,6 +113,12 @@ class Settings:
                 "preview": 0.25
             }
         }
+        # Misc UI preferences that don't fit a mode-specific bucket.
+        # ``results_view_mode`` is the List/Grid toggle on the Results page
+        # (Phase 6); persisted so the user's choice survives restart.
+        self.ui = {
+            "results_view_mode": "list",
+        }
 
     def to_dict(self) -> Dict:
         """Convert settings to dictionary."""
@@ -126,7 +132,8 @@ class Settings:
             "video_mode": self.video_mode,
             "music_mode": self.music_mode,
             "deletion": self.deletion,
-            "window_state": self.window_state
+            "window_state": self.window_state,
+            "ui": self.ui,
         }
 
     def from_dict(self, data: Dict) -> None:
@@ -149,6 +156,8 @@ class Settings:
             self.deletion.update(data["deletion"])
         if "window_state" in data:
             self.window_state.update(data["window_state"])
+        if "ui" in data:
+            self.ui.update(data["ui"])
 
     def save(self, path: Path) -> None:
         """Save settings to file."""

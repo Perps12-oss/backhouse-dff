@@ -654,6 +654,8 @@ class _ActionToolbar(tk.Frame):
                  on_delete: Callable,
                  on_move:   Callable,
                  on_auto_mark: Callable[[str], None],
+                 on_view_mode: Optional[Callable[[str], None]] = None,
+                 initial_view_mode: str = "list",
                  **kw) -> None:
         t = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", t.get("bg", _WHITE))
@@ -663,9 +665,14 @@ class _ActionToolbar(tk.Frame):
         self._on_delete    = on_delete
         self._on_move      = on_move
         self._on_auto_mark = on_auto_mark
+        # Phase 6: List/Grid view toggle. ResultsPage owns the actual view
+        # swap + persistence; this widget just emits the user's pick.
+        self._on_view_mode = on_view_mode
+        self._view_mode    = initial_view_mode if initial_view_mode in ("list", "grid") else "list"
         self._has_sel      = False
         self._t            = t
         self._buttons: List[Dict[str, object]] = []
+        self._view_btns: Dict[str, tk.Button] = {}
         self._build()
 
     def _build(self) -> None:
@@ -682,6 +689,69 @@ class _ActionToolbar(tk.Frame):
         self._mk_btn("MOVE",            self._on_move)
         self._mk_btn("COPY",            self._noop)
         self._mk_btn("Export results",  self._noop)
+
+        # ── View toggle (right-aligned) ─────────────────────────────
+        # Two-segment pill: the active mode is filled navy, the
+        # inactive one is ghosted. Kept visually distinct from the
+        # left-side action buttons so the user reads it as "mode",
+        # not "action".
+        self._view_strip = tk.Frame(self._inner, bg=bg)
+        self._view_strip.pack(side="right", padx=(8, 0))
+        tk.Label(
+            self._view_strip, text="View:", bg=bg,
+            fg=self._t.get("fg_muted", _DIMGRAY),
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(0, 6))
+        self._view_btns["list"] = self._mk_view_btn("\u2630 List", "list")
+        self._view_btns["grid"] = self._mk_view_btn("\u25A6 Grid", "grid")
+        self._paint_view_toggle()
+
+    def _mk_view_btn(self, text: str, mode: str) -> tk.Button:
+        b = tk.Button(
+            self._view_strip, text=text,
+            command=lambda m=mode: self._pick_view(m),
+            font=("Segoe UI", 9, "bold"), relief="flat",
+            cursor="hand2", padx=10, pady=3,
+            borderwidth=0, highlightthickness=0,
+        )
+        b.pack(side="left", padx=(0, 4))
+        return b
+
+    def _pick_view(self, mode: str) -> None:
+        if mode not in ("list", "grid") or mode == self._view_mode:
+            return
+        self._view_mode = mode
+        self._paint_view_toggle()
+        if self._on_view_mode:
+            try:
+                self._on_view_mode(mode)
+            except Exception:   # pylint: disable=broad-except
+                _log.exception("on_view_mode callback raised")
+
+    def _paint_view_toggle(self) -> None:
+        t = self._t
+        active_bg   = t.get("sel_bg", _SELECTED)
+        active_fg   = t.get("sel_fg", _SEL_FG)
+        inactive_bg = t.get("bg3",    _SURFACE)
+        inactive_fg = t.get("fg",     "#333333")
+        for mode, btn in self._view_btns.items():
+            if mode == self._view_mode:
+                btn.configure(bg=active_bg, fg=active_fg,
+                              activebackground=active_bg,
+                              activeforeground=active_fg)
+            else:
+                btn.configure(bg=inactive_bg, fg=inactive_fg,
+                              activebackground=t.get("bg2", _ROW_ALT),
+                              activeforeground=inactive_fg)
+
+    def set_view_mode(self, mode: str) -> None:
+        """Programmatically reflect the active view without firing the
+        callback (used by ResultsPage at init when hydrating from
+        persisted Settings)."""
+        if mode in ("list", "grid"):
+            self._view_mode = mode
+            if self._view_btns:
+                self._paint_view_toggle()
 
     def _mk_btn(self, text: str, cmd, *, role: str = "default") -> tk.Button:
         t   = self._t
@@ -731,6 +801,14 @@ class _ActionToolbar(tk.Frame):
                 activebackground=hover, activeforeground=btn_fg,
                 highlightbackground=border,
             )
+        try:
+            self._view_strip.configure(bg=bg)
+            for child in self._view_strip.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
+        except (tk.TclError, AttributeError):
+            pass
+        self._paint_view_toggle()
         self.set_has_selection(self._has_sel)
 
     # Five-option rule list shared with the button label "Auto Mark ▼".
@@ -953,9 +1031,44 @@ class ResultsPage(tk.Frame):
         self._scan_mode: str = "files"  # set by load_results; feeds the
                                         # delete ceremony's media-noun labels
         self._t: dict = initial
+        # Phase 6: view-mode state. Hydrated from Settings on first build;
+        # saved back whenever the toolbar toggle fires.
+        self._view_mode: str = self._load_view_mode_pref()
         self._build()
+        # Initial view follows the persisted preference; do it after
+        # _build so both child widgets exist.
+        self._activate_view(self._view_mode, fire_callback=False)
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
+
+    # ------------------------------------------------------------------
+    # Persisted view-mode preference (Phase 6)
+    #
+    # Kept deliberately tolerant: if Settings can't be loaded for any
+    # reason (corrupt JSON, missing file, import failure) we fall back
+    # to "list" silently — the toggle button still works, it just
+    # won't persist. Same pattern for saving.
+
+    def _load_view_mode_pref(self) -> str:
+        try:
+            from cerebro.v2.ui.settings_dialog import Settings, get_settings_path
+            s = Settings.load(get_settings_path())
+            mode = str(s.ui.get("results_view_mode", "list"))
+            return mode if mode in ("list", "grid") else "list"
+        except Exception:   # pylint: disable=broad-except
+            _log.debug("Could not load view-mode pref; defaulting to list",
+                       exc_info=True)
+            return "list"
+
+    def _save_view_mode_pref(self, mode: str) -> None:
+        try:
+            from cerebro.v2.ui.settings_dialog import Settings, get_settings_path
+            path = get_settings_path()
+            s = Settings.load(path)
+            s.ui["results_view_mode"] = mode
+            s.save(path)
+        except Exception:   # pylint: disable=broad-except
+            _log.debug("Could not persist view-mode pref", exc_info=True)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -967,6 +1080,8 @@ class ResultsPage(tk.Frame):
             on_delete=self._delete_checked,
             on_move=self._move_checked,
             on_auto_mark=self._auto_mark,
+            on_view_mode=self._on_view_mode_changed,
+            initial_view_mode=self._view_mode,
         )
         self._toolbar.pack(fill="x")
 
@@ -976,30 +1091,257 @@ class ResultsPage(tk.Frame):
         self._col_hdr = _ColHeader(self, on_sort=self._on_sort)
         self._col_hdr.pack(fill="x")
 
-        # Canvas grid + scrollbar
-        self._grid_frame = tk.Frame(self, bg=self._t.get("bg", _WHITE))
-        self._grid_frame.pack(fill="both", expand=True)
+        # Body: hosts three interchangeable views — list, grid, and the
+        # side-by-side comparison takeover. Only one is packed at a time.
+        self._body = tk.Frame(self, bg=self._t.get("bg", _WHITE))
+        self._body.pack(fill="both", expand=True)
 
-        self._grid = VirtualFileGrid(
-            self._grid_frame,
+        # ── List view (existing Phase-5 VirtualFileGrid) ───────────
+        self._list_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
+        self._list_grid = VirtualFileGrid(
+            self._list_frame,
             on_open_group=self._open_group_by_id,
         )
-        vsb = ttk.Scrollbar(self._grid_frame, orient="vertical",
-                             command=self._grid.yview)
-        self._grid.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self._grid.pack(fill="both", expand=True)
-        self._grid.bind("<<CheckChanged>>", self._on_check_changed)
+        self._list_vsb = ttk.Scrollbar(
+            self._list_frame, orient="vertical",
+            command=self._list_grid.yview,
+        )
+        self._list_grid.configure(yscrollcommand=self._list_vsb.set)
+        self._list_vsb.pack(side="right", fill="y")
+        self._list_grid.pack(fill="both", expand=True)
+        self._list_grid.bind("<<CheckChanged>>", self._on_check_changed)
+
+        # ── Grid view (Phase 6 VirtualThumbGrid) ───────────────────
+        from cerebro.v2.ui.widgets.virtual_thumb_grid import VirtualThumbGrid
+        self._thumb_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
+        self._thumb_grid = VirtualThumbGrid(
+            self._thumb_frame,
+            on_open_file=self._on_thumb_dbl_click,
+        )
+        self._thumb_vsb = ttk.Scrollbar(
+            self._thumb_frame, orient="vertical",
+            command=self._thumb_grid.yview,
+        )
+        self._thumb_grid.configure(yscrollcommand=self._thumb_vsb.set)
+        self._thumb_vsb.pack(side="right", fill="y")
+        self._thumb_grid.pack(fill="both", expand=True)
+        self._thumb_grid.bind("<<CheckChanged>>", self._on_check_changed)
+
+        # ── Comparison view (revived legacy PreviewPanel) ─────────
+        # Built lazily on first image double-click to keep cold start
+        # fast and avoid pulling PIL/ZoomCanvas into the import graph
+        # when the user never uses grid mode.
+        self._cmp_frame: Optional[tk.Frame] = None
+        self._cmp_panel: Any = None
+
+        # Active grid pointer — re-bound on view-mode swap so existing
+        # handlers (_auto_mark, _delete_checked, _remove_paths,
+        # _apply_filter, sort) keep working through self._grid.
+        self._grid = self._list_grid
 
         # Empty state
         self._empty_lbl = tk.Label(
-            self._grid,
+            self._body,
             text="No scan results yet.\nRun a scan from the Scan tab.",
             bg=self._t.get("bg", _WHITE),
             fg=self._t.get("fg_muted", _DIMGRAY),
             font=("Segoe UI", 11), justify="center",
         )
         self._empty_lbl.place(relx=0.5, rely=0.4, anchor="center")
+
+    # ------------------------------------------------------------------
+    # View-mode management (Phase 6)
+
+    def _activate_view(self, mode: str, *, fire_callback: bool = True) -> None:
+        """Pack the requested view (``list`` or ``grid``) and hide the other.
+
+        Leaves the comparison takeover intact if it's currently packed —
+        exiting comparison is the user's explicit Back action, not a
+        side-effect of toggling the segmented control.
+        """
+        if mode not in ("list", "grid"):
+            return
+        self._view_mode = mode
+        # Unpack both list+grid frames before re-packing the chosen one
+        # so ordering is deterministic regardless of previous state.
+        for frame in (self._list_frame, self._thumb_frame):
+            try:
+                frame.pack_forget()
+            except tk.TclError:
+                pass
+        target_frame = self._thumb_frame if mode == "grid" else self._list_frame
+        target_frame.pack(fill="both", expand=True)
+        # Re-point _grid so the legacy helpers (_auto_mark, _delete_checked,
+        # sort, _remove_paths) operate on the active widget.
+        self._grid = self._thumb_grid if mode == "grid" else self._list_grid
+        # Show/hide the column header — it's a list-mode affordance only.
+        try:
+            if mode == "list":
+                self._col_hdr.pack_configure(fill="x")
+                # If col header got pack_forget'd before, repack it above body
+                if not self._col_hdr.winfo_ismapped():
+                    self._col_hdr.pack(fill="x", before=self._body)
+            else:
+                self._col_hdr.pack_forget()
+        except tk.TclError:
+            pass
+        self._toolbar.set_view_mode(mode)
+        if fire_callback:
+            self._save_view_mode_pref(mode)
+
+    def _on_view_mode_changed(self, mode: str) -> None:
+        # User-initiated toggle from the toolbar. Before swapping, bring
+        # the active grid's check set across so marks are preserved.
+        self._sync_checked_to(mode)
+        self._activate_view(mode, fire_callback=True)
+        # Re-render the newly-active grid now that it owns the checks
+        # and current visibility state.
+        try:
+            self._grid._render()   # pylint: disable=protected-access
+        except Exception:          # pylint: disable=broad-except
+            pass
+
+    def _sync_checked_to(self, target_mode: str) -> None:
+        """Copy ``_checked`` from the currently-active grid into the one
+        that's about to become active.
+
+        Both grids hold the same row-list in the same order (they're fed
+        from ``_apply_filter`` together), so the integer indices map
+        one-to-one.
+        """
+        src = self._thumb_grid if self._view_mode == "grid" else self._list_grid
+        dst = self._thumb_grid if target_mode == "grid" else self._list_grid
+        if src is dst:
+            return
+        dst._checked = set(src._checked)   # pylint: disable=protected-access
+
+    # ------------------------------------------------------------------
+    # Comparison takeover (revived legacy PreviewPanel — Phase 6)
+    #
+    # Entered by double-clicking an image tile in grid mode. Left via
+    # the Back button in its own chrome. While this view is packed the
+    # list/grid are pack_forgotten; the toolbar stays visible so the
+    # user can still hit DELETE/MOVE on whichever check set they had.
+
+    def _ensure_comparison_view(self) -> None:
+        if self._cmp_frame is not None:
+            return
+        try:
+            from cerebro.v2.ui.preview_panel import PreviewPanel
+        except ImportError:
+            _log.exception("PreviewPanel import failed — side-by-side disabled")
+            return
+
+        self._cmp_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
+        # Top bar: Back button + title.
+        bar = tk.Frame(self._cmp_frame, bg=self._t.get("bg", _WHITE), height=38)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        tk.Button(
+            bar, text="\u2190  Back to grid", command=self._exit_comparison,
+            bg="#2E75B6", fg=_WHITE,
+            activebackground="#3A87CC", activeforeground=_WHITE,
+            font=("Segoe UI", 9, "bold"), relief="flat",
+            cursor="hand2", padx=14, pady=5,
+            borderwidth=0, highlightthickness=0,
+        ).pack(side="left", padx=10, pady=6)
+        self._cmp_title = tk.Label(
+            bar, text="", bg=self._t.get("bg", _WHITE),
+            fg=self._t.get("fg", "#333333"),
+            font=("Segoe UI", 10, "bold"),
+        )
+        self._cmp_title.pack(side="left", padx=10)
+
+        # The PreviewPanel itself. set_layout_mode("ashisoft") drops the
+        # collapsible header so it fills the takeover region.
+        self._cmp_panel = PreviewPanel(self._cmp_frame)
+        self._cmp_panel.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        try:
+            self._cmp_panel.set_layout_mode("compact")
+        except Exception:   # pylint: disable=broad-except
+            pass
+
+    def _enter_comparison(self, row: Dict) -> None:
+        """Open side-by-side comparison for an image row (A) vs its
+        group peer (B). Non-image rows never reach this path — the
+        grid's double-click handler routes them to Review instead."""
+        self._ensure_comparison_view()
+        if self._cmp_panel is None:
+            # PreviewPanel unavailable (e.g. missing PIL) — fall back
+            # to Review so the double-click doesn't no-op.
+            self._open_group_by_id(int(row.get("group_id", -1)))
+            return
+
+        # Resolve the DuplicateFile for file A and a peer B from the
+        # same group.
+        gid = int(row.get("group_id", -1))
+        target_path = str(row.get("path", ""))
+        file_a = None
+        file_b = None
+        for g in self._groups:
+            if g.group_id != gid:
+                continue
+            for f in g.files:
+                if str(f.path) == target_path:
+                    file_a = f
+                    break
+            if file_a is not None:
+                # Prefer the first *other* file in the group.
+                for f in g.files:
+                    if str(f.path) != target_path:
+                        file_b = f
+                        break
+            break
+
+        try:
+            self._cmp_panel.load_comparison(file_a, file_b)
+        except Exception:   # pylint: disable=broad-except
+            _log.exception("PreviewPanel.load_comparison failed")
+            return
+        # Title: "filename.jpg  ↔  peer.jpg  (group 3, 5 copies)"
+        try:
+            name_a = Path(str(getattr(file_a, "path", "") or "")).name or "(A)"
+            name_b = Path(str(getattr(file_b, "path", "") or "")).name if file_b else "(none)"
+            count = len(self._thumb_grid._group_counts) and \
+                self._thumb_grid._group_counts.get(gid, 0)  # pylint: disable=protected-access
+            self._cmp_title.configure(
+                text=f"{name_a}  \u2194  {name_b}   ·   group {gid}, {count} copies"
+            )
+        except tk.TclError:
+            pass
+
+        # Pack the takeover, hide the grid view.
+        for frame in (self._list_frame, self._thumb_frame):
+            try:
+                frame.pack_forget()
+            except tk.TclError:
+                pass
+        self._cmp_frame.pack(fill="both", expand=True)
+
+    def _exit_comparison(self) -> None:
+        if self._cmp_frame is None:
+            return
+        try:
+            self._cmp_frame.pack_forget()
+        except tk.TclError:
+            pass
+        # Restore whichever view was active before the takeover.
+        self._activate_view(self._view_mode, fire_callback=False)
+
+    def _on_thumb_dbl_click(self, row: Dict) -> None:
+        """Route a grid-tile double-click:
+         - image → side-by-side comparison takeover
+         - non-image (incl. video, for now) → Review page
+
+        Keeps the list-mode double-click behavior (`on_open_group`)
+        untouched so the PreviewPanel stays hidden outside grid mode
+        per the Phase 6 rule.
+        """
+        from cerebro.v2.ui.widgets.virtual_thumb_grid import is_image_row
+        if is_image_row(row):
+            self._enter_comparison(row)
+        else:
+            self._open_group_by_id(int(row.get("group_id", -1)))
 
     # ------------------------------------------------------------------
     # Theme
@@ -1009,14 +1351,20 @@ class ResultsPage(tk.Frame):
         bg = t.get("bg", _WHITE)
         self.configure(bg=bg)
         try:
-            self._grid_frame.configure(bg=bg)
+            self._body.configure(bg=bg)
+            self._list_frame.configure(bg=bg)
+            self._thumb_frame.configure(bg=bg)
+            if self._cmp_frame is not None:
+                self._cmp_frame.configure(bg=bg)
+                self._cmp_title.configure(bg=bg, fg=t.get("fg", "#333333"))
         except Exception:
             pass
         try:
             self._empty_lbl.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
         except Exception:
             pass
-        self._grid.apply_theme(t)
+        self._list_grid.apply_theme(t)
+        self._thumb_grid.apply_theme(t)
         for child in (
             getattr(self, "_stats_bar",  None),
             getattr(self, "_toolbar",    None),
@@ -1102,18 +1450,55 @@ class ResultsPage(tk.Frame):
                     r for r in self._all_rows
                     if (r.get("extension", "") or "").lower() in exts
                 ]
-        self._grid.load(rows)
+        # Feed BOTH views from the same filtered-row list so their row
+        # indices stay aligned. Without this, toggling from list to grid
+        # would show stale data (or the grid would render only on first
+        # activation, not when the filter changes while it's hidden).
+        self._list_grid.load(list(rows))
+        self._thumb_grid.load(list(rows))
 
     # ------------------------------------------------------------------
     # Sorting
 
     def _on_sort(self, col: str) -> None:
-        self._grid.sort_by(col)
+        # Sort BOTH views with the same column and direction. We can't
+        # sort only the list view: the check-set is a set of integer
+        # indices into the loaded row list, and those indices must
+        # point at the same rows across the two widgets, or toggling
+        # views would silently re-target the user's marks.
+        #
+        # We let the list's own toggle logic compute the direction
+        # (it flips when col is unchanged), then mirror the post-sort
+        # row order straight onto the grid's row list and have the
+        # grid just re-render — avoids fighting two independent
+        # toggle state machines.
+        self._list_grid.sort_by(col)
+        self._thumb_grid._rows = list(self._list_grid._rows)  # pylint: disable=protected-access
+        self._thumb_grid._selected_idx = 0 if self._thumb_grid._rows else None  # type: ignore[attr-defined]
+        self._thumb_grid._scroll_y = 0                       # type: ignore[attr-defined]
+        self._thumb_grid._recount_groups()                   # type: ignore[attr-defined]
+        self._thumb_grid._update_total_h()                   # type: ignore[attr-defined]
+        self._thumb_grid._render()                           # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Selection / check
 
-    def _on_check_changed(self, _event=None) -> None:
+    def _on_check_changed(self, event=None) -> None:
+        # Mirror the change across both grids so toggling views never
+        # loses marks. The originating widget is ``event.widget`` —
+        # treat it as the source of truth; copy its ``_checked`` onto
+        # the other widget but do NOT fire its render to avoid an
+        # infinite <<CheckChanged>> ping-pong (copying the set doesn't
+        # generate an event anyway, but being explicit here keeps the
+        # invariant obvious).
+        src = event.widget if event is not None else self._grid
+        other = self._thumb_grid if src is self._list_grid else self._list_grid
+        if src is not other:
+            other._checked = set(src._checked)   # pylint: disable=protected-access
+            try:
+                other._render()                  # pylint: disable=protected-access
+            except Exception:                    # pylint: disable=broad-except
+                pass
         has = self._grid.get_checked_count() > 0
         self._toolbar.set_has_selection(has)
 
@@ -1314,6 +1699,22 @@ class ResultsPage(tk.Frame):
         self._toolbar.set_has_selection(False)
         if deleted_row_keys:
             self._remove_paths(set(deleted_row_keys))
+            # Phase 6 piggyback: surface the floating Undo toast that
+            # the legacy MainWindow showed after every successful batch
+            # delete. Lazy-imported from the same module the delete
+            # dialogs came from — no additional startup cost.
+            try:
+                from cerebro.v2.ui.main_window import _UndoToast
+                size_str = (format_bytes(recovered_bytes[0], decimals=1)
+                            if format_bytes else f"{recovered_bytes[0]} bytes")
+                _UndoToast(
+                    self.winfo_toplevel(),
+                    count=len(deleted_row_keys),
+                    size_str=size_str,
+                    deleted_paths=list(deleted_row_keys),
+                )
+            except Exception:   # pylint: disable=broad-except
+                _log.debug("Undo toast unavailable — skipping", exc_info=True)
 
         # Partial failure — skip summary/celebration, surface errors only.
         if failed_files:
