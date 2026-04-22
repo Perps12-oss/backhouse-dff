@@ -15,19 +15,31 @@ Settings > Appearance).
 """
 from __future__ import annotations
 
+import logging
 import platform
 import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
+from cerebro.v2.core.engine_deps import (
+    ENGINE_DEPS,
+    EngineState,
+    ProbeResult,
+    invalidate_module_cache,
+    probe_engine,
+    probe_all,
+)
+from cerebro.v2.core.engine_errors_db import get_engine_errors_db
 from cerebro.v2.ui.design_tokens import (
     BORDER, CARD_BG, FONT_BODY, FONT_HEADER, FONT_MONO, FONT_SMALL,
     FONT_TITLE, GREEN, NAVY, NAVY_MID, PAD_X, PAD_Y, RED, TEXT_MUTED,
     TEXT_PRIMARY, TEXT_SECONDARY, YELLOW,
 )
 from cerebro.v2.ui.theme_applicator import ThemeApplicator, theme_token
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +56,19 @@ def _page_colors(t: dict) -> dict:
         "fg2":      theme_token(t, "fg2",      TEXT_SECONDARY),
         "fg_muted": theme_token(t, "fg_muted", TEXT_MUTED),
         "success":  theme_token(t, "success",  GREEN),
+        "warning":  theme_token(t, "warning",  YELLOW),
         "danger":   theme_token(t, "danger",   RED),
     }
+
+
+# State → ("dot_color_key", "state_label_shown_to_user")
+_STATE_PRESENTATION: dict = {
+    EngineState.AVAILABLE:       ("success",  "available"),
+    EngineState.NOT_IMPLEMENTED: ("fg_muted", "not yet implemented"),
+    EngineState.MISSING_DEPS:    ("warning",  "missing dependencies"),
+    EngineState.DEGRADED:        ("warning",  "degraded"),
+    EngineState.RUNTIME_ERROR:   ("danger",   "runtime error"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -119,16 +142,87 @@ class _InfoGrid(tk.Frame):
 # ---------------------------------------------------------------------------
 
 class _EngineRow(tk.Frame):
-    def __init__(self, parent: tk.Widget, name: str, status: str, ok: bool, colors: dict) -> None:
+    """One row per engine: colored state dot · plain-language name ·
+    detail · ``[Copy pip]`` / ``[Retry]`` action buttons when applicable.
+
+    Designed to explain *what the user can do* about a failure rather than
+    just "there was an error somewhere". See
+    :class:`~cerebro.v2.core.engine_deps.EngineState` for the five states.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        probe: ProbeResult,
+        colors: dict,
+        on_retry: Optional[Callable[[str], None]] = None,
+        on_copy: Optional[Callable[[str, "_EngineRow"], None]] = None,
+    ) -> None:
         super().__init__(parent, bg=colors["card"])
-        dot_color = colors["success"] if ok else colors["danger"]
-        tk.Label(self, text="●", bg=colors["card"], fg=dot_color, font=FONT_SMALL).pack(
-            side="left", padx=(PAD_X, 6), pady=4,
+        state = EngineState(probe.state)
+        dot_key, state_label = _STATE_PRESENTATION[state]
+        dot_color = colors.get(dot_key, colors["fg2"])
+
+        # State dot.
+        tk.Label(
+            self, text="●", bg=colors["card"], fg=dot_color, font=FONT_SMALL,
+        ).pack(side="left", padx=(PAD_X, 6), pady=4)
+
+        # Plain-language name (fixed width so rows align).
+        name = ENGINE_DEPS[probe.key].display_name if probe.key in ENGINE_DEPS else probe.key
+        tk.Label(
+            self, text=name, bg=colors["card"], fg=colors["fg"], font=FONT_BODY,
+            width=22, anchor="w",
+        ).pack(side="left")
+
+        # Combined state + detail text.
+        detail_txt = f"{state_label} — {probe.detail}" if probe.detail else state_label
+        self._detail_lbl = tk.Label(
+            self, text=detail_txt, bg=colors["card"], fg=colors["fg2"],
+            font=FONT_SMALL, anchor="w", justify="left",
         )
-        tk.Label(self, text=name, bg=colors["card"], fg=colors["fg"], font=FONT_BODY,
-                 width=20, anchor="w").pack(side="left")
-        tk.Label(self, text=status, bg=colors["card"], fg=colors["fg2"], font=FONT_SMALL,
-                 anchor="w").pack(side="left", padx=(4, PAD_X))
+        self._detail_lbl.pack(side="left", padx=(4, PAD_X))
+
+        # Action buttons live on the right. Only shown when the user can
+        # actually do something about the state.
+        if probe.pip_hint and state in (EngineState.MISSING_DEPS, EngineState.DEGRADED):
+            btn_copy = tk.Button(
+                self,
+                text="Copy install command",
+                command=(
+                    lambda h=probe.pip_hint, row=self: on_copy(h, row) if on_copy else None
+                ),
+                bg=colors["bar"], fg=colors["fg"],
+                activebackground=colors["border"], activeforeground=colors["fg"],
+                relief="flat", font=FONT_SMALL, cursor="hand2", padx=10, pady=2,
+            )
+            btn_copy.pack(side="right", padx=(4, PAD_X), pady=4)
+
+        if on_retry and state in (
+            EngineState.MISSING_DEPS, EngineState.DEGRADED, EngineState.RUNTIME_ERROR,
+        ):
+            btn_retry = tk.Button(
+                self,
+                text="Retry",
+                command=lambda k=probe.key: on_retry(k),
+                bg=colors["bar"], fg=colors["fg"],
+                activebackground=colors["border"], activeforeground=colors["fg"],
+                relief="flat", font=FONT_SMALL, cursor="hand2", padx=10, pady=2,
+            )
+            btn_retry.pack(side="right", padx=(4, 4), pady=4)
+
+    def flash_copied(self, colors: dict) -> None:
+        """Briefly swap the detail label to 'Copied!' for visual feedback."""
+        original = self._detail_lbl.cget("text")
+        original_fg = self._detail_lbl.cget("fg")
+        self._detail_lbl.configure(text="Copied!", fg=colors.get("success", GREEN))
+        self.after(1200, lambda: self._restore_detail(original, original_fg))
+
+    def _restore_detail(self, text: str, fg: str) -> None:
+        try:
+            self._detail_lbl.configure(text=text, fg=fg)
+        except tk.TclError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +238,7 @@ class DiagnosticsPage(tk.Frame):
         self._section_cards:   List[tk.Frame]       = []
         self._section_seps:    List[tk.Frame]       = []
         self._app_rows: List[Tuple[str, str, str]] = []
-        self._eng_rows: List[Tuple[str, str, bool]] = []
+        self._eng_rows: List[ProbeResult] = []
         self._db_rows:  List[Tuple[str, str, str]] = []
         self._colors = _page_colors({})
         self._build()
@@ -278,6 +372,62 @@ class DiagnosticsPage(tk.Frame):
         db_rows    = self._collect_db_info()
         self.after(0, lambda: self._render(app_rows, eng_rows, db_rows))
 
+    # ------------------------------------------------------------------
+    # Engine retry / clipboard helpers (Phase 7)
+    # ------------------------------------------------------------------
+
+    def _retry_engine(self, engine_key: str) -> None:
+        """Re-probe one engine in-place. Called by per-row 'Retry' button.
+
+        Invalidates Python's import cache for the target module first, so
+        packages installed in another terminal after the app started can
+        be picked up without a full restart.
+        """
+        info = ENGINE_DEPS.get(engine_key)
+        if info is None:
+            return
+        invalidate_module_cache(info.module_path)
+        new_probe = probe_engine(info)
+        self._log_probe(new_probe)
+        # Replace the matching entry and re-render just the engine section.
+        for i, p in enumerate(self._eng_rows):
+            if p.key == engine_key:
+                self._eng_rows[i] = new_probe
+                break
+        self._render_engine_section(self._eng_rows)
+
+    def _copy_pip_command(self, hint: str, row: "_EngineRow") -> None:
+        """Put the pip hint on the system clipboard and flash feedback."""
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(hint)
+            # Force Tk to hand ownership to the OS so the clipboard value
+            # survives this window being destroyed / losing focus.
+            self.update_idletasks()
+        except tk.TclError:
+            _log.exception("Failed to copy install command to clipboard")
+            return
+        try:
+            row.flash_copied(self._colors)
+        except tk.TclError:
+            pass
+
+    def _log_probe(self, probe: ProbeResult) -> None:
+        """Persist non-AVAILABLE outcomes for an audit trail."""
+        if probe.state is EngineState.AVAILABLE:
+            return
+        try:
+            get_engine_errors_db().record_error(
+                engine_key=probe.key,
+                state=str(probe.state.value if hasattr(probe.state, "value") else probe.state),
+                detail=probe.detail,
+                module_path=probe.module_path,
+                exception_class=probe.exception_class,
+                exception_message=probe.exception_message,
+            )
+        except Exception:
+            _log.exception("Failed to log engine probe to engine_errors_db")
+
     def _collect_app_info(self) -> List[Tuple[str, str, str]]:
         rows: List[Tuple[str, str, str]] = []
         try:
@@ -295,34 +445,16 @@ class DiagnosticsPage(tk.Frame):
         rows.append(("tkinter", str(tk.TkVersion), "fg2"))
         return rows
 
-    def _collect_engine_status(self) -> List[Tuple[str, str, bool]]:
-        rows: List[Tuple[str, str, bool]] = []
-        engine_probes = [
-            ("Files (TurboFile)",    "cerebro.engines.turbo_file_engine",   "TurboFileEngine"),
-            ("Images (perceptual)",  "cerebro.engines.image_dedup_engine",  "ImageDedupEngine"),
-            ("Audio (fingerprint)",  "cerebro.engines.audio_dedup_engine",  "AudioDedupEngine"),
-            ("Video (frame hash)",   "cerebro.engines.video_dedup_engine",  "VideoDedupEngine"),
-            ("Documents (content)",  "cerebro.engines.document_dedup_engine", "DocumentDedupEngine"),
-        ]
-        for label, mod_path, cls_name in engine_probes:
-            try:
-                import importlib
-                mod = importlib.import_module(mod_path)
-                cls = getattr(mod, cls_name)
-                obj = cls()
-                ready = True
-                status = "available"
-                if hasattr(obj, "_ffmpeg") and not obj._ffmpeg:
-                    ready = False
-                    status = "FFmpeg not found"
-            except ImportError as exc:
-                ready = False
-                status = f"import error: {exc.__class__.__name__}"
-            except Exception as exc:
-                ready = False
-                status = f"error: {exc.__class__.__name__}"
-            rows.append((label, status, ready))
-        return rows
+    def _collect_engine_status(self) -> List[ProbeResult]:
+        """Probe every engine via :mod:`cerebro.v2.core.engine_deps`.
+
+        Each non-AVAILABLE outcome is persisted to ``engine_errors.db``
+        so the user can see a failure history in addition to live state.
+        """
+        probes = probe_all()
+        for probe in probes:
+            self._log_probe(probe)
+        return probes
 
     def _collect_db_info(self) -> List[Tuple[str, str, str]]:
         rows: List[Tuple[str, str, str]] = []
@@ -361,7 +493,7 @@ class DiagnosticsPage(tk.Frame):
     def _render(
         self,
         app_rows:  List[Tuple[str, str, str]],
-        eng_rows:  List[Tuple[str, str, bool]],
+        eng_rows:  List[ProbeResult],
         db_rows:   List[Tuple[str, str, str]],
     ) -> None:
         self._app_rows = app_rows
@@ -377,12 +509,7 @@ class DiagnosticsPage(tk.Frame):
         for label, value, role in app_rows:
             grid.add_row(label, value, role)
 
-        for w in self._engine_container.winfo_children():
-            w.destroy()
-        for label, status, ok in eng_rows:
-            _EngineRow(self._engine_container, label, status, ok, colors).pack(
-                fill="x", padx=2, pady=1,
-            )
+        self._render_engine_section(eng_rows)
 
         for w in self._db_grid.winfo_children():
             w.destroy()
@@ -392,3 +519,19 @@ class DiagnosticsPage(tk.Frame):
             db_grid.add_row(label, value, role)
 
         self._status_lbl.configure(text="", bg=colors["bg"], fg=colors["fg_muted"])
+
+    def _render_engine_section(self, probes: List[ProbeResult]) -> None:
+        """Re-render just the engine-status card. Called on initial load,
+        theme change, and every time a 'Retry' button re-probes an engine.
+        """
+        colors = self._colors
+        for w in self._engine_container.winfo_children():
+            w.destroy()
+        for probe in probes:
+            _EngineRow(
+                self._engine_container,
+                probe,
+                colors,
+                on_retry=self._retry_engine,
+                on_copy=self._copy_pip_command,
+            ).pack(fill="x", padx=2, pady=1)

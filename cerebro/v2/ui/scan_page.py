@@ -34,6 +34,7 @@ except ImportError:
     CTkScrollableFrame = tk.Frame      # type: ignore[misc,assignment]
 
 from cerebro.engines.base_engine import ScanProgress, ScanState
+from cerebro.v2.core.engine_deps import EngineState, probe_mode
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.v2.ui.widgets.scan_in_progress_view import ScanInProgressView
 
@@ -817,6 +818,97 @@ class _SuggestionsFooter(tk.Frame):
 # the richer styled view also used by ResultsPanel.
 # ===========================================================================
 
+class _EngineWarningBanner(tk.Frame):
+    """Slim yellow banner shown above the scan area when the selected
+    mode's engine is in a non-AVAILABLE state.
+
+    Visible states surfaced here:
+
+    * ``MISSING_DEPS``  — "Install <pip_hint> to enable this mode"
+    * ``DEGRADED``      — "Scan will run with reduced quality because …"
+    * ``RUNTIME_ERROR`` — "This engine failed to load — see Diagnostics"
+    * ``NOT_IMPLEMENTED`` — purely informational; the mode shouldn't even
+      appear in ``_SCAN_MODES`` today, but we handle the case defensively.
+
+    The banner also exposes a "Copy install command" button when a
+    ``pip_hint`` is available, so the user can paste it into a terminal
+    without retyping.
+    """
+
+    _BG     = "#FFF8DC"  # soft yellow (cornsilk) — visible but not alarming
+    _FG     = "#5A4A00"
+    _BORDER = "#E0C860"
+
+    def __init__(self, parent: tk.Widget) -> None:
+        super().__init__(parent, bg=self._BG, highlightthickness=1,
+                         highlightbackground=self._BORDER)
+        self._pip_hint: Optional[str] = None
+        self._icon_lbl = tk.Label(
+            self, text="⚠", bg=self._BG, fg=self._FG,
+            font=("Segoe UI", 14, "bold"),
+        )
+        self._icon_lbl.pack(side="left", padx=(14, 6), pady=6)
+        self._text_lbl = tk.Label(
+            self, text="", bg=self._BG, fg=self._FG,
+            font=("Segoe UI", 11), anchor="w", justify="left",
+        )
+        self._text_lbl.pack(side="left", padx=(0, 10), pady=6, fill="x", expand=True)
+        self._copy_btn = tk.Button(
+            self, text="Copy install command", command=self._copy_hint,
+            bg="#FFFFFF", fg=self._FG, activebackground="#F5E8B5",
+            activeforeground=self._FG, relief="flat",
+            font=("Segoe UI", 10), cursor="hand2", padx=10, pady=3,
+            borderwidth=1,
+        )
+        # Copy button packed conditionally in ``show``.
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def show(self, message: str, pip_hint: Optional[str]) -> None:
+        self._text_lbl.configure(text=message)
+        self._pip_hint = pip_hint
+        self._copy_btn.pack_forget()
+        if pip_hint:
+            self._copy_btn.pack(side="right", padx=(0, 12), pady=6)
+
+    def hide(self) -> None:
+        self._text_lbl.configure(text="")
+        self._pip_hint = None
+        self._copy_btn.pack_forget()
+
+    def apply_theme(self, _t: dict) -> None:
+        # The banner is intentionally theme-invariant: yellow warning
+        # colouring is meaningful regardless of light/dark theme, and
+        # mirrors the Diagnostics page's 'warning' dot.
+        return
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _copy_hint(self) -> None:
+        if not self._pip_hint:
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self._pip_hint)
+            self.update_idletasks()
+        except tk.TclError:
+            _log.exception("ScanPage banner: failed to copy to clipboard")
+            return
+        prev = self._copy_btn.cget("text")
+        self._copy_btn.configure(text="Copied!")
+        self.after(1200, lambda: self._restore_copy_label(prev))
+
+    def _restore_copy_label(self, text: str) -> None:
+        try:
+            self._copy_btn.configure(text=text)
+        except tk.TclError:
+            pass
+
+
 class ScanPage(tk.Frame):
     """
     Full scan configuration page.
@@ -879,6 +971,13 @@ class ScanPage(tk.Frame):
         self._sub_tab_border = tk.Frame(self._right_col, bg=_BORDER, height=1)
         self._sub_tab_border.pack(fill="x")
 
+        # Engine-status warning banner (Phase 7). Hidden by default; shown
+        # when the currently selected mode's engine is not AVAILABLE.
+        self._engine_banner = _EngineWarningBanner(self._right_col)
+        # Evaluate once for the default mode so the banner state is correct
+        # before the user even interacts with the mode bar.
+        self._refresh_engine_banner(self._current_mode)
+
         # Content area — sub-tab frames stacked
         self._content = tk.Frame(self._right_col, bg=_WHITE)
         self._content.pack(fill="both", expand=True)
@@ -935,6 +1034,55 @@ class ScanPage(tk.Frame):
             self._orchestrator.set_mode(key)
         except (ValueError, AttributeError):
             pass
+        self._refresh_engine_banner(key)
+
+    # ------------------------------------------------------------------
+    # Engine banner / pre-scan check (Phase 7)
+    # ------------------------------------------------------------------
+
+    def _refresh_engine_banner(self, mode_key: str) -> None:
+        """Probe the engine backing ``mode_key`` and show/hide the warning
+        banner. Safe to call before ``_content`` exists (during _build)."""
+        banner = getattr(self, "_engine_banner", None)
+        if banner is None:
+            return
+        try:
+            probe = probe_mode(mode_key)
+        except Exception:
+            _log.exception("Engine probe raised for mode %s", mode_key)
+            probe = None
+
+        if probe is None or probe.state is EngineState.AVAILABLE:
+            banner.hide()
+            try:
+                banner.pack_forget()
+            except tk.TclError:
+                pass
+            return
+
+        message = self._compose_banner_message(probe.state, probe.detail)
+        banner.show(message, probe.pip_hint)
+        # Insert the banner between the sub-tab border and the content area.
+        try:
+            content = getattr(self, "_content", None)
+            if content is not None:
+                banner.pack(fill="x", before=content)
+            else:
+                banner.pack(fill="x")
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _compose_banner_message(state: EngineState, detail: str) -> str:
+        if state is EngineState.MISSING_DEPS:
+            return f"This scan mode needs a package that isn't installed: {detail}"
+        if state is EngineState.DEGRADED:
+            return f"This scan mode will run with reduced capability — {detail}"
+        if state is EngineState.RUNTIME_ERROR:
+            return f"This scan mode failed to load: {detail}. See Diagnostics for details."
+        if state is EngineState.NOT_IMPLEMENTED:
+            return "This scan mode is planned for a future release."
+        return detail
 
     # ------------------------------------------------------------------
     # Scan lifecycle
@@ -949,6 +1097,15 @@ class ScanPage(tk.Frame):
                 return
             folders = [Path(path)]
             self._folders_list.add(folders[0])
+
+        # Phase-7 pre-scan gate: if the selected mode's engine is in a
+        # non-AVAILABLE state, ask the user to confirm before proceeding.
+        # DEGRADED means "will run, but worse" — surface the detail.
+        # MISSING_DEPS / RUNTIME_ERROR / NOT_IMPLEMENTED means "will likely
+        # fail or produce no results" — we still let the user proceed
+        # (they might want to confirm the failure for themselves).
+        if not self._confirm_non_available_engine():
+            return
 
         self._scanning = True
         self._scan_start_time = time.time()
@@ -971,6 +1128,32 @@ class ScanPage(tk.Frame):
             self._orchestrator.cancel()
         except Exception:
             pass
+
+    def _confirm_non_available_engine(self) -> bool:
+        """Return True if the user wants to proceed despite a
+        non-AVAILABLE engine state (or if the engine is AVAILABLE)."""
+        try:
+            probe = probe_mode(self._current_mode)
+        except Exception:
+            _log.exception("Pre-scan probe raised for %s", self._current_mode)
+            return True
+        if probe is None or probe.state is EngineState.AVAILABLE:
+            return True
+
+        from tkinter import messagebox
+        title_map = {
+            EngineState.MISSING_DEPS:    "Scan engine missing dependencies",
+            EngineState.DEGRADED:        "Scan engine running degraded",
+            EngineState.RUNTIME_ERROR:   "Scan engine failed to load",
+            EngineState.NOT_IMPLEMENTED: "Scan engine not implemented",
+        }
+        title = title_map.get(probe.state, "Scan engine issue")
+        body = self._compose_banner_message(probe.state, probe.detail)
+        body += "\n\nProceed with the scan anyway?"
+        try:
+            return bool(messagebox.askokcancel(title, body, parent=self))
+        except tk.TclError:
+            return True
 
     def _on_progress(self, progress: ScanProgress) -> None:
         """Called from engine thread — marshal to main thread."""
@@ -1081,6 +1264,10 @@ class ScanPage(tk.Frame):
             pass
         try:
             self._suggestions_footer.apply_theme(t)
+        except tk.TclError:
+            pass
+        try:
+            self._engine_banner.apply_theme(t)
         except tk.TclError:
             pass
 
