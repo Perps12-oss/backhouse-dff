@@ -205,7 +205,11 @@ class PreviewPanel(CTkFrame):
         self._collapsed: bool = True
         self._file_a: Optional[Any] = None
         self._file_b: Optional[Any] = None
-        self._sync_enabled: bool = True
+        # Sync defaults to OFF — zooming side A used to zoom side B in
+        # lockstep (via ``ZoomCanvas.sync_with``), which made it hard to
+        # land on a 1:1 view of one image while keeping the other fit-
+        # to-window. The 🔗 button in the header still toggles it on.
+        self._sync_enabled: bool = False
         self._layout_mode: str = "compact"
         self._metadata_table: Optional[MetadataTable] = None
 
@@ -249,11 +253,13 @@ class PreviewPanel(CTkFrame):
         )
         # self._diff_switch.pack(side="right", padx=Spacing.SM)
 
-        # Sync button
+        # Sync button — the muted "Tertiary" background is the OFF
+        # state (matches ``_toggle_sync``'s disabled branch); user
+        # clicks it to opt into locked zoom/pan.
         self._sync_btn = CTkButton(
             self._header, text="🔗", width=36, height=24,
             font=Typography.FONT_SM,
-            fg_color=theme_color("base.backgroundElevated"),
+            fg_color=theme_color("base.backgroundTertiary"),
             hover_color=theme_color("base.background"),
             corner_radius=Spacing.BORDER_RADIUS_SM,
         )
@@ -268,8 +274,9 @@ class PreviewPanel(CTkFrame):
         self._side_a = _SidePanel(self._content, title="A")
         self._side_b = _SidePanel(self._content, title="B")
 
-        # Sync canvases by default
-        self._side_a.get_canvas().sync_with(self._side_b.get_canvas())
+        # Sync canvases are NOT paired by default; user can turn on
+        # lockstep zoom/pan via the 🔗 button in the header if they
+        # want the Phase-6 behaviour.
 
         # Both sides hidden until data loaded
         self._side_a.pack_forget()
