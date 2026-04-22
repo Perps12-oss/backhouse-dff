@@ -130,6 +130,7 @@ class AppShell(CTk):
         self._review_page = ReviewPage(
             self._page_container,
             on_back=lambda: self.switch_tab("results"),
+            on_navigate_results=lambda: self.switch_tab("results"),
         )
         self._pages["review"] = self._review_page
 

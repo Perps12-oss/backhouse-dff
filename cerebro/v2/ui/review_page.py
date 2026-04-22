@@ -421,18 +421,26 @@ class ReviewPage(tk.Frame):
 
     def __init__(self, master,
                  on_back: Optional[Callable] = None,
+                 on_navigate_results: Optional[Callable[[], None]] = None,
                  **kw) -> None:
         kw.setdefault("bg", _WHITE)
         super().__init__(master, **kw)
         self._on_back     = on_back
+        # Called when the empty-state "Go to Results" button is clicked,
+        # or the user lands on Review from the top nav with no group loaded.
+        self._on_navigate_results = on_navigate_results
         self._groups:     List[DuplicateGroup] = []
         self._group_idx:  int                  = 0
         self._preview_file: Optional[DuplicateFile] = None
         self._t: dict = {}
         self._build()
+        self._build_empty_state()
         self._bind_keys()
         self._t = ThemeApplicator.get().build_tokens()
         ThemeApplicator.get().register(self._apply_theme)
+        # Show the empty-state overlay at init — it stays visible until the
+        # first load_group() call marks the page as "entered with data".
+        self._show_empty_state()
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -491,6 +499,72 @@ class ReviewPage(tk.Frame):
         self._group_nav.pack(fill="x", side="bottom")
 
     # ------------------------------------------------------------------
+    # Empty state — covers the whole page when no group has been loaded.
+    # The user reaches this path by clicking the Review tab in the top nav
+    # without first picking a group from Results.
+
+    def _build_empty_state(self) -> None:
+        self._empty_state = tk.Frame(self, bg=_WHITE)
+        center = tk.Frame(self._empty_state, bg=_WHITE)
+        center.place(relx=0.5, rely=0.5, anchor="center")
+
+        self._empty_icon = tk.Label(
+            center, text="\U0001F50D", bg=_WHITE, fg=_DIMGRAY,
+            font=("Segoe UI Emoji", 56),
+        )
+        self._empty_icon.pack(pady=(0, 12))
+
+        self._empty_title = tk.Label(
+            center, text="No group selected", bg=_WHITE, fg="#333333",
+            font=("Segoe UI", 16, "bold"),
+        )
+        self._empty_title.pack(pady=(0, 6))
+
+        self._empty_subtitle = tk.Label(
+            center,
+            text="Pick a group on the Results page to review its duplicates.",
+            bg=_WHITE, fg=_GRAY, font=("Segoe UI", 10),
+        )
+        self._empty_subtitle.pack(pady=(0, 20))
+
+        self._empty_cta = tk.Button(
+            center, text="Go to Results", command=self._navigate_results,
+            bg="#2E75B6", fg=_WHITE,
+            font=("Segoe UI", 10, "bold"), relief="flat",
+            cursor="hand2", padx=22, pady=9,
+            activebackground="#3A87CC", activeforeground=_WHITE,
+            borderwidth=0, highlightthickness=0,
+        )
+        self._empty_cta.pack()
+        self._empty_cta.bind(
+            "<Enter>", lambda _e: self._empty_cta.configure(bg="#3A87CC"))
+        self._empty_cta.bind(
+            "<Leave>", lambda _e: self._empty_cta.configure(bg="#2E75B6"))
+
+    def _show_empty_state(self) -> None:
+        self._empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._empty_state.lift()
+
+    def _hide_empty_state(self) -> None:
+        self._empty_state.place_forget()
+
+    def _navigate_results(self) -> None:
+        if self._on_navigate_results:
+            self._on_navigate_results()
+
+    def on_show(self) -> None:
+        """Called by AppShell when this page becomes the active tab.
+
+        If the user landed here from the top nav without first picking a
+        group (i.e. no groups loaded yet), show the empty-state overlay
+        instead of the stale "All copies — 0 files" chrome.
+        """
+        if not self._groups:
+            self._show_empty_state()
+        else:
+            self._hide_empty_state()
+
+    # ------------------------------------------------------------------
     def _apply_theme(self, t: dict) -> None:
         self._t = t
         bg  = t.get("bg",     _WHITE)
@@ -525,6 +599,23 @@ class ReviewPage(tk.Frame):
         self._copy_list.apply_theme(t)
         self._group_nav.apply_theme(t)
 
+        # Empty-state follows the theme for background/title; muted subtitle
+        # and the CTA keep their distinct palette so the invitation reads
+        # as an action, not as chrome.
+        try:
+            self._empty_state.configure(bg=bg)
+            for child in self._empty_state.winfo_children():
+                if isinstance(child, tk.Frame):
+                    child.configure(bg=bg)
+                    for leaf in child.winfo_children():
+                        if isinstance(leaf, tk.Label):
+                            leaf.configure(bg=bg)
+            self._empty_icon.configure(fg=t.get("fg_muted", _DIMGRAY))
+            self._empty_title.configure(fg=fg)
+            self._empty_subtitle.configure(fg=t.get("fg_muted", _GRAY))
+        except tk.TclError:
+            pass
+
     def _bind_keys(self) -> None:
         self.bind("<Left>",  lambda _e: self._prev_group())
         self.bind("<Right>", lambda _e: self._next_group())
@@ -536,6 +627,7 @@ class ReviewPage(tk.Frame):
         self._groups = groups
         idx = next((i for i, g in enumerate(groups) if g.group_id == group_id), 0)
         self._group_idx = idx
+        self._hide_empty_state()
         self._show_current()
 
     # ------------------------------------------------------------------
