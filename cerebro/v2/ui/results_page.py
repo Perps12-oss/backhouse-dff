@@ -5,25 +5,26 @@ Stats bar · Action toolbar · Filter list · VirtualFileGrid
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Set
+
+_log = logging.getLogger(__name__)
 
 try:
     import customtkinter as ctk
     CTkFrame    = ctk.CTkFrame
     CTkLabel    = ctk.CTkLabel
     CTkButton   = ctk.CTkButton
-    CTkToplevel = ctk.CTkToplevel
 except ImportError:
     CTkFrame    = tk.Frame      # type: ignore[misc,assignment]
     CTkLabel    = tk.Label      # type: ignore[misc,assignment]
     CTkButton   = tk.Button     # type: ignore[misc,assignment]
-    CTkToplevel = tk.Toplevel   # type: ignore[misc,assignment]
 
 from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
@@ -617,38 +618,40 @@ class _ActionToolbar(tk.Frame):
             )
         self.set_has_selection(self._has_sel)
 
+    # Five-option rule list shared with the button label "Auto Mark ▼".
+    # Order: newer-keep, older-keep, first-keep, last-keep, path-contains.
+    # ``select_in_folder`` falls through to ``select_except_first`` in the
+    # current ``ResultsPage._auto_mark`` implementation — that is pre-existing
+    # behaviour preserved verbatim; a proper path-prompt dialog is a future
+    # enhancement.
+    _AUTO_MARK_OPTS = [
+        ("Mark newer in each group",    "select_except_oldest"),
+        ("Mark older in each group",    "select_except_newest"),
+        ("Mark all except first",       "select_except_first"),
+        ("Mark all except last",        "select_except_last"),
+        ("Mark by path contains…",      "select_in_folder"),
+    ]
+
     def _show_auto_mark(self) -> None:
-        opts = [
-            ("Mark newer in each group",    "select_except_oldest"),
-            ("Mark older in each group",    "select_except_newest"),
-            ("Mark all except first",       "select_except_first"),
-            ("Mark all except last",        "select_except_last"),
-            ("Mark by path contains…",      "select_in_folder"),
-        ]
-        try:
-            win = CTkToplevel(self)
-        except Exception:
-            win = tk.Toplevel(self)
-        win.title("Auto Mark")
-        win.resizable(False, False)
-        win.geometry("280x220")
-        t = self._t
-        bg = t.get("bg", _WHITE)
-        fg = t.get("fg", "#333333")
-        hover = t.get("bg3", _SURFACE)
-        try:
-            win.configure(bg=bg)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        for label, rule in opts:
-            b = tk.Button(
-                win, text=label, bg=bg, fg=fg,
-                activebackground=hover, activeforeground=fg,
-                relief="flat", anchor="w", padx=12, pady=6,
-                font=("Segoe UI", 10), cursor="hand2",
-                command=lambda r=rule, w=win: (self._on_auto_mark(r), w.destroy()),
+        """Open a native dropdown menu anchored below the Auto Mark button.
+
+        Replaces the previous ``CTkToplevel`` modal (regression introduced in
+        145b855 when the legacy MainWindow toolbar's ``tk.Menu`` dropdown
+        was not migrated to the new ResultsPage toolbar). Uses the same
+        ``tk_popup`` pattern as ``cerebro/v2/ui/toolbar.py::_show_auto_mark_menu``.
+        """
+        menu = tk.Menu(self, tearoff=0)
+        for label, rule in self._AUTO_MARK_OPTS:
+            menu.add_command(
+                label=label,
+                command=lambda r=rule: self._on_auto_mark(r),
             )
-            b.pack(fill="x")
+        try:
+            x = self._auto_btn.winfo_rootx()
+            y = self._auto_btn.winfo_rooty() + self._auto_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def set_has_selection(self, has: bool) -> None:
         self._has_sel = has
@@ -818,14 +821,22 @@ class ResultsPage(tk.Frame):
 
     def __init__(self, master,
                  on_open_group: Optional[Callable[[int, List[DuplicateGroup]], None]] = None,
+                 on_navigate_home: Optional[Callable[[], None]] = None,
+                 on_rescan: Optional[Callable[[], None]] = None,
                  **kw) -> None:
         initial = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", initial.get("bg", _WHITE))
         super().__init__(master, **kw)
         self._on_open_group = on_open_group
+        # Delete-flow navigation hooks owned by AppShell: after the celebration
+        # overlay and when the user picks "Rescan" in the summary dialog.
+        self._on_navigate_home = on_navigate_home
+        self._on_rescan        = on_rescan
         self._groups:   List[DuplicateGroup] = []
         self._all_rows: List[Dict]           = []  # flat, unfiltered
         self._filter    = "all"
+        self._scan_mode: str = "files"  # set by load_results; feeds the
+                                        # delete ceremony's media-noun labels
         self._t: dict = initial
         self._build()
         self._apply_theme(initial)
@@ -907,8 +918,9 @@ class ResultsPage(tk.Frame):
     # ------------------------------------------------------------------
     # Public API
 
-    def load_results(self, groups: List[DuplicateGroup]) -> None:
+    def load_results(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
         self._groups = groups
+        self._scan_mode = mode or "files"
         self._empty_lbl.place_forget()
         self._all_rows = self._build_rows(groups)
         self._refresh_type_counts()
@@ -1021,36 +1033,212 @@ class ResultsPage(tk.Frame):
         self._grid._fire_check_change()
 
     def _delete_checked(self) -> None:
+        """Run the 4-step delete ceremony on the currently-checked rows.
+
+        Faithful port of the legacy ``MainWindow._on_delete_selected`` flow
+        (introduced in 8496839; docstring there: *"4-step modal confirmation
+        + celebration flow"*):
+
+            Step 1 — `_DeleteDialog`  "Are you sure?"      Cancel / Confirm
+            Step 2 — `_DeleteDialog`  breakdown + Recycle  Cancel / Allow
+            Step 3 — `_DeleteProgressDialog` (non-closeable during worker)
+            Step 4 — `_DeleteSummaryDialog`                Rescan / OK
+            Step 5 — `_DeleteCelebration` 7s overlay → on_navigate_home()
+
+        When 145b855 built the new ResultsPage toolbar and 39a332c retired
+        MainWindow, the ceremony was abandoned — this call used to be a
+        bare threaded loop over ``DeletionEngine.delete_one``. We now reuse
+        the shipped dialog classes via lazy import (startup path still
+        never touches ``main_window``).
+        """
         checked = self._grid.get_checked_rows()
         if not checked:
             return
-        threading.Thread(
-            target=self._delete_worker,
-            args=(list(checked),),
-            daemon=True,
-        ).start()
 
-    def _delete_worker(self, rows: List[Dict]) -> None:
         try:
-            from cerebro.core.deletion import DeletionEngine, DeletionPolicy, DeletionRequest
-            engine  = DeletionEngine()
-            request = DeletionRequest(policy=DeletionPolicy.TRASH,
-                                      metadata={"source": "results_page"})
-            for row in rows:
-                try:
-                    engine.delete_one(Path(row["path"]), request)
-                except Exception:
-                    pass
+            from cerebro.v2.ui.main_window import (
+                _DeleteDialog, _DeleteProgressDialog, _DeleteSummaryDialog,
+                _DeleteCelebration, _delete_media_label, _delete_breakdown,
+            )
+            from cerebro.v2.core.deletion_history_db import log_deletion_event
         except ImportError:
-            for row in rows:
+            _log.exception("Delete ceremony unavailable — legacy dialog import failed")
+            return
+
+        try:
+            from cerebro.utils.formatting import format_bytes
+        except ImportError:
+            format_bytes = None  # type: ignore[assignment]
+
+        count = len(checked)
+        mode  = self._scan_mode
+        noun  = _delete_media_label(mode)
+
+        # -- Step 1 ---------------------------------------------------------
+        d1 = _DeleteDialog(
+            self,
+            title="Confirm Deletion",
+            icon="🗑",
+            headline=f"Delete the selected {noun}?",
+            body=(
+                f"You have marked {count} {noun} for deletion.\n"
+                "They will be moved to the Recycle Bin and can be restored "
+                "if needed."
+            ),
+            btn_cancel="Cancel",
+            btn_confirm="Confirm",
+            confirm_dangerous=True,
+        )
+        if not d1.result:
+            return
+
+        # -- Step 2 ---------------------------------------------------------
+        breakdown   = _delete_breakdown(checked, mode)
+        reclaimable = sum(int(r.get("size", 0)) for r in checked)
+        reclaimable_str = (
+            format_bytes(reclaimable, decimals=1) if format_bytes
+            else _fmt_size(reclaimable)
+        )
+
+        d2 = _DeleteDialog(
+            self,
+            title="Move to Recycle Bin",
+            icon="♻",
+            headline="Moving to Recycle Bin",
+            body=(
+                f"{breakdown} will be moved to the Recycle Bin.\n\n"
+                f"Estimated space freed: {reclaimable_str}"
+            ),
+            btn_cancel="Cancel",
+            btn_confirm="Allow",
+            confirm_dangerous=False,
+        )
+        if not d2.result:
+            return
+
+        # -- Step 3 --- modal progress + background worker -----------------
+        prog = _DeleteProgressDialog(self, total=count)
+        # deleted_row_keys tracks the ORIGINAL row["path"] strings that the
+        # grid and _all_rows use as identity — so _remove_paths() drops the
+        # right rows on Windows where Path.resolve() may change slash style
+        # or letter case.
+        success_count:    List[int]    = [0]
+        deleted_row_keys: List[str]    = []
+        recovered_bytes:  List[int]    = [0]
+        failed_files:     List[tuple]  = []
+
+        def _worker() -> None:
+            try:
+                from cerebro.core.deletion import (
+                    DeletionEngine, DeletionPolicy, DeletionRequest,
+                )
+            except ImportError:
+                DeletionEngine = None  # type: ignore[assignment]
+                DeletionPolicy = None  # type: ignore[assignment]
+                DeletionRequest = None  # type: ignore[assignment]
+
+            engine  = DeletionEngine() if DeletionEngine else None
+            request = (
+                DeletionRequest(
+                    policy=DeletionPolicy.TRASH,
+                    metadata={"source": "results_page", "mode": "trash"},
+                )
+                if (DeletionRequest and DeletionPolicy) else None
+            )
+            try:
+                import send2trash  # fallback path if engine is unavailable
+            except ImportError:
+                send2trash = None  # type: ignore[assignment]
+
+            for i, row in enumerate(checked):
+                row_key = str(row.get("path", ""))
+                size    = int(row.get("size", 0) or 0)
                 try:
-                    import send2trash
-                    send2trash.send2trash(row["path"])
+                    fp = Path(row_key).resolve()
+                except (OSError, ValueError):
+                    fp = Path(row_key)
+
+                def _mark_ok() -> None:
+                    success_count[0] += 1
+                    deleted_row_keys.append(row_key)
+                    recovered_bytes[0] += size
+                    try:
+                        log_deletion_event(str(fp), size, mode)
+                    except (OSError, ValueError, RuntimeError):
+                        _log.exception("log_deletion_event failed for %s", fp)
+
+                try:
+                    if engine and request:
+                        res = engine.delete_one(fp, request)
+                        if getattr(res, "success", False):
+                            _mark_ok()
+                        else:
+                            failed_files.append(
+                                (str(fp),
+                                 getattr(res, "error", None) or "Unknown error")
+                            )
+                    elif send2trash is not None:
+                        send2trash.send2trash(str(fp))
+                        _mark_ok()
+                    else:
+                        failed_files.append(
+                            (str(fp), "deletion backend unavailable")
+                        )
+                except (OSError, ValueError, RuntimeError, AttributeError,
+                        TypeError, KeyError, ImportError) as exc:
+                    failed_files.append((str(fp), str(exc)))
+
+                self.after(0, lambda done=i + 1: prog.set_progress(done))
+
+            self.after(0, prog.close)
+
+        threading.Thread(target=_worker, daemon=True, name="delete-ceremony").start()
+        prog.wait()  # nested event loop — exits when worker calls prog.close()
+
+        # -- Apply model changes before summary ----------------------------
+        self._toolbar.set_has_selection(False)
+        if deleted_row_keys:
+            self._remove_paths(set(deleted_row_keys))
+
+        # Partial failure — skip summary/celebration, surface errors only.
+        if failed_files:
+            head = "\n".join(
+                f"  • {Path(f).name}: {e}" for f, e in failed_files[:5]
+            )
+            more = (
+                f"\n  … and {len(failed_files) - 5} more"
+                if len(failed_files) > 5 else ""
+            )
+            messagebox.showwarning(
+                "Deletion Partial",
+                f"Deleted {success_count[0]} of {count} {noun}.\n\n"
+                f"Failed:\n{head}{more}",
+                parent=self,
+            )
+            return
+
+        # -- Step 4 --- summary --------------------------------------------
+        d4 = _DeleteSummaryDialog(
+            self, noun=noun, count=success_count[0], recovered=recovered_bytes[0]
+        )
+
+        if d4.result == "rescan":
+            if self._on_rescan:
+                try:
+                    self._on_rescan()
                 except Exception:
-                    pass
-        # Reload results minus deleted paths
-        deleted = {r["path"] for r in rows}
-        self.after(0, lambda: self._remove_paths(deleted))
+                    _log.exception("on_rescan callback failed")
+            return
+
+        # -- Step 5 --- celebration overlay --------------------------------
+        def _done() -> None:
+            if self._on_navigate_home:
+                try:
+                    self._on_navigate_home()
+                except Exception:
+                    _log.exception("on_navigate_home callback failed")
+
+        _DeleteCelebration(self, noun=noun, on_done=_done)
 
     def _remove_paths(self, paths: Set[str]) -> None:
         self._all_rows = [r for r in self._all_rows if r["path"] not in paths]

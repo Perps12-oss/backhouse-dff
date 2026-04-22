@@ -122,6 +122,8 @@ class AppShell(CTk):
         self._results_page = ResultsPage(
             self._page_container,
             on_open_group=self._on_open_group,
+            on_navigate_home=lambda: self.switch_tab("welcome"),
+            on_rescan=lambda: self.switch_tab("scan"),
         )
         self._pages["results"] = self._results_page
 
@@ -241,10 +243,10 @@ class AppShell(CTk):
         """Load a past session into the Results page and switch to it (Phase 4+)."""
         self.switch_tab("results")
 
-    def _on_scan_complete(self, results: list) -> None:
+    def _on_scan_complete(self, results: list, mode: str = "files") -> None:
         """Called by ScanPage when a scan finishes."""
         self._scan_results = results
-        self._results_page.load_results(results)
+        self._results_page.load_results(results, mode=mode)
         dup_count = sum(max(0, len(g.files) - 1) for g in results)
         self.set_results_badge(dup_count)
         self.enable_review_tab()

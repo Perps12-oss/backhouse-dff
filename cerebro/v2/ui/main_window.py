@@ -10,6 +10,21 @@ Entry point:  cerebro/v2/ui/app_shell.py → AppShell
 Engine wiring reference: _handle_progress_on_main(), _on_scan_complete()
 Thread marshal pattern:  self.after(0, lambda: ...) — see those methods.
 
+Shared widgets (cross-module reuse — DO NOT rename/delete blindly):
+    The delete-flow dialog classes + helpers defined near the bottom of
+    this file are imported (lazily, on first delete) by the LIVE
+    ``cerebro/v2/ui/results_page.py`` toolbar:
+
+        _DeleteDialog, _DeleteProgressDialog, _DeleteSummaryDialog,
+        _DeleteCelebration, _delete_media_label, _delete_breakdown
+
+    These are the shipped ceremony from commit 8496839 (*"multi-step
+    delete confirmation flow with celebration screen"*). When 145b855
+    introduced the new ResultsPage and 39a332c retired MainWindow, the
+    ceremony was accidentally left behind; the live path now reuses
+    these widgets in place until/unless they are relocated to a
+    dedicated module.
+
 ---
 Original module description:
 

@@ -743,14 +743,17 @@ class ScanPage(tk.Frame):
     """
     Full scan configuration page.
 
-    on_scan_complete(results) is called after a successful scan.
+    on_scan_complete(results, mode) is called after a successful scan.
+    ``mode`` is the scan mode key (``"files"`` / ``"photos"`` / ``"videos"``
+    / ``"music"`` / ``"empty_folders"`` / ``"large_files"``) — consumed
+    downstream by ResultsPage to label the delete ceremony's media noun.
     """
 
     def __init__(
         self,
         master,
         orchestrator: Any,
-        on_scan_complete: Optional[Callable[[list], None]] = None,
+        on_scan_complete: Optional[Callable[[list, str], None]] = None,
         **kwargs,
     ) -> None:
         initial = ThemeApplicator.get().build_tokens()
@@ -936,7 +939,7 @@ class ScanPage(tk.Frame):
                 _log.exception("Failed to record scan history entry")
 
             if self._on_scan_complete:
-                self._on_scan_complete(results)
+                self._on_scan_complete(results, self._current_mode)
 
     def _show_progress(self) -> None:
         self._folders_list.place_forget()
