@@ -113,12 +113,12 @@ class Settings:
                 "preview": 0.25
             }
         }
-        # Misc UI preferences that don't fit a mode-specific bucket.
-        # ``results_view_mode`` is the List/Grid toggle on the Results page
-        # (Phase 6); persisted so the user's choice survives restart.
-        self.ui = {
-            "results_view_mode": "list",
-        }
+        # Misc UI preferences that don't fit a mode-specific bucket. Empty
+        # for now — the Phase-6 ``results_view_mode`` key was removed when
+        # the List/Grid toggle moved off the Results page (see Results→
+        # Review split). Older JSON that still carries that key is simply
+        # absorbed into ``ui`` and ignored.
+        self.ui: Dict[str, object] = {}
 
     def to_dict(self) -> Dict:
         """Convert settings to dictionary."""

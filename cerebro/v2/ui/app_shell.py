@@ -131,6 +131,13 @@ class AppShell(CTk):
             self._page_container,
             on_back=lambda: self.switch_tab("results"),
             on_navigate_results=lambda: self.switch_tab("results"),
+            # Needed by Review's Smart-Select flow — it reuses the same
+            # delete ceremony as Results, so both pages must agree on
+            # where the user lands after a successful batch delete
+            # (celebration → welcome) and after picking Rescan in the
+            # summary dialog (→ scan).
+            on_navigate_home=lambda: self.switch_tab("welcome"),
+            on_rescan=lambda: self.switch_tab("scan"),
         )
         self._pages["review"] = self._review_page
 
@@ -261,11 +268,19 @@ class AppShell(CTk):
     def _on_scan_complete(self, results: list, mode: str = "files") -> None:
         """Called by ScanPage when a scan finishes."""
         self._scan_results = results
+        self._scan_mode    = mode or "files"
         self._results_page.load_results(results, mode=mode)
+        # Seed Review with the same data in grid-mode so Smart Select
+        # already has the full group set loaded if the user tabs over
+        # directly. The compare mode only ever activates when the user
+        # explicitly clicks a tile (or arrives via Results double-click).
+        try:
+            self._review_page.load_results(results, mode=mode)
+        except Exception:   # pylint: disable=broad-except
+            _log.exception("ReviewPage.load_results failed")
         dup_count = sum(max(0, len(g.files) - 1) for g in results)
         self.set_results_badge(dup_count)
         self.enable_review_tab()
-        # Refresh welcome stats then switch to results
         try:
             self._pages["welcome"].refresh()
         except (AttributeError, tk.TclError):
@@ -273,8 +288,12 @@ class AppShell(CTk):
         self.switch_tab("results")
 
     def _on_open_group(self, group_id: int, groups: list) -> None:
-        """Called when user double-clicks a group in Results — opens Review tab."""
-        self._review_page.load_group(groups, group_id)
+        """Called when user double-clicks a group in Results — opens Review tab
+        in compare mode pre-focused on that group. ``scan_mode`` is
+        threaded through so Smart Select's delete ceremony dialogs use
+        the right media noun."""
+        mode = getattr(self, "_scan_mode", "files")
+        self._review_page.load_group(groups, group_id, mode=mode)
         self.switch_tab("review")
 
     def _on_history_session_click(self, entry) -> None:

@@ -106,7 +106,11 @@ def is_image_row(row: Dict) -> bool:
 # ---------------------------------------------------------------------------
 _TILE_W    = 140
 _THUMB_H   = 140
-_LABEL_H   = 32                 # filename + size line
+# Label band hosts two lines: size (prominent, bold, larger) and filename
+# (secondary). Bumped from 32 → 44px when the widget moved to the Review
+# page: the user's decision driver there is file size, not name, so size
+# takes visual precedence.
+_LABEL_H   = 44
 _TILE_H    = _THUMB_H + _LABEL_H
 _GAP       = 12
 _EDGE_PAD  = 14
@@ -486,17 +490,19 @@ class VirtualThumbGrid(tk.Canvas):
                              fill="#FFFFFF",
                              font=("Segoe UI", 10, "bold"))
 
-        # Filename label
+        # Label band: size first (prominent), filename second (muted).
+        # The order is inverted on purpose — on Review, users triage
+        # groups by size; the filename is secondary identity.
         name = row.get("name") or ""
-        if len(name) > 20:
-            name = name[:17] + "…"
-        label_fg = self._t["sel_fg"] if is_selected else self._t["fg"]
-        size_fg  = self._t["sel_fg"] if is_selected else self._t["fg_muted"]
-        self.create_text((x0 + x1) // 2, ty1 + 10,
-                         text=name, fill=label_fg,
-                         font=("Segoe UI", 9), anchor="n")
-        self.create_text((x0 + x1) // 2, ty1 + 24,
+        if len(name) > 22:
+            name = name[:19] + "…"
+        size_fg = self._t["sel_fg"] if is_selected else self._t["fg"]
+        name_fg = self._t["sel_fg"] if is_selected else self._t["fg_muted"]
+        self.create_text((x0 + x1) // 2, ty1 + 8,
                          text=row.get("size_str", ""), fill=size_fg,
+                         font=("Segoe UI", 11, "bold"), anchor="n")
+        self.create_text((x0 + x1) // 2, ty1 + 26,
+                         text=name, fill=name_fg,
                          font=("Segoe UI", 8), anchor="n")
 
     # ─── Async thumbnail decode ─────────────────────────────────────

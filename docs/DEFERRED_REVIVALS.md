@@ -17,10 +17,44 @@ Rules:
 ## Revived to date
 | Feature | Source | Phase revived |
 |---|---|---|
-| Delete ceremony (4 dialogs + celebration) | `main_window.py _DeleteDialog/_DeleteProgressDialog/_DeleteSummaryDialog/_DeleteCelebration` | Phase 4.1 (lazy import) |
-| Zoom/pan canvas + synced A/B comparison | `widgets/zoom_canvas.py`, `preview_panel.py` | Phase 6 (grid → comparison view) |
-| MetadataTable inside side preview | `widgets/metadata_table.py` | Phase 6 (via PreviewPanel composition) |
-| Undo toast after delete | `main_window.py _UndoToast` | Phase 6 (piggyback lazy import) |
+| Delete ceremony (4 dialogs + celebration) | `main_window.py _DeleteDialog/_DeleteProgressDialog/_DeleteSummaryDialog/_DeleteCelebration` | Phase 4.1 (lazy import) — extracted to `cerebro/v2/ui/delete_flow.py` in Phase 6 Part 3 so Results + Review share one code path |
+| Zoom/pan canvas + synced A/B comparison | `widgets/zoom_canvas.py`, `preview_panel.py` | Phase 6 (initially as Results grid takeover; **moved to Review in Part 3**) |
+| MetadataTable inside side preview | `widgets/metadata_table.py` | Phase 6 (via PreviewPanel composition, now on Review) |
+| Undo toast after delete | `main_window.py _UndoToast` | Phase 6 (piggyback lazy import inside `delete_flow`) |
+| Auto-Mark (now "Smart Select") dropdown | `main_window_controllers.py` rule catalog | Phase 6 Part 3 (lives on Review; runs global ceremony) |
+| `VirtualThumbGrid` + async thumb decoder | new in Phase 6 — inspired by `widgets/thumbnail_grid.py` | Phase 6 Part 2; repurposed as Review's default view in Part 3 |
+
+---
+
+## Phase-6 Part-3 course correction (Results → Review split)
+
+Phase 6 Part 2 initially added the List/Grid view toggle, thumb grid, and
+side-by-side comparison takeover to **Results**. User feedback flagged
+the overlap ("review and results are doing the same thing differently —
+pollution and cross-use of pages"); Part 3 restructured both pages:
+
+**Results — degraded to overview/stats**
+- Removed: `List/Grid` segmented toggle, `VirtualThumbGrid` mount,
+  PreviewPanel takeover, `ui.results_view_mode` setting, Auto-Mark
+  dropdown button.
+- Added: `Largest duplicate` and `Biggest group` cells in `_StatsBar`.
+- Kept: `VirtualFileGrid` (Phase 5), per-row checkbox → DELETE → 4-step
+  ceremony → Undo toast.
+
+**Review — rewritten around bulk triage**
+- Default mode is `VirtualThumbGrid` of every file in every group (size
+  label is the largest, boldest text on the tile).
+- Clicking a tile enters compare mode (legacy `PreviewPanel` with
+  `ZoomCanvas` sync); ← Prev / Next → walk groups in compare.
+- `Smart Select ▼` (5 rules) lives in Review's top chrome; it computes
+  a global deletion set and pipes it straight into the delete ceremony.
+- Per-tile delete checkboxes and per-file Keep/Delete buttons were
+  deliberately **not** carried over: they compound work loss when
+  Smart Select is later used, and the user signalled Review is for
+  triaging, not one-off deletion.
+- Per the same feedback, `ORIGINAL` / `DUPLICATE` badges and
+  `is_keeper` flows were removed — the scanner can't reliably pick a
+  true "original".
 
 ---
 

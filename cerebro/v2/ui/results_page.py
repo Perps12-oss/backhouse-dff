@@ -11,8 +11,8 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable, Dict, List, Optional, Set
+from tkinter import filedialog, ttk
+from typing import Callable, Dict, List, Optional, Set
 
 _log = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ except ImportError:
     CTkLabel    = tk.Label      # type: ignore[misc,assignment]
     CTkButton   = tk.Button     # type: ignore[misc,assignment]
 
-from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
+from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 
 # ---------------------------------------------------------------------------
@@ -577,10 +577,18 @@ class _StatsBar(tk.Frame):
         self._caption_labels: List[tk.Label] = []
         self._columns: List[tk.Frame] = []
         self._separators: List[tk.Frame] = []
+        # Two extra cells (Largest duplicate, Biggest group) were added in
+        # the Results→Review split: Results is now a pure-overview page, so
+        # the stats bar earns a bit more informational weight. "Largest
+        # duplicate" = the single biggest file among all duplicate rows;
+        # "Biggest group" = how many copies the most-populated group holds
+        # (a proxy for "which group is the biggest reclaim target").
         groups = [
-            ("files_scanned",  self._t.get("fg",        "#111111"), "Files scanned"),
-            ("duplicates",     self._t.get("stat_dupes", _RED),     "Duplicates found"),
-            ("recoverable",    self._t.get("stat_space", _GREEN),   "Space recoverable"),
+            ("files_scanned", self._t.get("fg",        "#111111"), "Files scanned"),
+            ("duplicates",    self._t.get("stat_dupes", _RED),     "Duplicates found"),
+            ("recoverable",   self._t.get("stat_space", _GREEN),   "Space recoverable"),
+            ("largest_dup",   self._t.get("fg",        "#111111"), "Largest duplicate"),
+            ("biggest_group", self._t.get("fg",        "#111111"), "Biggest group"),
         ]
         for i, (key, fg, lbl_text) in enumerate(groups):
             if i:
@@ -618,14 +626,29 @@ class _StatsBar(tk.Frame):
         self._labels["files_scanned"].configure(bg=bg, fg=t.get("fg",        "#111111"))
         self._labels["duplicates"]   .configure(bg=bg, fg=t.get("stat_dupes", _RED))
         self._labels["recoverable"]  .configure(bg=bg, fg=t.get("stat_space", _GREEN))
+        self._labels["largest_dup"]  .configure(bg=bg, fg=t.get("fg",        "#111111"))
+        self._labels["biggest_group"].configure(bg=bg, fg=t.get("fg",        "#111111"))
         files, dupes = self._last_counts
         self._draw_pie(files, dupes)
 
-    def update(self, files: int, dupes: int, recoverable: int) -> None:
+    def update(
+        self,
+        files: int,
+        dupes: int,
+        recoverable: int,
+        largest_dup: int = 0,
+        biggest_group: int = 0,
+    ) -> None:
         self._last_counts = (files, dupes)
         self._labels["files_scanned"].configure(text=f"{files:,}")
         self._labels["duplicates"].configure(text=f"{dupes:,}")
         self._labels["recoverable"].configure(text=_fmt_size(recoverable))
+        self._labels["largest_dup"].configure(
+            text=_fmt_size(largest_dup) if largest_dup else "—"
+        )
+        self._labels["biggest_group"].configure(
+            text=f"{biggest_group:,} copies" if biggest_group else "—"
+        )
         self._draw_pie(files, dupes)
 
     def _draw_pie(self, files: int, dupes: int) -> None:
@@ -648,14 +671,21 @@ class _StatsBar(tk.Frame):
 # ===========================================================================
 
 class _ActionToolbar(tk.Frame):
+    """Results action strip — Delete / Move / Copy / Export.
+
+    The Phase-6 "Auto Mark ▼" dropdown and "List / Grid" segmented toggle
+    were removed in the Results→Review split: Auto-Mark (now "Smart
+    Select") belongs on the Review page where the user has already seen
+    thumbnails + file sizes and can make an informed bulk decision; the
+    grid view and side-by-side comparison likewise live on Review.
+    Results keeps only the per-row checkbox → DELETE path, for users
+    who want to hand-curate a subset of the table.
+    """
     H = 40
 
     def __init__(self, master,
                  on_delete: Callable,
                  on_move:   Callable,
-                 on_auto_mark: Callable[[str], None],
-                 on_view_mode: Optional[Callable[[str], None]] = None,
-                 initial_view_mode: str = "list",
                  **kw) -> None:
         t = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", t.get("bg", _WHITE))
@@ -664,15 +694,9 @@ class _ActionToolbar(tk.Frame):
         self.pack_propagate(False)
         self._on_delete    = on_delete
         self._on_move      = on_move
-        self._on_auto_mark = on_auto_mark
-        # Phase 6: List/Grid view toggle. ResultsPage owns the actual view
-        # swap + persistence; this widget just emits the user's pick.
-        self._on_view_mode = on_view_mode
-        self._view_mode    = initial_view_mode if initial_view_mode in ("list", "grid") else "list"
         self._has_sel      = False
         self._t            = t
         self._buttons: List[Dict[str, object]] = []
-        self._view_btns: Dict[str, tk.Button] = {}
         self._build()
 
     def _build(self) -> None:
@@ -684,74 +708,19 @@ class _ActionToolbar(tk.Frame):
         self._inner = tk.Frame(self, bg=bg)
         self._inner.pack(fill="both", expand=True, padx=8)
 
-        self._auto_btn = self._mk_btn("Auto Mark ▼", self._show_auto_mark)
         self._del_btn  = self._mk_btn("DELETE",      self._on_delete, role="danger")
         self._mk_btn("MOVE",            self._on_move)
         self._mk_btn("COPY",            self._noop)
         self._mk_btn("Export results",  self._noop)
 
-        # ── View toggle (right-aligned) ─────────────────────────────
-        # Two-segment pill: the active mode is filled navy, the
-        # inactive one is ghosted. Kept visually distinct from the
-        # left-side action buttons so the user reads it as "mode",
-        # not "action".
-        self._view_strip = tk.Frame(self._inner, bg=bg)
-        self._view_strip.pack(side="right", padx=(8, 0))
+        # Hint anchor on the right reminding users where the smart-
+        # select lives now. Lightweight — plain label, no button.
         tk.Label(
-            self._view_strip, text="View:", bg=bg,
-            fg=self._t.get("fg_muted", _DIMGRAY),
-            font=("Segoe UI", 9),
-        ).pack(side="left", padx=(0, 6))
-        self._view_btns["list"] = self._mk_view_btn("\u2630 List", "list")
-        self._view_btns["grid"] = self._mk_view_btn("\u25A6 Grid", "grid")
-        self._paint_view_toggle()
-
-    def _mk_view_btn(self, text: str, mode: str) -> tk.Button:
-        b = tk.Button(
-            self._view_strip, text=text,
-            command=lambda m=mode: self._pick_view(m),
-            font=("Segoe UI", 9, "bold"), relief="flat",
-            cursor="hand2", padx=10, pady=3,
-            borderwidth=0, highlightthickness=0,
-        )
-        b.pack(side="left", padx=(0, 4))
-        return b
-
-    def _pick_view(self, mode: str) -> None:
-        if mode not in ("list", "grid") or mode == self._view_mode:
-            return
-        self._view_mode = mode
-        self._paint_view_toggle()
-        if self._on_view_mode:
-            try:
-                self._on_view_mode(mode)
-            except Exception:   # pylint: disable=broad-except
-                _log.exception("on_view_mode callback raised")
-
-    def _paint_view_toggle(self) -> None:
-        t = self._t
-        active_bg   = t.get("sel_bg", _SELECTED)
-        active_fg   = t.get("sel_fg", _SEL_FG)
-        inactive_bg = t.get("bg3",    _SURFACE)
-        inactive_fg = t.get("fg",     "#333333")
-        for mode, btn in self._view_btns.items():
-            if mode == self._view_mode:
-                btn.configure(bg=active_bg, fg=active_fg,
-                              activebackground=active_bg,
-                              activeforeground=active_fg)
-            else:
-                btn.configure(bg=inactive_bg, fg=inactive_fg,
-                              activebackground=t.get("bg2", _ROW_ALT),
-                              activeforeground=inactive_fg)
-
-    def set_view_mode(self, mode: str) -> None:
-        """Programmatically reflect the active view without firing the
-        callback (used by ResultsPage at init when hydrating from
-        persisted Settings)."""
-        if mode in ("list", "grid"):
-            self._view_mode = mode
-            if self._view_btns:
-                self._paint_view_toggle()
+            self._inner,
+            text="Smart Select lives on the Review tab \u2192",
+            bg=bg, fg=self._t.get("fg_muted", _DIMGRAY),
+            font=("Segoe UI", 9, "italic"),
+        ).pack(side="right", padx=(0, 4))
 
     def _mk_btn(self, text: str, cmd, *, role: str = "default") -> tk.Button:
         t   = self._t
@@ -802,49 +771,12 @@ class _ActionToolbar(tk.Frame):
                 highlightbackground=border,
             )
         try:
-            self._view_strip.configure(bg=bg)
-            for child in self._view_strip.winfo_children():
+            for child in self._inner.winfo_children():
                 if isinstance(child, tk.Label):
                     child.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
         except (tk.TclError, AttributeError):
             pass
-        self._paint_view_toggle()
         self.set_has_selection(self._has_sel)
-
-    # Five-option rule list shared with the button label "Auto Mark ▼".
-    # Order: newer-keep, older-keep, first-keep, last-keep, path-contains.
-    # ``select_in_folder`` falls through to ``select_except_first`` in the
-    # current ``ResultsPage._auto_mark`` implementation — that is pre-existing
-    # behaviour preserved verbatim; a proper path-prompt dialog is a future
-    # enhancement.
-    _AUTO_MARK_OPTS = [
-        ("Mark newer in each group",    "select_except_oldest"),
-        ("Mark older in each group",    "select_except_newest"),
-        ("Mark all except first",       "select_except_first"),
-        ("Mark all except last",        "select_except_last"),
-        ("Mark by path contains…",      "select_in_folder"),
-    ]
-
-    def _show_auto_mark(self) -> None:
-        """Open a native dropdown menu anchored below the Auto Mark button.
-
-        Replaces the previous ``CTkToplevel`` modal (regression introduced in
-        145b855 when the legacy MainWindow toolbar's ``tk.Menu`` dropdown
-        was not migrated to the new ResultsPage toolbar). Uses the same
-        ``tk_popup`` pattern as ``cerebro/v2/ui/toolbar.py::_show_auto_mark_menu``.
-        """
-        menu = tk.Menu(self, tearoff=0)
-        for label, rule in self._AUTO_MARK_OPTS:
-            menu.add_command(
-                label=label,
-                command=lambda r=rule: self._on_auto_mark(r),
-            )
-        try:
-            x = self._auto_btn.winfo_rootx()
-            y = self._auto_btn.winfo_rooty() + self._auto_btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
 
     def set_has_selection(self, has: bool) -> None:
         self._has_sel = has
@@ -1010,7 +942,16 @@ class _FilterListBar(tk.Frame):
 # ===========================================================================
 
 class ResultsPage(tk.Frame):
-    """Full results page. Call load_results(groups) after a scan completes."""
+    """Results page — scan overview, filter/sort table, batch delete.
+
+    Scope was narrowed after the Phase-6 Results→Review split: preview,
+    comparison, and Smart Select moved to the Review page. Results is
+    now purely the analytical view: a filterable / sortable table of
+    every file in every duplicate group, with manual per-row check-to-
+    delete via the Phase-5 ``VirtualFileGrid``.
+
+    Call ``load_results(groups)`` after a scan completes.
+    """
 
     def __init__(self, master,
                  on_open_group: Optional[Callable[[int, List[DuplicateGroup]], None]] = None,
@@ -1031,44 +972,9 @@ class ResultsPage(tk.Frame):
         self._scan_mode: str = "files"  # set by load_results; feeds the
                                         # delete ceremony's media-noun labels
         self._t: dict = initial
-        # Phase 6: view-mode state. Hydrated from Settings on first build;
-        # saved back whenever the toolbar toggle fires.
-        self._view_mode: str = self._load_view_mode_pref()
         self._build()
-        # Initial view follows the persisted preference; do it after
-        # _build so both child widgets exist.
-        self._activate_view(self._view_mode, fire_callback=False)
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
-
-    # ------------------------------------------------------------------
-    # Persisted view-mode preference (Phase 6)
-    #
-    # Kept deliberately tolerant: if Settings can't be loaded for any
-    # reason (corrupt JSON, missing file, import failure) we fall back
-    # to "list" silently — the toggle button still works, it just
-    # won't persist. Same pattern for saving.
-
-    def _load_view_mode_pref(self) -> str:
-        try:
-            from cerebro.v2.ui.settings_dialog import Settings, get_settings_path
-            s = Settings.load(get_settings_path())
-            mode = str(s.ui.get("results_view_mode", "list"))
-            return mode if mode in ("list", "grid") else "list"
-        except Exception:   # pylint: disable=broad-except
-            _log.debug("Could not load view-mode pref; defaulting to list",
-                       exc_info=True)
-            return "list"
-
-    def _save_view_mode_pref(self, mode: str) -> None:
-        try:
-            from cerebro.v2.ui.settings_dialog import Settings, get_settings_path
-            path = get_settings_path()
-            s = Settings.load(path)
-            s.ui["results_view_mode"] = mode
-            s.save(path)
-        except Exception:   # pylint: disable=broad-except
-            _log.debug("Could not persist view-mode pref", exc_info=True)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -1079,9 +985,6 @@ class ResultsPage(tk.Frame):
             self,
             on_delete=self._delete_checked,
             on_move=self._move_checked,
-            on_auto_mark=self._auto_mark,
-            on_view_mode=self._on_view_mode_changed,
-            initial_view_mode=self._view_mode,
         )
         self._toolbar.pack(fill="x")
 
@@ -1091,55 +994,22 @@ class ResultsPage(tk.Frame):
         self._col_hdr = _ColHeader(self, on_sort=self._on_sort)
         self._col_hdr.pack(fill="x")
 
-        # Body: hosts three interchangeable views — list, grid, and the
-        # side-by-side comparison takeover. Only one is packed at a time.
         self._body = tk.Frame(self, bg=self._t.get("bg", _WHITE))
         self._body.pack(fill="both", expand=True)
 
-        # ── List view (existing Phase-5 VirtualFileGrid) ───────────
-        self._list_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
-        self._list_grid = VirtualFileGrid(
-            self._list_frame,
+        self._grid = VirtualFileGrid(
+            self._body,
             on_open_group=self._open_group_by_id,
         )
-        self._list_vsb = ttk.Scrollbar(
-            self._list_frame, orient="vertical",
-            command=self._list_grid.yview,
+        self._vsb = ttk.Scrollbar(
+            self._body, orient="vertical",
+            command=self._grid.yview,
         )
-        self._list_grid.configure(yscrollcommand=self._list_vsb.set)
-        self._list_vsb.pack(side="right", fill="y")
-        self._list_grid.pack(fill="both", expand=True)
-        self._list_grid.bind("<<CheckChanged>>", self._on_check_changed)
+        self._grid.configure(yscrollcommand=self._vsb.set)
+        self._vsb.pack(side="right", fill="y")
+        self._grid.pack(fill="both", expand=True)
+        self._grid.bind("<<CheckChanged>>", self._on_check_changed)
 
-        # ── Grid view (Phase 6 VirtualThumbGrid) ───────────────────
-        from cerebro.v2.ui.widgets.virtual_thumb_grid import VirtualThumbGrid
-        self._thumb_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
-        self._thumb_grid = VirtualThumbGrid(
-            self._thumb_frame,
-            on_open_file=self._on_thumb_dbl_click,
-        )
-        self._thumb_vsb = ttk.Scrollbar(
-            self._thumb_frame, orient="vertical",
-            command=self._thumb_grid.yview,
-        )
-        self._thumb_grid.configure(yscrollcommand=self._thumb_vsb.set)
-        self._thumb_vsb.pack(side="right", fill="y")
-        self._thumb_grid.pack(fill="both", expand=True)
-        self._thumb_grid.bind("<<CheckChanged>>", self._on_check_changed)
-
-        # ── Comparison view (revived legacy PreviewPanel) ─────────
-        # Built lazily on first image double-click to keep cold start
-        # fast and avoid pulling PIL/ZoomCanvas into the import graph
-        # when the user never uses grid mode.
-        self._cmp_frame: Optional[tk.Frame] = None
-        self._cmp_panel: Any = None
-
-        # Active grid pointer — re-bound on view-mode swap so existing
-        # handlers (_auto_mark, _delete_checked, _remove_paths,
-        # _apply_filter, sort) keep working through self._grid.
-        self._grid = self._list_grid
-
-        # Empty state
         self._empty_lbl = tk.Label(
             self._body,
             text="No scan results yet.\nRun a scan from the Scan tab.",
@@ -1150,200 +1020,6 @@ class ResultsPage(tk.Frame):
         self._empty_lbl.place(relx=0.5, rely=0.4, anchor="center")
 
     # ------------------------------------------------------------------
-    # View-mode management (Phase 6)
-
-    def _activate_view(self, mode: str, *, fire_callback: bool = True) -> None:
-        """Pack the requested view (``list`` or ``grid``) and hide the other.
-
-        Leaves the comparison takeover intact if it's currently packed —
-        exiting comparison is the user's explicit Back action, not a
-        side-effect of toggling the segmented control.
-        """
-        if mode not in ("list", "grid"):
-            return
-        self._view_mode = mode
-        # Unpack both list+grid frames before re-packing the chosen one
-        # so ordering is deterministic regardless of previous state.
-        for frame in (self._list_frame, self._thumb_frame):
-            try:
-                frame.pack_forget()
-            except tk.TclError:
-                pass
-        target_frame = self._thumb_frame if mode == "grid" else self._list_frame
-        target_frame.pack(fill="both", expand=True)
-        # Re-point _grid so the legacy helpers (_auto_mark, _delete_checked,
-        # sort, _remove_paths) operate on the active widget.
-        self._grid = self._thumb_grid if mode == "grid" else self._list_grid
-        # Show/hide the column header — it's a list-mode affordance only.
-        try:
-            if mode == "list":
-                self._col_hdr.pack_configure(fill="x")
-                # If col header got pack_forget'd before, repack it above body
-                if not self._col_hdr.winfo_ismapped():
-                    self._col_hdr.pack(fill="x", before=self._body)
-            else:
-                self._col_hdr.pack_forget()
-        except tk.TclError:
-            pass
-        self._toolbar.set_view_mode(mode)
-        if fire_callback:
-            self._save_view_mode_pref(mode)
-
-    def _on_view_mode_changed(self, mode: str) -> None:
-        # User-initiated toggle from the toolbar. Before swapping, bring
-        # the active grid's check set across so marks are preserved.
-        self._sync_checked_to(mode)
-        self._activate_view(mode, fire_callback=True)
-        # Re-render the newly-active grid now that it owns the checks
-        # and current visibility state.
-        try:
-            self._grid._render()   # pylint: disable=protected-access
-        except Exception:          # pylint: disable=broad-except
-            pass
-
-    def _sync_checked_to(self, target_mode: str) -> None:
-        """Copy ``_checked`` from the currently-active grid into the one
-        that's about to become active.
-
-        Both grids hold the same row-list in the same order (they're fed
-        from ``_apply_filter`` together), so the integer indices map
-        one-to-one.
-        """
-        src = self._thumb_grid if self._view_mode == "grid" else self._list_grid
-        dst = self._thumb_grid if target_mode == "grid" else self._list_grid
-        if src is dst:
-            return
-        dst._checked = set(src._checked)   # pylint: disable=protected-access
-
-    # ------------------------------------------------------------------
-    # Comparison takeover (revived legacy PreviewPanel — Phase 6)
-    #
-    # Entered by double-clicking an image tile in grid mode. Left via
-    # the Back button in its own chrome. While this view is packed the
-    # list/grid are pack_forgotten; the toolbar stays visible so the
-    # user can still hit DELETE/MOVE on whichever check set they had.
-
-    def _ensure_comparison_view(self) -> None:
-        if self._cmp_frame is not None:
-            return
-        try:
-            from cerebro.v2.ui.preview_panel import PreviewPanel
-        except ImportError:
-            _log.exception("PreviewPanel import failed — side-by-side disabled")
-            return
-
-        self._cmp_frame = tk.Frame(self._body, bg=self._t.get("bg", _WHITE))
-        # Top bar: Back button + title.
-        bar = tk.Frame(self._cmp_frame, bg=self._t.get("bg", _WHITE), height=38)
-        bar.pack(fill="x")
-        bar.pack_propagate(False)
-        tk.Button(
-            bar, text="\u2190  Back to grid", command=self._exit_comparison,
-            bg="#2E75B6", fg=_WHITE,
-            activebackground="#3A87CC", activeforeground=_WHITE,
-            font=("Segoe UI", 9, "bold"), relief="flat",
-            cursor="hand2", padx=14, pady=5,
-            borderwidth=0, highlightthickness=0,
-        ).pack(side="left", padx=10, pady=6)
-        self._cmp_title = tk.Label(
-            bar, text="", bg=self._t.get("bg", _WHITE),
-            fg=self._t.get("fg", "#333333"),
-            font=("Segoe UI", 10, "bold"),
-        )
-        self._cmp_title.pack(side="left", padx=10)
-
-        # The PreviewPanel itself. set_layout_mode("ashisoft") drops the
-        # collapsible header so it fills the takeover region.
-        self._cmp_panel = PreviewPanel(self._cmp_frame)
-        self._cmp_panel.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        try:
-            self._cmp_panel.set_layout_mode("compact")
-        except Exception:   # pylint: disable=broad-except
-            pass
-
-    def _enter_comparison(self, row: Dict) -> None:
-        """Open side-by-side comparison for an image row (A) vs its
-        group peer (B). Non-image rows never reach this path — the
-        grid's double-click handler routes them to Review instead."""
-        self._ensure_comparison_view()
-        if self._cmp_panel is None:
-            # PreviewPanel unavailable (e.g. missing PIL) — fall back
-            # to Review so the double-click doesn't no-op.
-            self._open_group_by_id(int(row.get("group_id", -1)))
-            return
-
-        # Resolve the DuplicateFile for file A and a peer B from the
-        # same group.
-        gid = int(row.get("group_id", -1))
-        target_path = str(row.get("path", ""))
-        file_a = None
-        file_b = None
-        for g in self._groups:
-            if g.group_id != gid:
-                continue
-            for f in g.files:
-                if str(f.path) == target_path:
-                    file_a = f
-                    break
-            if file_a is not None:
-                # Prefer the first *other* file in the group.
-                for f in g.files:
-                    if str(f.path) != target_path:
-                        file_b = f
-                        break
-            break
-
-        try:
-            self._cmp_panel.load_comparison(file_a, file_b)
-        except Exception:   # pylint: disable=broad-except
-            _log.exception("PreviewPanel.load_comparison failed")
-            return
-        # Title: "filename.jpg  ↔  peer.jpg  (group 3, 5 copies)"
-        try:
-            name_a = Path(str(getattr(file_a, "path", "") or "")).name or "(A)"
-            name_b = Path(str(getattr(file_b, "path", "") or "")).name if file_b else "(none)"
-            count = len(self._thumb_grid._group_counts) and \
-                self._thumb_grid._group_counts.get(gid, 0)  # pylint: disable=protected-access
-            self._cmp_title.configure(
-                text=f"{name_a}  \u2194  {name_b}   ·   group {gid}, {count} copies"
-            )
-        except tk.TclError:
-            pass
-
-        # Pack the takeover, hide the grid view.
-        for frame in (self._list_frame, self._thumb_frame):
-            try:
-                frame.pack_forget()
-            except tk.TclError:
-                pass
-        self._cmp_frame.pack(fill="both", expand=True)
-
-    def _exit_comparison(self) -> None:
-        if self._cmp_frame is None:
-            return
-        try:
-            self._cmp_frame.pack_forget()
-        except tk.TclError:
-            pass
-        # Restore whichever view was active before the takeover.
-        self._activate_view(self._view_mode, fire_callback=False)
-
-    def _on_thumb_dbl_click(self, row: Dict) -> None:
-        """Route a grid-tile double-click:
-         - image → side-by-side comparison takeover
-         - non-image (incl. video, for now) → Review page
-
-        Keeps the list-mode double-click behavior (`on_open_group`)
-        untouched so the PreviewPanel stays hidden outside grid mode
-        per the Phase 6 rule.
-        """
-        from cerebro.v2.ui.widgets.virtual_thumb_grid import is_image_row
-        if is_image_row(row):
-            self._enter_comparison(row)
-        else:
-            self._open_group_by_id(int(row.get("group_id", -1)))
-
-    # ------------------------------------------------------------------
     # Theme
 
     def _apply_theme(self, t: dict) -> None:
@@ -1352,19 +1028,13 @@ class ResultsPage(tk.Frame):
         self.configure(bg=bg)
         try:
             self._body.configure(bg=bg)
-            self._list_frame.configure(bg=bg)
-            self._thumb_frame.configure(bg=bg)
-            if self._cmp_frame is not None:
-                self._cmp_frame.configure(bg=bg)
-                self._cmp_title.configure(bg=bg, fg=t.get("fg", "#333333"))
         except Exception:
             pass
         try:
             self._empty_lbl.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
         except Exception:
             pass
-        self._list_grid.apply_theme(t)
-        self._thumb_grid.apply_theme(t)
+        self._grid.apply_theme(t)
         for child in (
             getattr(self, "_stats_bar",  None),
             getattr(self, "_toolbar",    None),
@@ -1392,7 +1062,26 @@ class ResultsPage(tk.Frame):
         total_files = sum(len(g.files) for g in groups)
         dupes       = sum(max(0, len(g.files) - 1) for g in groups)
         recoverable = sum(g.reclaimable for g in groups)
-        self._stats_bar.update(total_files, dupes, recoverable)
+
+        # Phase-6 part-3 metrics, added when Results became the overview-
+        # only page. Computed once per load (scans rarely produce 200K+
+        # groups and the walk is O(rows), so inline is fine).
+        largest_dup = 0
+        biggest_group = 0
+        for g in groups:
+            copies = len(g.files)
+            if copies > biggest_group:
+                biggest_group = copies
+            for f in g.files:
+                size = int(getattr(f, "size", 0) or 0)
+                if size > largest_dup:
+                    largest_dup = size
+
+        self._stats_bar.update(
+            total_files, dupes, recoverable,
+            largest_dup=largest_dup,
+            biggest_group=biggest_group,
+        )
 
     def _refresh_type_counts(self) -> None:
         """Recompute per-bucket file counts and push to the filter bar.
@@ -1450,311 +1139,51 @@ class ResultsPage(tk.Frame):
                     r for r in self._all_rows
                     if (r.get("extension", "") or "").lower() in exts
                 ]
-        # Feed BOTH views from the same filtered-row list so their row
-        # indices stay aligned. Without this, toggling from list to grid
-        # would show stale data (or the grid would render only on first
-        # activation, not when the filter changes while it's hidden).
-        self._list_grid.load(list(rows))
-        self._thumb_grid.load(list(rows))
+        self._grid.load(rows)
 
     # ------------------------------------------------------------------
     # Sorting
 
     def _on_sort(self, col: str) -> None:
-        # Sort BOTH views with the same column and direction. We can't
-        # sort only the list view: the check-set is a set of integer
-        # indices into the loaded row list, and those indices must
-        # point at the same rows across the two widgets, or toggling
-        # views would silently re-target the user's marks.
-        #
-        # We let the list's own toggle logic compute the direction
-        # (it flips when col is unchanged), then mirror the post-sort
-        # row order straight onto the grid's row list and have the
-        # grid just re-render — avoids fighting two independent
-        # toggle state machines.
-        self._list_grid.sort_by(col)
-        self._thumb_grid._rows = list(self._list_grid._rows)  # pylint: disable=protected-access
-        self._thumb_grid._selected_idx = 0 if self._thumb_grid._rows else None  # type: ignore[attr-defined]
-        self._thumb_grid._scroll_y = 0                       # type: ignore[attr-defined]
-        self._thumb_grid._recount_groups()                   # type: ignore[attr-defined]
-        self._thumb_grid._update_total_h()                   # type: ignore[attr-defined]
-        self._thumb_grid._render()                           # type: ignore[attr-defined]
+        self._grid.sort_by(col)
 
     # ------------------------------------------------------------------
     # Selection / check
 
-    def _on_check_changed(self, event=None) -> None:
-        # Mirror the change across both grids so toggling views never
-        # loses marks. The originating widget is ``event.widget`` —
-        # treat it as the source of truth; copy its ``_checked`` onto
-        # the other widget but do NOT fire its render to avoid an
-        # infinite <<CheckChanged>> ping-pong (copying the set doesn't
-        # generate an event anyway, but being explicit here keeps the
-        # invariant obvious).
-        src = event.widget if event is not None else self._grid
-        other = self._thumb_grid if src is self._list_grid else self._list_grid
-        if src is not other:
-            other._checked = set(src._checked)   # pylint: disable=protected-access
-            try:
-                other._render()                  # pylint: disable=protected-access
-            except Exception:                    # pylint: disable=broad-except
-                pass
+    def _on_check_changed(self, _event=None) -> None:
         has = self._grid.get_checked_count() > 0
         self._toolbar.set_has_selection(has)
 
     # ------------------------------------------------------------------
     # Actions
 
-    def _auto_mark(self, rule: str) -> None:
-        """Apply simple auto-mark rules client-side."""
-        if not self._groups:
-            return
-        rows = self._grid._rows
-        group_map: Dict[int, List[int]] = {}
-        for idx, row in enumerate(rows):
-            gid = row["group_id"]
-            group_map.setdefault(gid, []).append(idx)
-
-        new_checked: Set[int] = set()
-        for gid, idxs in group_map.items():
-            if rule in ("select_except_oldest", "select_except_newest"):
-                dated = sorted(idxs, key=lambda i: rows[i].get("date", ""))
-                keep = dated[0] if rule == "select_except_oldest" else dated[-1]
-                new_checked.update(i for i in idxs if i != keep)
-            elif rule == "select_except_first":
-                new_checked.update(idxs[1:])
-            elif rule == "select_except_last":
-                new_checked.update(idxs[:-1])
-            else:
-                new_checked.update(idxs[1:])
-
-        self._grid._checked = new_checked
-        self._grid._render()
-        self._grid._fire_check_change()
-
     def _delete_checked(self) -> None:
         """Run the 4-step delete ceremony on the currently-checked rows.
 
-        Faithful port of the legacy ``MainWindow._on_delete_selected`` flow
-        (introduced in 8496839; docstring there: *"4-step modal confirmation
-        + celebration flow"*):
-
-            Step 1 — `_DeleteDialog`  "Are you sure?"      Cancel / Confirm
-            Step 2 — `_DeleteDialog`  breakdown + Recycle  Cancel / Allow
-            Step 3 — `_DeleteProgressDialog` (non-closeable during worker)
-            Step 4 — `_DeleteSummaryDialog`                Rescan / OK
-            Step 5 — `_DeleteCelebration` 7s overlay → on_navigate_home()
-
-        When 145b855 built the new ResultsPage toolbar and 39a332c retired
-        MainWindow, the ceremony was abandoned — this call used to be a
-        bare threaded loop over ``DeletionEngine.delete_one``. We now reuse
-        the shipped dialog classes via lazy import (startup path still
-        never touches ``main_window``).
+        All the actual flow lives in ``cerebro.v2.ui.delete_flow`` so the
+        Review page's Smart-Select path runs the exact same ceremony.
         """
         checked = self._grid.get_checked_rows()
         if not checked:
             return
-
-        try:
-            from cerebro.v2.ui.main_window import (
-                _DeleteDialog, _DeleteProgressDialog, _DeleteSummaryDialog,
-                _DeleteCelebration, _delete_media_label, _delete_breakdown,
+        from cerebro.v2.ui.delete_flow import run_delete_ceremony, DeleteItem
+        items = [
+            DeleteItem(
+                path_str=str(r.get("path", "")),
+                size=int(r.get("size", 0) or 0),
             )
-            from cerebro.v2.core.deletion_history_db import log_deletion_event
-        except ImportError:
-            _log.exception("Delete ceremony unavailable — legacy dialog import failed")
-            return
-
-        try:
-            from cerebro.utils.formatting import format_bytes
-        except ImportError:
-            format_bytes = None  # type: ignore[assignment]
-
-        count = len(checked)
-        mode  = self._scan_mode
-        noun  = _delete_media_label(mode)
-
-        # -- Step 1 ---------------------------------------------------------
-        d1 = _DeleteDialog(
-            self,
-            title="Confirm Deletion",
-            icon="🗑",
-            headline=f"Delete the selected {noun}?",
-            body=(
-                f"You have marked {count} {noun} for deletion.\n"
-                "They will be moved to the Recycle Bin and can be restored "
-                "if needed."
-            ),
-            btn_cancel="Cancel",
-            btn_confirm="Confirm",
-            confirm_dangerous=True,
-        )
-        if not d1.result:
-            return
-
-        # -- Step 2 ---------------------------------------------------------
-        breakdown   = _delete_breakdown(checked, mode)
-        reclaimable = sum(int(r.get("size", 0)) for r in checked)
-        reclaimable_str = (
-            format_bytes(reclaimable, decimals=1) if format_bytes
-            else _fmt_size(reclaimable)
-        )
-
-        d2 = _DeleteDialog(
-            self,
-            title="Move to Recycle Bin",
-            icon="♻",
-            headline="Moving to Recycle Bin",
-            body=(
-                f"{breakdown} will be moved to the Recycle Bin.\n\n"
-                f"Estimated space freed: {reclaimable_str}"
-            ),
-            btn_cancel="Cancel",
-            btn_confirm="Allow",
-            confirm_dangerous=False,
-        )
-        if not d2.result:
-            return
-
-        # -- Step 3 --- modal progress + background worker -----------------
-        prog = _DeleteProgressDialog(self, total=count)
-        # deleted_row_keys tracks the ORIGINAL row["path"] strings that the
-        # grid and _all_rows use as identity — so _remove_paths() drops the
-        # right rows on Windows where Path.resolve() may change slash style
-        # or letter case.
-        success_count:    List[int]    = [0]
-        deleted_row_keys: List[str]    = []
-        recovered_bytes:  List[int]    = [0]
-        failed_files:     List[tuple]  = []
-
-        def _worker() -> None:
-            try:
-                from cerebro.core.deletion import (
-                    DeletionEngine, DeletionPolicy, DeletionRequest,
-                )
-            except ImportError:
-                DeletionEngine = None  # type: ignore[assignment]
-                DeletionPolicy = None  # type: ignore[assignment]
-                DeletionRequest = None  # type: ignore[assignment]
-
-            engine  = DeletionEngine() if DeletionEngine else None
-            request = (
-                DeletionRequest(
-                    policy=DeletionPolicy.TRASH,
-                    metadata={"source": "results_page", "mode": "trash"},
-                )
-                if (DeletionRequest and DeletionPolicy) else None
-            )
-            try:
-                import send2trash  # fallback path if engine is unavailable
-            except ImportError:
-                send2trash = None  # type: ignore[assignment]
-
-            for i, row in enumerate(checked):
-                row_key = str(row.get("path", ""))
-                size    = int(row.get("size", 0) or 0)
-                try:
-                    fp = Path(row_key).resolve()
-                except (OSError, ValueError):
-                    fp = Path(row_key)
-
-                def _mark_ok() -> None:
-                    success_count[0] += 1
-                    deleted_row_keys.append(row_key)
-                    recovered_bytes[0] += size
-                    try:
-                        log_deletion_event(str(fp), size, mode)
-                    except (OSError, ValueError, RuntimeError):
-                        _log.exception("log_deletion_event failed for %s", fp)
-
-                try:
-                    if engine and request:
-                        res = engine.delete_one(fp, request)
-                        if getattr(res, "success", False):
-                            _mark_ok()
-                        else:
-                            failed_files.append(
-                                (str(fp),
-                                 getattr(res, "error", None) or "Unknown error")
-                            )
-                    elif send2trash is not None:
-                        send2trash.send2trash(str(fp))
-                        _mark_ok()
-                    else:
-                        failed_files.append(
-                            (str(fp), "deletion backend unavailable")
-                        )
-                except (OSError, ValueError, RuntimeError, AttributeError,
-                        TypeError, KeyError, ImportError) as exc:
-                    failed_files.append((str(fp), str(exc)))
-
-                self.after(0, lambda done=i + 1: prog.set_progress(done))
-
-            self.after(0, prog.close)
-
-        threading.Thread(target=_worker, daemon=True, name="delete-ceremony").start()
-        prog.wait()  # nested event loop — exits when worker calls prog.close()
-
-        # -- Apply model changes before summary ----------------------------
+            for r in checked
+        ]
         self._toolbar.set_has_selection(False)
-        if deleted_row_keys:
-            self._remove_paths(set(deleted_row_keys))
-            # Phase 6 piggyback: surface the floating Undo toast that
-            # the legacy MainWindow showed after every successful batch
-            # delete. Lazy-imported from the same module the delete
-            # dialogs came from — no additional startup cost.
-            try:
-                from cerebro.v2.ui.main_window import _UndoToast
-                size_str = (format_bytes(recovered_bytes[0], decimals=1)
-                            if format_bytes else f"{recovered_bytes[0]} bytes")
-                _UndoToast(
-                    self.winfo_toplevel(),
-                    count=len(deleted_row_keys),
-                    size_str=size_str,
-                    deleted_paths=list(deleted_row_keys),
-                )
-            except Exception:   # pylint: disable=broad-except
-                _log.debug("Undo toast unavailable — skipping", exc_info=True)
-
-        # Partial failure — skip summary/celebration, surface errors only.
-        if failed_files:
-            head = "\n".join(
-                f"  • {Path(f).name}: {e}" for f, e in failed_files[:5]
-            )
-            more = (
-                f"\n  … and {len(failed_files) - 5} more"
-                if len(failed_files) > 5 else ""
-            )
-            messagebox.showwarning(
-                "Deletion Partial",
-                f"Deleted {success_count[0]} of {count} {noun}.\n\n"
-                f"Failed:\n{head}{more}",
-                parent=self,
-            )
-            return
-
-        # -- Step 4 --- summary --------------------------------------------
-        d4 = _DeleteSummaryDialog(
-            self, noun=noun, count=success_count[0], recovered=recovered_bytes[0]
+        run_delete_ceremony(
+            parent=self,
+            items=items,
+            scan_mode=self._scan_mode,
+            on_remove_paths=self._remove_paths,
+            on_navigate_home=self._on_navigate_home,
+            on_rescan=self._on_rescan,
+            source_tag="results_page",
         )
-
-        if d4.result == "rescan":
-            if self._on_rescan:
-                try:
-                    self._on_rescan()
-                except Exception:
-                    _log.exception("on_rescan callback failed")
-            return
-
-        # -- Step 5 --- celebration overlay --------------------------------
-        def _done() -> None:
-            if self._on_navigate_home:
-                try:
-                    self._on_navigate_home()
-                except Exception:
-                    _log.exception("on_navigate_home callback failed")
-
-        _DeleteCelebration(self, noun=noun, on_done=_done)
 
     def _remove_paths(self, paths: Set[str]) -> None:
         self._all_rows = [r for r in self._all_rows if r["path"] not in paths]
