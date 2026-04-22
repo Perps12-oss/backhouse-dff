@@ -30,8 +30,6 @@ from typing import Dict, List, Optional, Set, Tuple, Callable, Any, Generator
 from collections import defaultdict
 import sqlite3
 import mmap
-import unicodedata
-
 from cerebro.core.models import FileMetadata
 from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
@@ -39,31 +37,6 @@ from cerebro.core.root_dedup import dedupe_roots
 from cerebro.core.group_invariants import _assert_no_self_duplicates
 
 logger = get_logger(__name__)
-
-
-def _diagnose_pair(path_a: str, path_b: str, size: int) -> None:
-    """Log if two same-size paths resolve to the same canonical file (inode or realpath)."""
-    try:
-        a_real = unicodedata.normalize("NFC", os.path.normcase(os.path.realpath(path_a))).strip()
-        b_real = unicodedata.normalize("NFC", os.path.normcase(os.path.realpath(path_b))).strip()
-        if a_real == b_real:
-            logger.info(
-                "[DIAG:PAIR] canonical-path-collision size=%d path_a=%.80s path_b=%.80s",
-                size, path_a, path_b,
-            )
-            return
-    except (OSError, ValueError):
-        pass
-    try:
-        a_st = os.stat(path_a)
-        b_st = os.stat(path_b)
-        if a_st.st_ino != 0 and a_st.st_ino == b_st.st_ino and a_st.st_dev == b_st.st_dev:
-            logger.info(
-                "[DIAG:PAIR] inode-collision size=%d ino=%d dev=%d path_a=%.80s path_b=%.80s",
-                size, a_st.st_ino, a_st.st_dev, path_a, path_b,
-            )
-    except (OSError, ValueError):
-        pass
 
 
 # ============================================================================
@@ -569,11 +542,6 @@ class TurboScanner:
             len(discovered_files),
             time.time() - start_time,
         )
-        logger.info(
-            "[DIAG:DISCOVERY] roots=%d discovered=%d skip_hidden=%s min_size=%d",
-            len(roots), len(discovered_files), self.config.skip_hidden, self.config.min_size,
-        )
-
         # Phase 2: Group by size (instant duplicate detection)
         _emit("grouping_by_size", len(discovered_files), len(discovered_files))
         size_groups = defaultdict(list)
@@ -584,15 +552,6 @@ class TurboScanner:
         size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
         logger.info("[Turbo] Found %d size groups with potential duplicates", len(size_groups))
         _diag_size_candidates = sum(len(v) for v in size_groups.values())
-        logger.info(
-            "[DIAG:REDUCE] after_size_group size_groups=%d candidates=%d",
-            len(size_groups), _diag_size_candidates,
-        )
-        for _diag_sz, _diag_grp in size_groups.items():
-            _diag_cap = min(len(_diag_grp), 8)
-            for _diag_i in range(_diag_cap):
-                for _diag_j in range(_diag_i + 1, _diag_cap):
-                    _diagnose_pair(str(_diag_grp[_diag_i][0]), str(_diag_grp[_diag_j][0]), _diag_sz)
 
         # Phase 3: Quick hash for size groups (parallel with caching)
         if self.config.use_quick_hash and size_groups:
@@ -604,11 +563,6 @@ class TurboScanner:
                 stage_name="hashing_partial",
             )
             logger.info("[Turbo] Found %d quick-hash groups", len(quick_hash_groups))
-            _diag_qh_candidates = sum(len(v) for v in quick_hash_groups.values())
-            logger.info(
-                "[DIAG:REDUCE] after_quick_hash groups=%d candidates=%d",
-                len(quick_hash_groups), _diag_qh_candidates,
-            )
         else:
             quick_hash_groups = size_groups
         
@@ -622,11 +576,6 @@ class TurboScanner:
                 stage_name="hashing_full",
             )
             logger.info("[Turbo] Found %d duplicate groups", len(final_groups))
-            _diag_fh_candidates = sum(len(v) for v in final_groups.values())
-            logger.info(
-                "[DIAG:REDUCE] after_full_hash groups=%d candidates=%d",
-                len(final_groups), _diag_fh_candidates,
-            )
         else:
             final_groups = quick_hash_groups
         
@@ -654,13 +603,6 @@ class TurboScanner:
         # Phase 5: Yield results
         discovered_count = len(discovered_files)
         candidate_count = sum(len(v) for v in final_groups.values()) if final_groups else 0
-        _all_groups = len(final_groups) if final_groups else 0
-        _dupe_groups = sum(1 for v in final_groups.values() if len(v) >= 2) if final_groups else 0
-        _files_in_dupe_groups = sum(len(v) for v in final_groups.values() if len(v) >= 2) if final_groups else 0
-        logger.info(
-            "[DIAG:EMIT] total_groups=%d dupe_groups=%d singleton_groups=%d files_in_dupe_groups=%d",
-            _all_groups, _dupe_groups, _all_groups - _dupe_groups, _files_in_dupe_groups,
-        )
         emitted_count = 0
         meta_errors = 0
         _guard_regressions = 0
@@ -696,7 +638,7 @@ class TurboScanner:
         self.stats['metadata_errors'] = meta_errors
 
         logger.info("[Turbo] Scan complete")
-        logger.info(
+        logger.debug(
             "[DIAG:GUARD] groups_checked=%d total_files_checked=%d regressions=%d",
             _guard_checked, _guard_files_checked, _guard_regressions,
         )
@@ -712,12 +654,18 @@ class TurboScanner:
             logger.info("Hit rate: %.1f%%", hit_rate)
         _total_cache = self.stats["hash_cache_hits"] + self.stats["hash_cache_misses"]
         _hit_pct = (self.stats["hash_cache_hits"] / _total_cache * 100) if _total_cache else 0.0
+        _final_ngroups = len(final_groups) if final_groups else 0
         logger.info(
-            "[DIAG:SUMMARY] scan=turbo discovered=%d size_candidates=%d final_groups=%d"
-            " emitted=%d elapsed=%.2fs cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
-            discovered_count, _diag_size_candidates, len(final_groups),
-            emitted_count, elapsed,
-            self.stats["hash_cache_hits"], self.stats["hash_cache_misses"], _hit_pct,
+            "[Turbo] summary: discovered=%d candidates_at_size=%d final_groups=%d "
+            "emitted=%d elapsed=%.2fs cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
+            discovered_count,
+            _diag_size_candidates,
+            _final_ngroups,
+            emitted_count,
+            elapsed,
+            self.stats["hash_cache_hits"],
+            self.stats["hash_cache_misses"],
+            _hit_pct,
         )
         _emit("complete", discovered_count, discovered_count)
     def _discover_files_parallel(
