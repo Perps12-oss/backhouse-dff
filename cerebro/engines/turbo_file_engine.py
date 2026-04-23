@@ -205,13 +205,27 @@ class TurboFileEngine(BaseEngine):
                 self._emit_progress()
                 return
 
-        # Convert scanner.last_groups → DuplicateGroup list
-        self._results = self._convert_groups(scanner.last_groups)
+        # Convert scanner.last_groups → DuplicateGroup list.
+        # Drop paths that sit under a protected directory (root filtering above
+        # only skips scan roots that are themselves inside protected paths).
+        protected = self._protected
+        filtered_groups: List[dict] = []
+        for g in scanner.last_groups:
+            safe_paths = [
+                p
+                for p in g.get("paths", [])
+                if not any(Path(p).is_relative_to(pp) for pp in protected)
+            ]
+            if len(safe_paths) >= 2:
+                filtered_groups.append({**g, "paths": safe_paths})
+        self._results = self._convert_groups(filtered_groups)
         self._state = ScanState.COMPLETED
+        stats_scanned = int(scanner.stats.get("files_scanned", 0) or 0)
+        files_done = max(stats_scanned, self._progress.files_scanned)
         self._progress = ScanProgress(
             state=ScanState.COMPLETED,
-            files_scanned=self._progress.files_scanned,
-            files_total=self._progress.files_scanned,
+            files_scanned=files_done,
+            files_total=max(files_done, self._progress.files_total or 0),
             duplicates_found=sum(len(g.files) for g in self._results),
             groups_found=len(self._results),
             bytes_reclaimable=sum(g.reclaimable for g in self._results),
