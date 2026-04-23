@@ -21,7 +21,7 @@ EVIDENCE DATASET: PRE-INSTRUMENTATION LOGS
 Source: Application log file (INFO level).
 Window: ~10:55 (prior day) through 00:20:37 (same night).
 Scans captured: 16 complete scan lifecycles.
-Logging module confirmed active: CEREBRO.cerebro.v2.ui.main_window_controllers
+Logging module confirmed active: CEREBRO.cerebro.v2.ui.scan_controller_helpers (module since removed)
 
 All 16 scans logged the following three lines (per scan, in order):
   1. "Starting scan in [mode] mode"
@@ -29,8 +29,8 @@ All 16 scans logged the following three lines (per scan, in order):
   3. "Found N duplicate groups"
 
 These originate from ScanController.start_search() and ScanController.finish_scan()
-in cerebro/v2/ui/main_window_controllers.py. Their presence confirms:
-  - MainWindow / ScanController is the ACTUAL running UI path (not AppShell)
+in cerebro/v2/ui/app_shell.py / scan_page.py. Their presence confirms:
+  - AppShell / ScanController is the ACTUAL running UI path (not AppShell)
   - Scans complete normally (ScanState.COMPLETED is reached)
   - finish_scan() runs to completion for all 16 scans
 
@@ -74,7 +74,7 @@ CANONICAL CHOKEPOINT
 =============================================================================
 
 The break is in HistoryRecorder.record_completed_scan()
-(cerebro/v2/ui/main_window_controllers.py).
+(cerebro/v2/ui/app_shell.py / scan_page.py).
 
 Most likely cause: An exception from the call chain is swallowed silently.
 The except clause catches only (ImportError, OSError, ValueError). Any
@@ -86,7 +86,7 @@ would propagate uncaught through tkinter's after() scheduler and be lost.
 Alternatively: the import of scan_history_dialog may fail with a different
 exception type not covered by the narrow catch.
 
-Fix target: cerebro/v2/ui/main_window_controllers.py
+Fix target: cerebro/v2/ui/app_shell.py / scan_page.py
   HistoryRecorder.record_completed_scan()
     1. Broaden the exception catch to include (AttributeError, TypeError, Exception)
        or restructure to use a bare except with logging
@@ -101,10 +101,10 @@ INSTRUMENTATION REGRESSION NOTE
 Three diagnostic commits were made attempting to surface PHASE3.0 markers:
   ec57aed  diag(phase3.0): add guard/INSERT order instrumentation
   62065a4  diag(phase3.0): bump instrumentation to INFO level
-  07b4ec1  diag(phase3.0): re-instrument at correct entry points (MainWindow)
+  07b4ec1  diag(phase3.0): re-instrument at correct entry points (AppShell)
 
 Commit 07b4ec1 introduced a regression: after applying it, ALL log output
-from CEREBRO.cerebro.v2.ui.main_window_controllers went silent. Last line
+from CEREBRO.cerebro.v2.ui.scan_controller_helpers went silent. Last line
 from that module before silence: 00:20:37. Post-commit scans show only
 turbo_scanner lines.
 

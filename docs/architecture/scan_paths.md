@@ -12,7 +12,7 @@ Every file scan in the shipped app enters through **one function** and
 lands in **one scan core**:
 
 ```
-UI  (scan_page / main_window_controllers / audit.py)
+UI  (scan_page / app_shell / audit.py)
       │
       ▼
 ScanOrchestrator.start_scan(mode, folders, …)   ← the only entrance

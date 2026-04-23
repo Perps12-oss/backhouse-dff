@@ -29,8 +29,8 @@
 - **File:** `cerebro/engines/orchestrator.py` lines 167–174
 - **Category:** Reliability / Threading
 - **Severity:** Critical
-- **Description:** In `_run_scan()`, when an engine raises an exception the fallback code calls `self._progress_callback(error_progress)` **directly from the scan thread**. `_progress_callback` is `MainWindow._on_scan_progress`, which updates Tkinter widgets. Tkinter is not thread-safe; calling it from a non-main thread causes silent corruption or segfaults depending on platform.
-- **Current behaviour:** Any unhandled exception in an engine during a scan (e.g. `PermissionError` on a locked file) will call the UI callback from the wrong thread. The happy path is safe because engines emit progress through the same callback and `MainWindow._on_scan_progress` wraps them in `self.after(0, ...)`, but the *exception* path bypasses that wrapper.
+- **Description:** In `_run_scan()`, when an engine raises an exception the fallback code calls `self._progress_callback(error_progress)` **directly from the scan thread**. `_progress_callback` is the UI progress handler (typically marshalled on the Tk main thread), which updates Tkinter widgets. Tkinter is not thread-safe; calling it from a non-main thread causes silent corruption or segfaults depending on platform.
+- **Current behaviour:** Any unhandled exception in an engine during a scan (e.g. `PermissionError` on a locked file) will call the UI callback from the wrong thread. The happy path is safe because engines emit progress through the same callback and the happy path wraps updates in `after(0, ...)`, but the *exception* path may bypass that wrapper.
 - **Expected behaviour:** All callbacks to the UI must be dispatched via `root.after(0, ...)`.
 - **Fix:**
   ```python
@@ -104,7 +104,7 @@
 ---
 
 ### 🟠 H-3 — O(n) `get_checked_item_ids()` scan on every row click
-- **File:** `cerebro/v2/ui/main_window.py` lines 1043–1045, 1050–1052
+- **File:** `former monolithic UI module (deleted)` lines 1043–1045, 1050–1052
 - **Category:** Performance
 - **Severity:** High (becomes critical at 200k items)
 - **Description:** `_on_tree_preview_focus()` and `_on_thumbnail_grid_focus()` both call `self._results_panel._get_checked_item_ids()` to update the preview panel. This triggers `self._treeview.get_checked()` which iterates the full `_item_states` dict. At 200k items this runs on **every single row click**, causing noticeable input lag.
@@ -114,7 +114,7 @@
 ---
 
 ### 🟠 H-4 — F5 "Refresh" shortcut is a no-op (advertised in help)
-- **File:** `cerebro/v2/ui/main_window.py` lines 1088–1091
+- **File:** `former monolithic UI module (deleted)` lines 1088–1091
 - **Category:** Reliability / UX
 - **Severity:** High
 - **Description:** `_on_refresh()` logs "Refresh / re-scan requested" and contains only a `# TODO` comment. The shortcut `F5` is listed in the Keyboard Shortcuts help dialog, so users will expect it to re-run the last scan. Pressing F5 silently does nothing.
@@ -126,7 +126,7 @@
 ## Medium Issues
 
 ### 🟡 M-1 — Escape key handler is a no-op outside scanning
-- **File:** `cerebro/v2/ui/main_window.py` lines 1093–1099
+- **File:** `former monolithic UI module (deleted)` lines 1093–1099
 - **Category:** UX / Reliability
 - **Severity:** Medium
 - **Description:** `_on_escape()` stops the scan if running (correct), but the `else` branch is an empty `# TODO`. Per the help dialog, Escape should "close dialogs" — currently pressing Escape while in review mode does nothing.
@@ -187,7 +187,7 @@ Checkpoint/resume for long scans is wired but empty.
 `urllib.request.urlopen` performs standard OS certificate validation but no pinning. Acceptable for a desktop app; worth noting for threat model documentation.
 
 ### 🔵 L-4 — Double-import of `sys` and `subprocess` inside methods
-`results_panel.py` `_open_file` / `_open_folder` and `main_window.py` `_undo` do `import sys, subprocess` inside the method body on every call. These are module-level stdlib imports; move them to the top of the file.
+`results_panel.py` `_open_file` / `_open_folder` and `former monolithic UI module (deleted)` `_undo` do `import sys, subprocess` inside the method body on every call. These are module-level stdlib imports; move them to the top of the file.
 
 ---
 
@@ -247,9 +247,9 @@ if __name__ == "__main__":
 | C-2 | Deadlock: join() inside RLock | Critical | Reliability | orchestrator.py:196 |
 | H-1 | update_checker.py — dead code + RCE vector | High | Security | update_checker.py:21,551 |
 | H-2 | Column corruption after sort (double icon) | High | UI Correctness | check_treeview.py:498 |
-| H-3 | O(n) scan on every row click | High | Performance | main_window.py:1043 |
-| H-4 | F5 refresh is a no-op | High | UX | main_window.py:1091 |
-| M-1 | Escape key no-op outside scan | Medium | UX | main_window.py:1098 |
+| H-3 | O(n) scan on every row click | High | Performance | former monolithic UI module (deleted):1043 |
+| H-4 | F5 refresh is a no-op | High | UX | former monolithic UI module (deleted):1091 |
+| M-1 | Escape key no-op outside scan | Medium | UX | former monolithic UI module (deleted):1098 |
 | M-2 | Pixel-diff button no-op | Medium | UX | preview_panel.py:343 |
 | M-3 | Unused `import pickle` | Medium | Code quality | cache_manager.py:8, turbo_scanner.py:33 |
 | M-4 | Scan cache stub not connected | Medium | Reliability | turbo_scanner.py:610 |
@@ -257,7 +257,7 @@ if __name__ == "__main__":
 | L-1 | Dead `import sys, subprocess` inside methods | Low | Code quality | results_panel.py:979,991 |
 | L-2 | Advanced scanner checkpoint is a stub | Low | Reliability | advanced_scanner.py:1125 |
 | L-3 | HTTP update check, no certificate pinning | Low | Security | update_checker.py |
-| L-4 | Keyboard shortcut help lists unimplemented keys | Low | UX | main_window.py:441 |
+| L-4 | Keyboard shortcut help lists unimplemented keys | Low | UX | former monolithic UI module (deleted):441 |
 
 ---
 

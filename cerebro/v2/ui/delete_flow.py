@@ -22,7 +22,7 @@ Public API:
     ) -> DeleteCeremonyResult
 
 The function blocks on a nested event loop while the progress dialog runs
-(same pattern the legacy MainWindow used). It's safe to call from a Tk
+(same nested event-loop pattern as the original single-window delete flow). It's safe to call from a Tk
 event handler. It must NOT be called from a worker thread.
 
 What this does NOT do:
@@ -33,9 +33,8 @@ What this does NOT do:
     reaching here
 
 See also:
-  - cerebro.v2.ui.main_window._DeleteDialog / _DeleteProgressDialog /
-    _DeleteSummaryDialog / _DeleteCelebration / _UndoToast — the dialog
-    classes this orchestrator reuses via lazy import.
+  - cerebro.v2.ui.delete_ceremony_widgets — modal classes and helpers
+    (lazy-imported when ``run_delete_ceremony`` runs).
 """
 from __future__ import annotations
 
@@ -88,7 +87,7 @@ def run_delete_ceremony(
 ) -> DeleteCeremonyResult:
     """Run the 4-step ceremony and return what happened.
 
-    Flow (unchanged from the legacy MainWindow._on_delete_selected):
+    Flow (unchanged from the original Results-page delete implementation):
         Step 1 — "Are you sure?"                  Cancel / Confirm
         Step 2 — breakdown + Recycle Bin notice   Cancel / Allow
         Step 3 — progress dialog + worker thread  (non-cancellable)
@@ -104,14 +103,14 @@ def run_delete_ceremony(
         return result
 
     try:
-        from cerebro.v2.ui.main_window import (
+        from cerebro.v2.ui.delete_ceremony_widgets import (
             _DeleteDialog, _DeleteProgressDialog, _DeleteSummaryDialog,
             _DeleteCelebration, _UndoToast,
             _delete_media_label, _delete_breakdown,
         )
         from cerebro.v2.core.deletion_history_db import log_deletion_event
     except ImportError:
-        _log.exception("Delete ceremony unavailable — legacy dialog import failed")
+        _log.exception("Delete ceremony unavailable — delete_ceremony_widgets import failed")
         return result
 
     try:

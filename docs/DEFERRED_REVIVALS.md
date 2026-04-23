@@ -1,7 +1,7 @@
 # Deferred Legacy Revivals
 
-Running backlog of features that exist in the legacy `MainWindow`-era code
-but are **not yet** wired into the new `AppShell`. Maintained across phases
+Running backlog of features that exist in older code paths
+but are **not yet** wired into the current `AppShell` tabs. Maintained across phases
 so we don't lose sight of useful work already paid for — or spend time
 rebuilding something the old UI already solved.
 
@@ -17,11 +17,11 @@ Rules:
 ## Revived to date
 | Feature | Source | Phase revived |
 |---|---|---|
-| Delete ceremony (4 dialogs + celebration) | `main_window.py _DeleteDialog/_DeleteProgressDialog/_DeleteSummaryDialog/_DeleteCelebration` | Phase 4.1 (lazy import) — extracted to `cerebro/v2/ui/delete_flow.py` in Phase 6 Part 3 so Results + Review share one code path |
+| Delete ceremony (4 dialogs + celebration) | `cerebro/v2/ui/delete_ceremony_widgets.py` | Phase 4.1 (lazy import) — orchestrated by `cerebro/v2/ui/delete_flow.py` in Phase 6 Part 3 so Results + Review share one code path |
 | Zoom/pan canvas + synced A/B comparison | `widgets/zoom_canvas.py`, `preview_panel.py` | Phase 6 (initially as Results grid takeover; **moved to Review in Part 3**) |
 | MetadataTable inside side preview | `widgets/metadata_table.py` | Phase 6 (via PreviewPanel composition, now on Review) |
-| Undo toast after delete | `main_window.py _UndoToast` | Phase 6 (piggyback lazy import inside `delete_flow`) |
-| Auto-Mark (now "Smart Select") dropdown | `main_window_controllers.py` rule catalog | Phase 6 Part 3 (lives on Review; runs global ceremony) |
+| Undo toast after delete | `delete_ceremony_widgets.UndoToast` | Phase 6 (via `delete_flow`) |
+| Auto-Mark (now "Smart Select") dropdown | `review_page.py` rule catalog | Phase 6 Part 3 (lives on Review; runs global ceremony) |
 | `VirtualThumbGrid` + async thumb decoder | new in Phase 6 — inspired by `widgets/thumbnail_grid.py` | Phase 6 Part 2; repurposed as Review's default view in Part 3 |
 
 ---
@@ -104,10 +104,10 @@ pollution and cross-use of pages"); Part 3 restructured both pages:
 **Suggested phase**: next phase that touches `PreviewPanel`.
 **Acceptance**: `_diff_switch` is packed; toggling it overlays a difference heatmap on side B; zoom sync still works.
 
-### 8. `HistoryRecorder` / `PreviewCoordinator` / `ScanController`
-**Source**: `cerebro/v2/ui/main_window_controllers.py`
-**Cost**: N/A architectural reference only.
-**Status**: **retire when `main_window.py` is finally deleted**. Not reused by AppShell; equivalent logic lives in `app_shell.py` and `scan_page.py` today.
+### 8. `HistoryRecorder` / `PreviewCoordinator` / `ScanController` (removed)
+**Source**: Former helper classes lived beside the old monolithic shell; **deleted** with that shell.
+**Cost**: N/A — historical note only.
+**Status**: **Retired.** Equivalent behavior lives in `app_shell.py` and `scan_page.py` today.
 
 ---
 

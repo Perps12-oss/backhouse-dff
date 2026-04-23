@@ -61,7 +61,7 @@ class ScanInProgressView(CTkFrame):
     """Live scan status view with stat cards, progress bar, and cancel button.
 
     Rendered by:
-    - ResultsPanel.show_scanning_progress() — MainWindow controller path.
+    - ResultsPanel.show_scanning_progress() — Results / grid host path.
     - ScanPage._show_progress()            — in-page Start button path.
 
     Both paths call the same update_progress() / reset() API.

@@ -1,9 +1,11 @@
 # UI Overhaul Audit
 
-## 1. Top-level window class and file
+> **Archival:** Written before the AppShell migration. Section titles below describe the **removed** monolithic host; the live app entry is `main.py` → `cerebro.v2.ui.app_shell.run_app()` → `AppShell` in `app_shell.py`.
 
-**Class:** `MainWindow` in `cerebro/v2/ui/main_window.py` (1,844 lines)  
-Extends `ctk.CTk` (falls back to `tk.Tk`). Entry point: `run_app()` → `MainWindow().run()`.
+## 1. Top-level window class and file (historical)
+
+**Former host:** monolithic single-window class (module deleted).  
+**Today:** `AppShell` in `cerebro/v2/ui/app_shell.py` — `CTk` root, six-tab page stack.
 
 ---
 
@@ -26,7 +28,7 @@ The new design's 6-tab page stack (Welcome | Scan | Results | Review | History |
 
 ## 3. Where scan progress lands on the main thread
 
-`MainWindow._on_scan_progress()` (line 538) is the callback passed to the engine. It does:
+`AppShell._on_scan_progress()` (line 538) is the callback passed to the engine. It does:
 ```python
 self.after(0, lambda p=progress: self._handle_progress_on_main(p))
 ```
@@ -41,7 +43,7 @@ A secondary polling loop (`_start_progress_polling`, line 601) also runs every 2
 
 ## 4. Where scan completion is handled
 
-`MainWindow._on_scan_finished()` (line 641) → `ScanController.finish_scan()` in `main_window_controllers.py` (line 151).
+`AppShell._on_scan_finished()` (line 641) → `ScanController.finish_scan()` in `app_shell.py / scan_page.py` (line 151).
 
 `finish_scan()` does:
 1. Hides scan progress view
@@ -70,7 +72,7 @@ It is instantiated inside `ResultsPanel.__init__` (line 647) and shown/hidden by
 
 ## 6. Does `show_scanning_progress()` get called anywhere?
 
-**YES — it is active and wired.** `ScanController.start_search()` in `main_window_controllers.py` (line 134) calls:
+**YES — it is active and wired.** `ScanController.start_search()` in `app_shell.py / scan_page.py` (line 134) calls:
 ```python
 self._window._results_panel.show_scanning_progress()
 ```
@@ -95,8 +97,8 @@ History data source: `cerebro/v2/core/scan_history_db.py` via `get_scan_history_
 
 | File | Lines | Decision | Reason |
 |------|-------|----------|--------|
-| `main_window.py` | 1,844 | **REPLACE shell** | New 6-tab page-stack topology is fundamentally different; engine wiring (scan callbacks, polling, deletion flow) must be preserved and re-plumbed |
-| `main_window_controllers.py` | 206 | **KEEP AS-IS** | `HistoryRecorder`, `PreviewCoordinator`, `ScanController` are pure logic, no visual output |
+| *(deleted monolithic host)* | — | **DONE** | Replaced by `app_shell.py` + tab pages |
+| *(deleted scan helper trio)* | — | **DONE** | `HistoryRecorder` / `PreviewCoordinator` / `ScanController` removed with old host; logic lives in `app_shell.py` / `scan_page.py` |
 | `mode_tabs.py` | 264 | **RESTYLE IN-PLACE** | Already has 3px bottom underline indicator; just needs color token updates and relocation into Scan page mode bar |
 | `toolbar.py` | 459 | **REPLACE** | New design splits this into TitleBar (32px) + TabBar (36px); topology is completely different |
 | `folder_panel.py` | 623 | **RESTYLE IN-PLACE** | Structure correct; needs color + font updates; becomes left column of Scan page |

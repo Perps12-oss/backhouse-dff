@@ -433,7 +433,7 @@ Before any Phase 3 fix is written:
 
 1. Add temporary DEBUG log at TWO points:
    - Controller-level guard entry
-     (`main_window_controllers.py :: start_scan` or equivalent)
+     (`app_shell.py / scan_page.py :: start_scan` or equivalent)
    - `INSERT INTO scans` call site (wherever scan history
      persistence lives)
 
@@ -830,7 +830,7 @@ AFTER:
 Each comment MUST include: bug SHA(s), test/log line that would
 regress, phase + date context.
 
-- **`main_window_controllers.py`** — Bug X concurrency guard:
+- **`app_shell.py / scan_page.py`** — Bug X concurrency guard:
   > Guard preventing concurrent scan launches (fix: a40055c,
   > 2026-04-15, Phase 1 Bug X investigation).
   > Regression indicator: multiple "Starting scan in files mode"

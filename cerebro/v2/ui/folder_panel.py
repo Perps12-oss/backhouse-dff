@@ -509,7 +509,7 @@ class FolderPanel(CTkFrame):
         self.set_collapsed(not self._collapsed)
 
     def set_collapsed(self, collapsed: bool) -> None:
-        """Collapse or expand the panel. Call from MainWindow after scan."""
+        """Collapse or expand the panel. Call from the scan host after scan."""
         if self._collapsed == collapsed:
             return
         self._collapsed = collapsed
@@ -564,7 +564,7 @@ class FolderPanel(CTkFrame):
         self._switch_tab(self._active_tab)
 
     # ------------------------------------------------------------------
-    # Public API (same as before — MainWindow unchanged)
+    # Public API (unchanged contract for ScanPage / folder host)
     # ------------------------------------------------------------------
 
     def set_scan_mode(self, mode: str) -> None:
@@ -616,7 +616,7 @@ class FolderPanel(CTkFrame):
         self._on_options_changed = cb
 
     def on_collapse_toggled(self, cb: Callable[[bool], None]) -> None:
-        """Notify when user toggles collapse; used by MainWindow to resize paned window."""
+        """Notify when user toggles collapse; used by the scan host to resize the paned window."""
         self._on_collapse_toggled = cb
 
 

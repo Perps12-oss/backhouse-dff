@@ -37,7 +37,7 @@ git push -u origin ui/overhaul-v6
 
 ```
 cerebro/ui/
-  shell/           → MainWindow chrome, topbar/sidebar, routing host
+  shell/           → AppShell chrome, topbar/sidebar, routing host
     nav/
     chrome/
   theme/           → ThemeEngine, tokens, palette, stylesheets
@@ -57,7 +57,7 @@ cerebro/ui/
 
 ### Phase A — New Shell (routing + chrome)
 
-**Deliverables:** MainWindow (or MainWindowV2) with:
+**Deliverables:** AppShell (or AppShellV2) with:
 
 - Sidebar navigation
 - Top toolbar
@@ -103,7 +103,7 @@ Subtle transitions, progress pulse/shimmer, hover glows, loading skeletons.
 ### Before each commit
 
 ```bash
-python -m py_compile cerebro/ui/main_window.py
+python -m py_compile cerebro/ui/former monolithic UI module (deleted)
 python -m py_compile cerebro/ui/pages/scan_page.py
 python -m py_compile cerebro/ui/controllers/live_scan_controller.py
 python main.py
@@ -127,7 +127,7 @@ Constraints:
 
 Tasks:
 1) Create a new UI shell:
-- MainWindow hosts: SidebarNav + TopToolbar + QStackedWidget content + Status/Toast area.
+- AppShell hosts: SidebarNav + TopToolbar + QStackedWidget content + Status/Toast area.
 - Provide navigate_to(station_id) API.
 - Route station ids: mission, scan, review, history, themes, settings.
 
@@ -182,7 +182,7 @@ Preserve **100%** of every feature. Do not remove, simplify, hide, or comment ou
 1. **Reorganize package structure** (before other changes):
    - Ensure: `cerebro/core/`, `cerebro/ui/pages/`, `cerebro/ui/widgets/`, `cerebro/config/`, `cerebro/data/`
    - Add `__init__.py` to every folder
-   - Backend → `cerebro/core/`; UI pages → `cerebro/ui/pages/`; widgets → `cerebro/ui/widgets/`; main_window + theme_engine → `cerebro/ui/`
+   - Backend → `cerebro/core/`; UI pages → `cerebro/ui/pages/`; widgets → `cerebro/ui/widgets/`; app_shell + theme_engine → `cerebro/ui/`
    - Keep `main.py` at root
 
 2. **Replace main.py** with Windows-only entry point (platform guard).

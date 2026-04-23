@@ -33,7 +33,8 @@ jobs:
             cerebro/core/preview.py \
             cerebro/engines/orchestrator.py \
             cerebro/engines/turbo_file_engine.py \
-            cerebro/v2/ui/main_window.py \
+            cerebro/v2/ui/delete_ceremony_widgets.py \
+            cerebro/v2/ui/delete_flow.py \
             tests/test_deletion_gate.py \
             tests/test_session_tokens.py \
             tests/test_deletion_engine.py \

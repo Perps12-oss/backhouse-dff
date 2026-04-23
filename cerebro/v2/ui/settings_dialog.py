@@ -462,7 +462,7 @@ class SettingsDialog(CTkToplevel):
         """Apply theme immediately when selected from the dropdown.
 
         Routes through :class:`ThemeApplicator` so the change propagates to
-        **both** engine subscribers (legacy MainWindow/CTk widgets) **and**
+        **both** engine subscribers (standalone CTk widgets) **and**
         AppShell page hooks (title bar, tabs, backgrounds, Welcome/Scan/
         Results/Review/History/Diagnostics) in a single pass.
         """

@@ -50,10 +50,11 @@ The **Cerebro Navy** palette (`cerebro_navy.json`) is the Phase 6/7 overhaul pal
 opened from the Settings link in the title bar. Settings are persisted to
 `~/.cerebro/settings.json`.
 
-## Legacy path
+## Delete ceremony widgets
 
-`cerebro/v2/ui/main_window.py` — retained as reference, not imported.
-See its docstring for engine wiring patterns and thread marshal examples.
+`cerebro/v2/ui/delete_ceremony_widgets.py` — modals and undo toast used by
+`delete_flow.py` (Results / Review delete path). Not the app root; see
+`app_shell.py` for the live window.
 
 ## Key components
 

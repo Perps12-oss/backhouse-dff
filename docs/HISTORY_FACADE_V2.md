@@ -26,7 +26,7 @@ CustomTkinter-only runtime.
 
 ## UI integration
 
-- `MainWindow` loads and applies settings on startup.
+- `AppShell` loads and applies settings on startup.
 - `SettingsDialog` edits and persists config.
 - Help menu exposes:
   - Keyboard Shortcuts

@@ -1181,7 +1181,7 @@ class ScanPage(tk.Frame):
             # Bug: scan counter stuck at 49. Investigation
             # (docs/bug-investigations/phase3_guard_order.log) correctly
             # diagnosed the INSERT never firing; the log's canonical-chokepoint
-            # line was MainWindow/HistoryRecorder, but MainWindow was retired
+            # line was HistoryRecorder on the old single-window host; AppShell uses scan_page hooks
             # in 39a332c and the AppShell/ScanPage path was left with no
             # history recording at all. Broad catch + logger.exception so any
             # future failure surfaces once instead of being swallowed.

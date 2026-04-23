@@ -5,7 +5,7 @@ Every page registers its themed widgets here. When the theme changes,
 ThemeApplicator.apply(theme_name) drives:
 
   1. ThemeEngineV3.set_theme(name)   — updates all engine subscribers
-                                       (legacy MainWindow/CTk widgets).
+                                       (CTk widgets outside AppShell pages).
   2. set_ctk_appearance_mode()       — syncs CTk dark/light mode.
   3. _dispatch(tokens)               — fires shell page hooks (new AppShell).
 

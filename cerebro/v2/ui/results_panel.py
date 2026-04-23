@@ -463,7 +463,7 @@ class ResultsPanel(CTkFrame):
         )
         self._scan_view = _ScanInProgressView(self, on_cancel=self._on_scan_cancel_request)
 
-        # Callbacks that MainWindow wires up for getting-started actions
+        # Callbacks the host (e.g. ScanPage) wires for getting-started actions
         self._on_request_add_folder: Optional[Callable[[], None]] = None
         self._on_request_start_search: Optional[Callable[[], None]] = None
 
@@ -1575,11 +1575,11 @@ class ResultsPanel(CTkFrame):
                 self._ffmpeg_banner.pack_forget()
 
     def on_request_add_folder(self, cb: Callable[[], None]) -> None:
-        """Wire getting-started 'Add Folder' button to MainWindow."""
+        """Wire getting-started 'Add Folder' button to the scan host."""
         self._on_request_add_folder = cb
 
     def on_request_start_search(self, cb: Callable[[], None]) -> None:
-        """Wire getting-started 'Search Now' button to MainWindow."""
+        """Wire getting-started 'Search Now' button to the scan host."""
         self._on_request_start_search = cb
 
 

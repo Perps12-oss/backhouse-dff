@@ -2,7 +2,7 @@
 CEREBRO Pipeline - Target Architecture (Authoritative)
 
 ReviewPage (UI) produces DeletionPlan (intent only)
-MainWindow passes DeletionPlan to Pipeline
+The live deletion path passes DeletionPlan to Pipeline
 Pipeline:
   - validates invariants
   - expands + enriches metadata -> ExecutableDeletePlan

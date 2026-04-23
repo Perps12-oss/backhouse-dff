@@ -85,7 +85,7 @@ def record_scan(
 ) -> None:
     """
     Append a completed scan record to the history file.
-    Call this from MainWindow after every successful scan.
+    Call this from the scan completion path (e.g. AppShell / ScanPage) after every successful scan.
     """
     get_scan_history_db().record_scan(
         mode=mode,
@@ -107,7 +107,7 @@ class ScanHistoryDialog:
 
     Usage::
 
-        ScanHistoryDialog.show(parent=main_window)
+        ScanHistoryDialog.show(parent=app_root)  # any CTk / Tk toplevel (e.g. AppShell)
     """
 
     @classmethod
