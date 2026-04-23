@@ -129,6 +129,9 @@ class _Tab(tk.Frame):
         if not self._active:
             self._lbl.configure(fg=_DISABLED_FG if disabled else _INACTIVE_FG)
 
+    def is_disabled(self) -> bool:
+        return self._disabled
+
     def set_badge(self, count: int) -> None:
         if count > 0:
             self._badge_text.set(f" {count} ")
@@ -186,17 +189,27 @@ class TabBar(tk.Frame):
     def _tab_clicked(self, key: str) -> None:
         if key == self._active_key:
             return
-        self._tabs[self._active_key].set_active(False)
-        self._active_key = key
-        self._tabs[key].set_active(True)
         if self._on_tab_changed:
             self._on_tab_changed(key)
 
     # ------------------------------------------------------------------
     # Public API
 
+    def set_active_key(self, key: str) -> None:
+        """Paint the strip for ``key`` only — used after store state updates (no callback)."""
+        if key not in self._tabs:
+            return
+        if key == self._active_key:
+            return
+        if self._tabs[key].is_disabled():
+            return
+        self._tabs[self._active_key].set_active(False)
+        self._active_key = key
+        self._tabs[key].set_active(True)
+
     def switch_to(self, key: str) -> None:
-        self._tab_clicked(key)
+        """Legacy alias: prefer :meth:`set_active_key` for store-driven UIs."""
+        self.set_active_key(key)
 
     def get_active(self) -> str:
         return self._active_key

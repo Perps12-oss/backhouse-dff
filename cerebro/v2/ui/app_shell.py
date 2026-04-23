@@ -37,6 +37,15 @@ from cerebro.v2.ui.history_page     import HistoryPage
 from cerebro.v2.ui.diagnostics_page import DiagnosticsPage
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.engines.orchestrator   import ScanOrchestrator
+from cerebro.v2.coordinator         import CerebroCoordinator
+from cerebro.v2.state import (
+    Action,
+    AppState,
+    ReviewNavigate,
+    ScanCompleted,
+    StateStore,
+    create_initial_state,
+)
 
 _PAGE_BG_FALLBACK = "#F0F0F0"
 
@@ -52,6 +61,8 @@ class AppShell(CTk):
         super().__init__()
         self._bootstrap_tkdnd()
         self._orchestrator = ScanOrchestrator()
+        self._store = StateStore(create_initial_state())
+        self._coordinator = CerebroCoordinator(self._store)
         self._setup_window()
         self._build_ui()
 
@@ -106,7 +117,10 @@ class AppShell(CTk):
         )
         self._title_bar.pack(fill="x")
 
-        self._tab_bar = TabBar(self, on_tab_changed=self._on_tab_changed)
+        self._tab_bar = TabBar(
+            self,
+            on_tab_changed=self._on_main_bar_tab_request,
+        )
         self._tab_bar.pack(fill="x")
 
         self._page_container = CTkFrame(self, fg_color=_PAGE_BG_FALLBACK)
@@ -161,11 +175,14 @@ class AppShell(CTk):
         self._pages["scan"] = ScanPage(
             self._page_container,
             orchestrator=self._orchestrator,
-            on_scan_complete=self._on_scan_complete,
+            on_scan_complete=self._coordinator.scan_completed,
         )
 
         self._current_page: str = "welcome"
         self._pages["welcome"].place(relwidth=1, relheight=1)
+        # Single render path: scan + review navigation flow through the store
+        # (Cerebro_Blueprint_v2.0 §0.1, CEREBRO Implementation Rules §2).
+        self._store.subscribe(self._on_app_state_changed)
 
         # Apply the initial theme globally. This also fires engine listeners,
         # syncs CTk appearance mode, and dispatches tokens to every shell hook.
@@ -212,23 +229,30 @@ class AppShell(CTk):
                 pass
 
     # ------------------------------------------------------------------
-    # Tab switching
+    # Tab switching (store is the only navigation source; Blueprint §0.1)
     # ------------------------------------------------------------------
 
-    def _on_tab_changed(self, key: str) -> None:
+    def _on_main_bar_tab_request(self, key: str) -> None:
+        self._coordinator.set_active_tab(key)
+
+    def _apply_visible_page(self, key: str) -> None:
         if key == self._current_page:
             return
         self._pages[self._current_page].place_forget()
         self._current_page = key
         self._pages[key].place(relwidth=1, relheight=1)
-        # Notify pages that support lazy loading
         page = self._pages[key]
         if hasattr(page, "on_show"):
             page.on_show()
 
+    def _sync_chrome_to_state(self, s: AppState) -> None:
+        """One subscriber step: tab strip + page stack follow ``s.active_tab``."""
+        self._tab_bar.set_active_key(s.active_tab)
+        self._apply_visible_page(s.active_tab)
+
     def switch_tab(self, key: str) -> None:
-        """Programmatically navigate to a tab (called by page widgets)."""
-        self._tab_bar.switch_to(key)
+        """Programmatically navigate to a main tab (dispatches, then subscriber paints)."""
+        self._coordinator.set_active_tab(key)
 
     # ------------------------------------------------------------------
     # Title bar actions
@@ -277,36 +301,35 @@ class AppShell(CTk):
         """Load a past session into the Results page and switch to it (Phase 4+)."""
         self.switch_tab("results")
 
-    def _on_scan_complete(self, results: list, mode: str = "files") -> None:
-        """Called by ScanPage when a scan finishes."""
-        self._scan_results = results
-        self._scan_mode    = mode or "files"
-        self._results_page.load_results(results, mode=mode)
-        # Seed Review with the same data in grid-mode so Smart Select
-        # already has the full group set loaded if the user tabs over
-        # directly. The compare mode only ever activates when the user
-        # explicitly clicks a tile (or arrives via Results double-click).
-        try:
-            self._review_page.load_results(results, mode=mode)
-        except Exception:   # pylint: disable=broad-except
-            _log.exception("ReviewPage.load_results failed")
-        dup_count = sum(max(0, len(g.files) - 1) for g in results)
-        self.set_results_badge(dup_count)
-        self.enable_review_tab()
-        try:
-            self._pages["welcome"].refresh()
-        except (AttributeError, tk.TclError):
-            pass
-        self.switch_tab("results")
+    def _on_app_state_changed(self, s: AppState, _old: AppState, action: Action) -> None:
+        """Apply store transitions: data side effects, then one chrome sync to ``s``."""
+        if isinstance(action, ScanCompleted):
+            results = s.groups
+            mode = s.scan_mode
+            self._results_page.load_results(results, mode=mode)
+            try:
+                self._review_page.load_results(results, mode=mode)
+            except Exception:  # pylint: disable=broad-except
+                _log.exception("ReviewPage.load_results failed")
+            dup_count = sum(max(0, len(g.files) - 1) for g in results)
+            self.set_results_badge(dup_count)
+            self.enable_review_tab()
+            try:
+                self._pages["welcome"].refresh()
+            except (AttributeError, tk.TclError):
+                pass
+        elif isinstance(action, ReviewNavigate):
+            glist = list(action.groups) if action.groups is not None else s.groups
+            gid = s.selected_group_id
+            if gid is not None:
+                self._review_page.load_group(glist, gid, mode=s.scan_mode)
+
+        # Idempotent: ``set_active_key`` / ``_apply_visible_page`` no-op if already in sync
+        self._sync_chrome_to_state(s)
 
     def _on_open_group(self, group_id: int, groups: list) -> None:
-        """Called when user double-clicks a group in Results — opens Review tab
-        in compare mode pre-focused on that group. ``scan_mode`` is
-        threaded through so Smart Select's delete ceremony dialogs use
-        the right media noun."""
-        mode = getattr(self, "_scan_mode", "files")
-        self._review_page.load_group(groups, group_id, mode=mode)
-        self.switch_tab("review")
+        """Double-click in Results: navigate via coordinator + store."""
+        self._coordinator.review_open_group(group_id, groups)
 
     def _on_scan_history_cleared(self) -> None:
         """Scan history DB was cleared from Diagnostics — refresh in-memory UIs."""
