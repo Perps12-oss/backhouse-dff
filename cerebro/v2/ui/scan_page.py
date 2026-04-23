@@ -924,6 +924,7 @@ class ScanPage(tk.Frame):
         master,
         orchestrator: Any,
         on_scan_complete: Optional[Callable[[list, str], None]] = None,
+        coordinator: Any = None,
         **kwargs,
     ) -> None:
         initial = ThemeApplicator.get().build_tokens()
@@ -931,6 +932,7 @@ class ScanPage(tk.Frame):
         super().__init__(master, **kwargs)
         self._orchestrator     = orchestrator
         self._on_scan_complete = on_scan_complete
+        self._coordinator      = coordinator
         self._scanning         = False
         self._scan_start_time  = 0.0
         self._current_mode     = "files"
@@ -1117,9 +1119,11 @@ class ScanPage(tk.Frame):
             self._orchestrator.start_scan(
                 folders=folders,
                 protected=[],
-                options={},
+                options=self._scan_options(),
                 progress_callback=self._on_progress,
             )
+            if self._coordinator is not None:
+                self._coordinator.scan_started(self._current_mode)
         except Exception:
             self._finish_scan(ScanState.ERROR)
 
@@ -1128,6 +1132,24 @@ class ScanPage(tk.Frame):
             self._orchestrator.cancel()
         except Exception:
             pass
+
+    def _scan_options(self) -> Dict[str, Any]:
+        o: Dict[str, Any] = {
+            "include_hidden": False,
+            "min_size_bytes": 0,
+            "max_size_bytes": 0,
+        }
+        try:
+            from cerebro.services.config import load_config
+
+            cfg = load_config()
+            o["min_size_bytes"] = max(0, int(cfg.scan.min_file_size_kb) * 1024)
+            mx = int(getattr(cfg.scan, "max_file_size_mb", 0) or 0)
+            o["max_size_bytes"] = mx * 1024 * 1024 if mx > 0 else 0
+            o["include_hidden"] = bool(getattr(cfg.scan, "include_hidden", False))
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, ImportError):
+            pass
+        return o
 
     def _confirm_non_available_engine(self) -> bool:
         """Return True if the user wants to proceed despite a
@@ -1160,6 +1182,8 @@ class ScanPage(tk.Frame):
         self.after(0, lambda p=progress: self._handle_progress(p))
 
     def _handle_progress(self, progress: ScanProgress) -> None:
+        if self._coordinator is not None:
+            self._coordinator.report_scan_progress(progress)
         elapsed = time.time() - self._scan_start_time
         self._progress_view.update_progress(
             stage=progress.stage or "",
@@ -1174,6 +1198,11 @@ class ScanPage(tk.Frame):
     def _finish_scan(self, state: ScanState) -> None:
         self._scanning = False
         self._mode_bar.set_scanning(False)
+        if self._coordinator is not None:
+            if state is ScanState.CANCELLED:
+                self._coordinator.scan_ended("cancelled")
+            elif state is ScanState.ERROR:
+                self._coordinator.scan_ended("error")
         self._hide_progress()
 
         if state == ScanState.COMPLETED:

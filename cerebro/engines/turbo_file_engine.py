@@ -24,6 +24,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from cerebro.core.paths import default_cerebro_cache_dir
 from cerebro.core.scanners.turbo_scanner import TurboScanConfig, TurboScanner
 from cerebro.engines.base_engine import (
     BaseEngine,
@@ -180,6 +181,7 @@ class TurboFileEngine(BaseEngine):
             use_full_hash=True,
             hash_algorithm=hash_algo,
             progress_callback=self._on_turbo_progress,
+            cache_dir=default_cerebro_cache_dir(),
         )
 
         # Filter protected folders out of roots

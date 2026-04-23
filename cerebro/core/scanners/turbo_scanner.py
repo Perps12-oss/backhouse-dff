@@ -36,6 +36,7 @@ from collections import defaultdict
 import sqlite3
 import mmap
 from cerebro.core.models import FileMetadata
+from cerebro.core.paths import default_cerebro_cache_dir
 from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
 from cerebro.core.root_dedup import dedupe_roots
@@ -481,7 +482,7 @@ class TurboScanner:
         self.config = config or TurboScanConfig()
         
         # Initialize caches
-        cache_dir = self.config.cache_dir or (Path.home() / ".cerebro" / "cache")
+        cache_dir = self.config.cache_dir or default_cerebro_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
         
         self.hash_cache = None
@@ -659,7 +660,10 @@ class TurboScanner:
         if meta_errors:
             logger.warning("File metadata failures while emitting: %d", meta_errors)
         logger.info("Time: %.2fs", elapsed)
-        logger.info("Speed: %.0f files/sec", discovered_count / elapsed)
+        if elapsed > 0:
+            logger.info("Speed: %.0f files/sec", discovered_count / elapsed)
+        else:
+            logger.info("Speed: n/a (instant phase)")
         logger.info("Cache hits: %d", self.stats["hash_cache_hits"])
         logger.info("Cache misses: %d", self.stats["hash_cache_misses"])
         if self.stats['hash_cache_hits'] + self.stats['hash_cache_misses'] > 0:

@@ -9,10 +9,20 @@ without adding UI imports under ``cerebro.engines`` — see Blueprint §0.3 / §
 
 from __future__ import annotations
 
+import time
 from typing import Iterable, Optional, Sequence, Tuple
 
-from cerebro.engines.base_engine import DuplicateGroup
-from cerebro.v2.state import ReviewNavigate, ScanCompleted, SetActiveTab, StateStore
+from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
+from cerebro.v2.state import (
+    ReviewNavigate,
+    ScanCompleted,
+    ScanEnded,
+    ScanProgressSnapshot,
+    ScanStarted,
+    SetActiveTab,
+    StateStore,
+)
+from cerebro.v2.state.scan_progress import scan_progress_to_dict
 
 
 class CerebroCoordinator:
@@ -20,6 +30,7 @@ class CerebroCoordinator:
 
     def __init__(self, store: StateStore) -> None:
         self._store = store
+        self._last_progress_mon: float = 0.0
 
     @property
     def store(self) -> StateStore:
@@ -28,6 +39,31 @@ class CerebroCoordinator:
     def set_active_tab(self, key: str) -> None:
         """Top-level main tab: single entry for shell + TabBar (Blueprint §0.1)."""
         self._store.dispatch(SetActiveTab(key))
+
+    def scan_started(self, scan_mode: str = "files") -> None:
+        """Call from the main thread when ``orchestrator.start_scan`` has been scheduled."""
+        self._store.dispatch(ScanStarted(scan_mode or "files"))
+
+    def report_scan_progress(self, p: ScanProgress) -> None:
+        """Mirror engine progress into the store (throttled to ~10 Hz, Blueprint §5)."""
+        st = p.state
+        is_terminal = st in (
+            ScanState.COMPLETED,
+            ScanState.CANCELLED,
+            ScanState.ERROR,
+        )
+        if not is_terminal:
+            t = time.monotonic()
+            if t - self._last_progress_mon < 0.1:
+                return
+            self._last_progress_mon = t
+        self._store.dispatch(ScanProgressSnapshot(scan_progress_to_dict(p)))
+
+    def scan_ended(self, reason: str) -> None:
+        """Cancel or error: clears scanning phase in state (not used for success)."""
+        r = (reason or "").lower()
+        if r in ("cancelled", "error"):
+            self._store.dispatch(ScanEnded(r))
 
     def scan_completed(
         self,

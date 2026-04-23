@@ -9,6 +9,9 @@ from cerebro.v2.state import (
     AppMode,
     ReviewNavigate,
     ScanCompleted,
+    ScanEnded,
+    ScanProgressSnapshot,
+    ScanStarted,
     SetActiveTab,
     StateStore,
     create_initial_state,
@@ -42,6 +45,32 @@ def test_set_active_tab() -> None:
     s2 = reduce(s1, SetActiveTab("results"))
     assert s2.active_tab == "results"
     assert s2.mode is AppMode.RESULTS
+
+
+def test_set_active_tab_while_scanning_preserves_mode() -> None:
+    s0 = create_initial_state()
+    s1 = reduce(s0, ScanStarted("files"))
+    assert s1.mode is AppMode.SCANNING
+    s2 = reduce(s1, SetActiveTab("welcome"))
+    assert s2.active_tab == "welcome"
+    assert s2.mode is AppMode.SCANNING
+
+
+def test_scan_lifecycle() -> None:
+    s0 = create_initial_state()
+    s1 = reduce(s0, ScanStarted("photos"))
+    assert s1.scan_mode == "photos"
+    s2 = reduce(s1, ScanProgressSnapshot({"state": "scanning", "files_scanned": 2}))
+    assert s2.scan_progress.get("files_scanned") == 2
+    s3 = reduce(s2, ScanEnded("cancelled"))
+    assert s3.mode is AppMode.IDLE
+    assert s3.scan_progress == {}
+    s4 = reduce(
+        s3,
+        ScanCompleted([_one_file_group()], "files"),
+    )
+    assert s4.mode is AppMode.RESULTS
+    assert s4.scan_progress == {}
 
 
 def test_set_active_tab_review_blocked_until_unlocked() -> None:

@@ -176,6 +176,7 @@ class AppShell(CTk):
             self._page_container,
             orchestrator=self._orchestrator,
             on_scan_complete=self._coordinator.scan_completed,
+            coordinator=self._coordinator,
         )
 
         self._current_page: str = "welcome"

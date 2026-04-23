@@ -5,9 +5,30 @@ Declarative state transitions. UI and coordinator dispatch; reducer applies.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from cerebro.engines.base_engine import DuplicateGroup
+
+
+@dataclass(frozen=True)
+class ScanStarted:
+    """Background scan is running; UI mode becomes ``scanning``."""
+
+    scan_mode: str = "files"
+
+
+@dataclass(frozen=True)
+class ScanProgressSnapshot:
+    """Latest engine progress; merged into ``AppState.scan_progress``."""
+
+    data: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ScanEnded:
+    """Scan finished without a successful result payload (cancelled or error)."""
+
+    reason: str  # "cancelled" | "error"
 
 
 @dataclass(frozen=True)
@@ -33,4 +54,11 @@ class ReviewNavigate:
     groups: Optional[Tuple[DuplicateGroup, ...]] = None
 
 
-Action = Union[SetActiveTab, ScanCompleted, ReviewNavigate]
+Action = Union[
+    SetActiveTab,
+    ScanStarted,
+    ScanProgressSnapshot,
+    ScanEnded,
+    ScanCompleted,
+    ReviewNavigate,
+]

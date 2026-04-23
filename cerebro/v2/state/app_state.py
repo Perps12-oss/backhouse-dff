@@ -32,14 +32,14 @@ class AppMode(str, Enum):
 @dataclass
 class AppState:
     mode: AppMode
-    """Idle / results / review; scanning is tracked for future coordinator wiring."""
+    """App phase: includes ``AppMode.SCANNING`` while a job is in flight."""
     groups: List[DuplicateGroup] = field(default_factory=list)
     """Latest duplicate groups from the last successful scan (canonical list)."""
     selected_group_id: Optional[int] = None
     """When in Review, which group is focused; ``None`` when not in compare flow."""
     filters: Dict[str, Any] = field(default_factory=dict)
     scan_progress: Dict[str, Any] = field(default_factory=dict)
-    """Sprint 1: placeholder; engine progress will merge here (§5)."""
+    """Last engine snapshot from :class:`cerebro.engines.base_engine.ScanProgress`; cleared when idle or on results."""
     ui: Dict[str, Any] = field(default_factory=dict)
     """View chrome: expanded keys, preview toggles, etc. (Sprint 2+)."""
     scan_mode: str = "files"
