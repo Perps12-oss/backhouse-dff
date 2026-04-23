@@ -48,6 +48,13 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from cerebro.v2.ui.results_page import (
+    _EXT_ALL_KNOWN,
+    _FILTER_EXTS,
+    _FilterListBar,
+    classify_file,
+)
+
 _log = logging.getLogger(__name__)
 
 try:
@@ -151,7 +158,9 @@ class ReviewPage(tk.Frame):
         self._on_rescan           = on_rescan
 
         self._groups:   List[DuplicateGroup] = []
-        self._rows:     List[Dict]           = []       # flat, all groups
+        self._rows:     List[Dict]           = []       # flat rows shown in grid (filtered)
+        self._all_rows: List[Dict]           = []       # full flatten before type filter
+        self._filter:   str                  = "all"
         self._scan_mode: str                 = "files"
         self._group_files: Dict[int, List[DuplicateFile]] = {}
 
@@ -219,6 +228,14 @@ class ReviewPage(tk.Frame):
             borderwidth=0, highlightthickness=0,
         )
         self._smart_btn.pack(side="right", padx=10, pady=8)
+
+        # File-type filter (same buckets as Results) — packed only when a scan
+        # is loaded; hidden in empty/compare so chrome stays minimal.
+        self._filter_wrap = tk.Frame(self, bg=bg)
+        self._filter_bar = _FilterListBar(
+            self._filter_wrap, on_filter=self._apply_type_filter,
+        )
+        self._filter_bar.pack(fill="x")
 
         # Compare-mode chrome row: only visible in "compare". Holds
         # ← Grid / breadcrumb / ← Prev / Next → / Open A / Open B.
@@ -393,6 +410,12 @@ class ReviewPage(tk.Frame):
         except Exception:   # pylint: disable=broad-except
             pass
 
+        try:
+            self._filter_wrap.configure(bg=bg)
+            self._filter_bar.apply_theme(t)
+        except tk.TclError:
+            pass
+
         # Empty state bg follows theme; the distinct CTA colour is kept.
         try:
             self._empty_state.configure(bg=bg)
@@ -432,13 +455,16 @@ class ReviewPage(tk.Frame):
         if mode:
             self._scan_mode = mode
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._rows = self._flatten_rows(self._groups)
+        self._all_rows = self._flatten_rows(self._groups)
 
         if not self._groups:
+            self._hide_filter_wrap()
             self._enter_mode("empty")
             return
 
-        self._thumb_grid.load(self._rows)
+        self._ensure_filter_wrap()
+        self._refresh_type_counts()
+        self._apply_type_filter(self._filter)
         self._update_summary()
         # Compare mode for the picked group — pick A = first file, B = second.
         gid = group_id if any(g.group_id == group_id for g in self._groups) \
@@ -452,18 +478,83 @@ class ReviewPage(tk.Frame):
         self._groups = list(groups)
         self._scan_mode = mode or "files"
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._rows = self._flatten_rows(self._groups)
+        self._all_rows = self._flatten_rows(self._groups)
         if not self._groups:
+            self._hide_filter_wrap()
             self._enter_mode("empty")
             return
-        self._thumb_grid.load(self._rows)
+        self._ensure_filter_wrap()
+        self._refresh_type_counts()
+        self._apply_type_filter(self._filter)
         self._update_summary()
         self._enter_mode("grid")
 
     def on_show(self) -> None:
         """AppShell hook when this tab becomes active."""
         if not self._groups:
+            self._hide_filter_wrap()
             self._enter_mode("empty")
+
+    # ------------------------------------------------------------------
+    # File-type filter (same buckets / extensions as Results page)
+    # ------------------------------------------------------------------
+
+    def _ensure_filter_wrap(self) -> None:
+        if not self._groups:
+            return
+        try:
+            if not self._filter_wrap.winfo_ismapped():
+                self._filter_wrap.pack(fill="x", side="top", after=self._top_border)
+        except tk.TclError:
+            pass
+
+    def _hide_filter_wrap(self) -> None:
+        try:
+            self._filter_wrap.pack_forget()
+        except tk.TclError:
+            pass
+
+    def _refresh_type_counts(self) -> None:
+        counts: Dict[str, int] = {
+            "all": len(self._all_rows),
+            "pictures": 0,
+            "music": 0,
+            "videos": 0,
+            "documents": 0,
+            "archives": 0,
+            "other": 0,
+        }
+        for r in self._all_rows:
+            counts[classify_file(r.get("extension", ""))] += 1
+        self._filter_bar.set_counts(counts)
+        if self._filter != "all" and counts.get(self._filter, 0) == 0:
+            self._filter = "all"
+            self._filter_bar._set_active("all")
+
+    def _apply_type_filter(self, key: str) -> None:
+        self._filter = key
+        if key == "other":
+            rows = [
+                r
+                for r in self._all_rows
+                if (r.get("extension", "") or "").lower() not in _EXT_ALL_KNOWN
+            ]
+        else:
+            exts = _FILTER_EXTS.get(key)
+            if exts is None:
+                rows = list(self._all_rows)
+            else:
+                rows = [
+                    r
+                    for r in self._all_rows
+                    if (r.get("extension", "") or "").lower() in exts
+                ]
+        self._rows = rows
+        # Always refresh the virtual grid backing store when groups exist so
+        # ``load_group`` → compare still leaves a correct grid when the user
+        # returns to grid mode (``_mode`` may still be ``compare`` here).
+        if self._groups:
+            self._thumb_grid.load(self._rows)
 
     # ------------------------------------------------------------------
     def _flatten_rows(self, groups: List[DuplicateGroup]) -> List[Dict]:
@@ -505,17 +596,20 @@ class ReviewPage(tk.Frame):
             pass
 
         if mode == "empty":
+            self._hide_filter_wrap()
             self._empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
             self._empty_state.lift()
             self._summary_lbl.configure(text="")
             return
 
         if mode == "grid":
+            self._ensure_filter_wrap()
             self._grid_frame.pack(in_=self._body, fill="both", expand=True)
             self.focus_set()
             return
 
-        # compare
+        # compare — hide type filter; compare walks full groups, not the grid slice.
+        self._hide_filter_wrap()
         self._cmp_bar.pack(fill="x",
                            before=self._body if self._body.winfo_ismapped()
                            else None)
@@ -526,6 +620,9 @@ class ReviewPage(tk.Frame):
         self.focus_set()
 
     def _to_grid_mode(self) -> None:
+        self._ensure_filter_wrap()
+        self._apply_type_filter(self._filter)
+        self._update_summary()
         self._enter_mode("grid")
 
     # ------------------------------------------------------------------
@@ -673,11 +770,25 @@ class ReviewPage(tk.Frame):
         total_files = sum(len(g.files) for g in self._groups)
         recoverable = sum(int(getattr(g, "reclaimable", 0) or 0)
                           for g in self._groups)
-        self._summary_lbl.configure(
-            text=f"{len(self._groups):,} groups  ·  "
-                 f"{total_files:,} files  ·  "
-                 f"{_fmt_size(recoverable)} recoverable"
+        base = (
+            f"{len(self._groups):,} groups  ·  "
+            f"{total_files:,} files  ·  "
+            f"{_fmt_size(recoverable)} recoverable"
         )
+        if (
+            self._filter != "all"
+            and self._all_rows
+            and len(self._rows) != len(self._all_rows)
+        ):
+            tab = next(
+                (t for k, t in _FilterListBar.TABS if k == self._filter),
+                self._filter,
+            )
+            base += (
+                f"  ·  grid: {tab} "
+                f"({len(self._rows):,}/{len(self._all_rows):,} files)"
+            )
+        self._summary_lbl.configure(text=base)
 
     # ------------------------------------------------------------------
     # Smart Select ▼
@@ -760,8 +871,9 @@ class ReviewPage(tk.Frame):
             new_groups.append(g)
         self._groups = new_groups
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._rows = self._flatten_rows(self._groups)
-        self._thumb_grid.load(self._rows)
+        self._all_rows = self._flatten_rows(self._groups)
+        self._refresh_type_counts()
+        self._apply_type_filter(self._filter)
         self._update_summary()
 
         # If compare mode was open for a now-empty group, step sideways

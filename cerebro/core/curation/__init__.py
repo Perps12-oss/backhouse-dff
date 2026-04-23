@@ -1,3 +1,3 @@
-from .scoring import enrich_item
+from .scoring import ScoringEngine
 
-__all__ = ['enrich_item']
+__all__ = ["ScoringEngine"]

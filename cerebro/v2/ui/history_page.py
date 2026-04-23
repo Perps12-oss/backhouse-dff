@@ -541,8 +541,14 @@ class HistoryPage(tk.Frame):
         self._panels[key].tkraise()
 
     def refresh(self) -> None:
-        """Reload the currently visible panel from the database."""
-        self._panels[self._current].load()
+        """Reload history panels from the database (all subtabs)."""
+        for panel in self._panels.values():
+            load = getattr(panel, "load", None)
+            if callable(load):
+                try:
+                    load()
+                except tk.TclError:
+                    pass
 
     def on_show(self) -> None:
         """Called when this page becomes visible — trigger a data load."""

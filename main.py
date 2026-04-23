@@ -2,29 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 
-from cerebro.v2.ui.app_shell import run_app
-
-
-def _validate_environment() -> None:
-    """Warn (non-fatal) when optional photo dependencies are missing."""
-    missing = []
-    for module_name in ("imagehash", "numpy"):
-        if importlib.util.find_spec(module_name) is None:
-            missing.append(module_name)
-    if missing:
-        print(
-            "Note: missing optional image dependencies: "
-            + ", ".join(missing)
-            + ". Install with: pip install imagehash numpy",
-            file=sys.stderr,
-        )
+from cerebro.runtime_deps import ensure_runtime_dependencies
 
 
 def main() -> int:
-    _validate_environment()
+    ensure_runtime_dependencies()
+    # Import UI only after optional bootstrap (so pip can install CustomTkinter first).
+    from cerebro.v2.ui.app_shell import run_app
+
     run_app()
     return 0
 

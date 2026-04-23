@@ -5,7 +5,7 @@ Reporting helpers for CEREBRO.
 - json_report: write scan + delete plan as structured JSON for auditing.
 - script_report: emit shell scripts (bash / PowerShell) for reproducible cleanup.
 
-These modules are optional and safe to import from workers (no Qt usage).
+These modules are optional helpers for exporting scan/delete plans.
 """
 
 from .json_report import write_json_report

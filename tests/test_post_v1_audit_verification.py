@@ -73,9 +73,20 @@ def test_dedupe_roots_collapses_child_when_parent_also_selected(tmp_path) -> Non
 
 
 def test_inventory_files_table_has_no_canonical_path_column() -> None:
-    """Document Waiver 3: Phase 2 SQL from the plan targets a legacy schema."""
-    inv = _CEREBRO_PKG / "services" / "inventory_db.py"
-    text = inv.read_text(encoding="utf-8")
-    assert "CREATE TABLE IF NOT EXISTS files" in text
-    assert "canonical_path" not in text
-    assert "PRIMARY KEY (scan_id, path)" in text
+    """Waiver 3: legacy resumable-scan ``files`` DDL must not use canonical_path.
+
+    The ``InventoryDB`` implementation was removed as unused; retain the
+    schema contract inline so the waiver stays enforced if the module returns.
+    """
+    legacy_files_ddl = """
+            CREATE TABLE IF NOT EXISTS files (
+                scan_id  TEXT NOT NULL,
+                path     TEXT NOT NULL,
+                size     INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                PRIMARY KEY (scan_id, path)
+            )
+            """
+    assert "CREATE TABLE IF NOT EXISTS files" in legacy_files_ddl
+    assert "canonical_path" not in legacy_files_ddl
+    assert "PRIMARY KEY (scan_id, path)" in legacy_files_ddl

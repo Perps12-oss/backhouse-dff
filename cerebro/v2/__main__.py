@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from cerebro.runtime_deps import ensure_runtime_dependencies
+
+ensure_runtime_dependencies()
+
 from .ui.app_shell import run_app
 
 

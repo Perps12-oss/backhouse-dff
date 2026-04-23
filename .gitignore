@@ -10,3 +10,5 @@ logs/
 _holding_cleanup_review/
 .omc/
 diagnostics/
+build/
+dist/

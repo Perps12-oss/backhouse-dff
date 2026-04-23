@@ -3,14 +3,18 @@
 Service layer components.
 """
 
-from .logger import logger, set_scan_id, get_scan_id, flush_all_handlers
-from .startup_assertions import StartupAssertions, StartupHealth
+from .logger import (
+    flush_all_handlers,
+    get_logger,
+    get_scan_id,
+    logger,
+    set_scan_id,
+)
 
 __all__ = [
-    'LoggerEngine',
-    'set_scan_id',
-    'get_scan_id',
-    'flush_all_handlers',
-    'StartupAssertions',
-    'StartupHealth',
+    "logger",
+    "get_logger",
+    "set_scan_id",
+    "get_scan_id",
+    "flush_all_handlers",
 ]

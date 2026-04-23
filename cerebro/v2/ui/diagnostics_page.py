@@ -5,6 +5,7 @@ Sections:
   • App Info      — CEREBRO version, Python version, UI library versions
   • Engine Status — which scan engines are loaded and operational
   • Database Info — SQLite DB paths, row counts, file sizes
+  • Welcome statistics — reset scan-history aggregates shown on Welcome
 
 All data is collected in a background thread on first show; a Refresh
 button triggers a new collection pass.
@@ -232,8 +233,14 @@ class _EngineRow(tk.Frame):
 class DiagnosticsPage(tk.Frame):
     """Full-page Diagnostics tab for AppShell."""
 
-    def __init__(self, parent: tk.Widget) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        on_scan_history_cleared: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(parent, bg=NAVY)
+        self._on_scan_history_cleared = on_scan_history_cleared
         self._section_headers: List[_SectionHeader] = []
         self._section_cards:   List[tk.Frame]       = []
         self._section_seps:    List[tk.Frame]       = []
@@ -241,6 +248,7 @@ class DiagnosticsPage(tk.Frame):
         self._eng_rows: List[ProbeResult] = []
         self._db_rows:  List[Tuple[str, str, str]] = []
         self._colors = _page_colors({})
+        self._pending_welcome_reset_ack = False
         self._build()
         ThemeApplicator.get().register(self._apply_theme)
 
@@ -297,6 +305,39 @@ class DiagnosticsPage(tk.Frame):
         self._engine_container = self._make_section("Engine Status")
         self._db_grid          = self._make_section("Database Information")
 
+        self._welcome_stats_card = self._make_section("Welcome statistics")
+        self._welcome_stats_help = tk.Label(
+            self._welcome_stats_card,
+            text=(
+                "The Welcome tab shows scans run, duplicates found, and space recovered "
+                "from the scan history database (~/.cerebro/scan_history.db). "
+                "Reset clears that history so counters return to zero; recent session "
+                "chips on Welcome are cleared too. This does not remove deletion history "
+                "or change the current scan results until you run a new scan."
+            ),
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            font=FONT_SMALL,
+            wraplength=720,
+            justify="left",
+        )
+        self._welcome_stats_help.pack(anchor="w", padx=10, pady=(10, 6))
+        self._welcome_stats_reset_btn = tk.Button(
+            self._welcome_stats_card,
+            text="Reset welcome statistics…",
+            command=self._reset_welcome_statistics,
+            bg=NAVY_MID,
+            fg=TEXT_PRIMARY,
+            activebackground=BORDER,
+            activeforeground=TEXT_PRIMARY,
+            relief="flat",
+            font=FONT_BODY,
+            cursor="hand2",
+            padx=14,
+            pady=6,
+        )
+        self._welcome_stats_reset_btn.pack(anchor="w", padx=10, pady=(0, 14))
+
         self._status_lbl = tk.Label(
             self._scroll_frame, text="Loading…", bg=NAVY, fg=TEXT_MUTED,
             font=FONT_SMALL,
@@ -351,6 +392,17 @@ class DiagnosticsPage(tk.Frame):
             except tk.TclError:
                 pass
 
+        try:
+            self._welcome_stats_help.configure(bg=colors["card"], fg=colors["fg2"])
+            self._welcome_stats_reset_btn.configure(
+                bg=colors["bar"],
+                fg=colors["fg"],
+                activebackground=colors["border"],
+                activeforeground=colors["fg"],
+            )
+        except tk.TclError:
+            pass
+
         # Re-render content with new colors if we already have data.
         if self._app_rows or self._eng_rows or self._db_rows:
             self._render(self._app_rows, self._eng_rows, self._db_rows)
@@ -365,6 +417,34 @@ class DiagnosticsPage(tk.Frame):
     def _load(self) -> None:
         self._status_lbl.configure(text="Refreshing…")
         threading.Thread(target=self._collect, daemon=True).start()
+
+    def _reset_welcome_statistics(self) -> None:
+        """Clear scan history DB (Welcome aggregates + recent chips)."""
+        from cerebro.v2.ui.feedback import confirm_yes_no, FeedbackPanel
+
+        if not confirm_yes_no(
+            self,
+            "Reset welcome statistics",
+            "Clear all stored scan history?\n\n"
+            "Welcome will show zero scans and no recent sessions until you run "
+            "new scans. Your last scan results in Results/Review are unchanged.",
+        ):
+            return
+        try:
+            from cerebro.v2.core.scan_history_db import get_scan_history_db
+
+            get_scan_history_db().clear()
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.exception("Failed to clear scan history")
+            FeedbackPanel(self, "Could not reset", str(exc), type="error")
+            return
+        if self._on_scan_history_cleared:
+            try:
+                self._on_scan_history_cleared()
+            except Exception:  # pylint: disable=broad-except
+                _log.exception("on_scan_history_cleared callback failed")
+        self._pending_welcome_reset_ack = True
+        self._load()
 
     def _collect(self) -> None:
         app_rows   = self._collect_app_info()
@@ -518,7 +598,15 @@ class DiagnosticsPage(tk.Frame):
         for label, value, role in db_rows:
             db_grid.add_row(label, value, role)
 
-        self._status_lbl.configure(text="", bg=colors["bg"], fg=colors["fg_muted"])
+        if self._pending_welcome_reset_ack:
+            self._pending_welcome_reset_ack = False
+            self._status_lbl.configure(
+                text="Welcome statistics were reset.",
+                bg=colors["bg"],
+                fg=colors["success"],
+            )
+        else:
+            self._status_lbl.configure(text="", bg=colors["bg"], fg=colors["fg_muted"])
 
     def _render_engine_section(self, probes: List[ProbeResult]) -> None:
         """Re-render just the engine-status card. Called on initial load,

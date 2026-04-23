@@ -123,7 +123,9 @@ class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
                         f"[cerebro.logger] rotation of {self.baseFilename} "
                         f"failed ({exc.__class__.__name__}: {exc}); "
                         f"rollover disabled for this session, log file will "
-                        f"grow past configured maxBytes.\n"
+                        f"grow past configured maxBytes. "
+                        f"Close other CEREBRO instances and any tail/viewers "
+                        f"holding this file open, then restart to re-enable rotation.\n"
                     )
                     sys.stderr.flush()
                 except (OSError, ValueError):

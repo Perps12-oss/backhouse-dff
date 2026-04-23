@@ -648,8 +648,16 @@ class TurboScanner:
             _guard_checked, _guard_files_checked, _guard_regressions,
         )
         logger.info("Discovered: %d", discovered_count)
-        logger.info("Candidates: %d", candidate_count)
-        logger.info("Emitted: %d", emitted_count)
+        logger.info(
+            "Files in final duplicate groups (path rows before metadata): %d",
+            candidate_count,
+        )
+        logger.info(
+            "File records yielded to engine (successful metadata, incl. all copies): %d",
+            emitted_count,
+        )
+        if meta_errors:
+            logger.warning("File metadata failures while emitting: %d", meta_errors)
         logger.info("Time: %.2fs", elapsed)
         logger.info("Speed: %.0f files/sec", discovered_count / elapsed)
         logger.info("Cache hits: %d", self.stats["hash_cache_hits"])
@@ -661,8 +669,9 @@ class TurboScanner:
         _hit_pct = (self.stats["hash_cache_hits"] / _total_cache * 100) if _total_cache else 0.0
         _final_ngroups = len(final_groups) if final_groups else 0
         logger.info(
-            "[Turbo] summary: discovered=%d candidates_at_size=%d final_groups=%d "
-            "emitted=%d elapsed=%.2fs cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
+            "[Turbo] summary: discovered=%d files_in_size_candidate_groups=%d "
+            "final_duplicate_groups=%d file_rows_emitted=%d elapsed=%.2fs "
+            "cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
             discovered_count,
             _diag_size_candidates,
             _final_ngroups,
@@ -672,6 +681,13 @@ class TurboScanner:
             self.stats["hash_cache_misses"],
             _hit_pct,
         )
+        try:
+            import psutil
+
+            rss_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+            logger.info("Process RSS after scan: %.1f MiB", rss_mb)
+        except (OSError, ValueError, RuntimeError, AttributeError, ImportError, TypeError):
+            pass
         _emit("complete", discovered_count, discovered_count)
     def _discover_files_parallel(
         self,

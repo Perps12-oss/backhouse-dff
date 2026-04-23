@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -124,7 +124,10 @@ class AppShell(CTk):
         )
         self._pages["history"] = self._history_page
 
-        self._diagnostics_page = DiagnosticsPage(self._page_container)
+        self._diagnostics_page = DiagnosticsPage(
+            self._page_container,
+            on_scan_history_cleared=self._on_scan_history_cleared,
+        )
         self._pages["diagnostics"] = self._diagnostics_page
 
         self._review_page = ReviewPage(
@@ -243,9 +246,18 @@ class AppShell(CTk):
         if hasattr(self, "_themes_win") and self._themes_win is not None:
             try:
                 if self._themes_win.winfo_exists():
+                    # Use _close() so pending after() callbacks and focus are cleared
+                    # before the widget is destroyed (avoids TclError on idle focus).
+                    closer = getattr(self._themes_win, "_close", None)
+                    if callable(closer):
+                        closer()
+                    else:
+                        self._themes_win.destroy()
+            except (tk.TclError, AttributeError):
+                try:
                     self._themes_win.destroy()
-            except tk.TclError:
-                pass
+                except tk.TclError:
+                    pass
             self._themes_win = None
         anchor_widget = anchor or self._title_bar.get_themes_anchor()
         try:
@@ -295,6 +307,17 @@ class AppShell(CTk):
         mode = getattr(self, "_scan_mode", "files")
         self._review_page.load_group(groups, group_id, mode=mode)
         self.switch_tab("review")
+
+    def _on_scan_history_cleared(self) -> None:
+        """Scan history DB was cleared from Diagnostics — refresh in-memory UIs."""
+        try:
+            self._pages["welcome"].refresh()
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            self._history_page.refresh()
+        except (AttributeError, tk.TclError):
+            pass
 
     def _on_history_session_click(self, entry) -> None:
         self.switch_tab("results")
@@ -365,6 +388,9 @@ class _ThemeQuickDropdown(tk.Toplevel):
         self._master  = master
         self._outside_bind_id: Optional[str] = None
         self._dismissed = False
+        # ``after`` ids must be cancelled in _close() so no callback runs after destroy.
+        self._after_topmost_id: Optional[Any] = None
+        self._after_guard_id: Optional[Any] = None
         self.overrideredirect(True)
 
         try:
@@ -396,7 +422,7 @@ class _ThemeQuickDropdown(tk.Toplevel):
         try:
             self.lift()
             self.attributes("-topmost", True)
-            self.after(200, lambda: self._safe_topmost(False))
+            self._after_topmost_id = self.after(200, self._deferred_clear_topmost)
         except tk.TclError:
             pass
 
@@ -406,7 +432,7 @@ class _ThemeQuickDropdown(tk.Toplevel):
         # spuriously before a row click lands, dismissing the dropdown).
         # Deferred so the Button-1 event that opened the popup doesn't also
         # bubble up into this handler and dismiss it immediately.
-        self.after(0, self._install_outside_click_guard)
+        self._after_guard_id = self.after(0, self._install_outside_click_guard)
 
     # ------------------------------------------------------------------
 
@@ -526,11 +552,39 @@ class _ThemeQuickDropdown(tk.Toplevel):
         # at (0, 0) before picking up the requested geometry.
         self.update_idletasks()
 
+    def _deferred_clear_topmost(self) -> None:
+        self._after_topmost_id = None
+        self._safe_topmost(False)
+
     def _safe_topmost(self, flag: bool) -> None:
         try:
             if self.winfo_exists():
                 self.attributes("-topmost", flag)
         except tk.TclError:
+            pass
+
+    def _cancel_pending_after(self) -> None:
+        for attr in ("_after_topmost_id", "_after_guard_id"):
+            aid = getattr(self, attr, None)
+            if aid is not None:
+                try:
+                    self.after_cancel(aid)
+                except (tk.TclError, ValueError):
+                    pass
+                setattr(self, attr, None)
+
+    def _focus_back_to_master(self) -> None:
+        """Move keyboard focus off this Toplevel before it is destroyed.
+
+        CustomTkinter / Tk can queue ``focus_set`` on the widget that last had
+        focus; if that Toplevel is already gone, Windows raises
+        ``TclError: bad window path name`` from an ``after`` idle handler.
+        """
+        try:
+            m = self._master
+            if m is not None and m.winfo_exists():
+                m.focus_set()
+        except (tk.TclError, AttributeError):
             pass
 
     def _install_outside_click_guard(self) -> None:
@@ -557,19 +611,21 @@ class _ThemeQuickDropdown(tk.Toplevel):
         self._close()
 
     def _pick(self, name: str) -> None:
-        # Run the pick BEFORE closing so the applicator still has a live root
-        # to schedule after_idle on, and so any exception surfaces before the
-        # popup is torn down.
+        # Tear down the popup (focus + pending after callbacks) *before* applying
+        # the global theme so CustomTkinter/Tk never targets this Toplevel
+        # during ``set_appearance_mode`` / idle redraw (Windows: bad window path).
+        self._close()
         try:
             self._on_pick(name)
         except Exception as e:
             _log.warning("Theme pick error: %s", e)
-        self._close()
 
     def _close(self) -> None:
         if self._dismissed:
             return
         self._dismissed = True
+        self._cancel_pending_after()
+        self._focus_back_to_master()
         try:
             if self._outside_bind_id is not None:
                 self._master.unbind("<Button-1>", self._outside_bind_id)
