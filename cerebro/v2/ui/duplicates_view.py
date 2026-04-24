@@ -106,7 +106,10 @@ def _filter_aware_all_members_visible(g: DuplicateGroup, type_key: str) -> bool:
     if type_key == "all":
         return len(g.files) >= 2
     for f in g.files:
-        e = (getattr(f, "extension", None) or Path(f.path).suffix)
+        e = (getattr(f, "extension", None) or Path(f.path).suffix).lower()
+        if not e:
+            # extensionless → "other"; don't let it veto a typed-filter group
+            continue
         b = classify_file(e)
         if b != type_key:
             return False
@@ -301,9 +304,8 @@ class DuplicatesView(tk.Frame):
         d = self._grid.get_row_data(iid)
         self._update_preview(d, iid)
         if self._on_file_selection_changed is not None:
-            self._on_file_selection_changed(
-                len(self.get_selected_file_paths())
-            )
+            n = len(self.get_selected_file_paths()) + len(self.get_selected_group_ids())
+            self._on_file_selection_changed(n)
 
     def _on_row_open(self, iid: str, _data: Dict[str, Any]) -> None:
         d = self._grid.get_row_data(iid)
@@ -396,6 +398,14 @@ class DuplicatesView(tk.Frame):
                 paths.append(str(d["path"]))
         return paths
 
+    def get_selected_group_ids(self) -> List[int]:
+        gids: List[int] = []
+        for iid in self._grid.selected_iids():
+            d = self._grid.get_row_data(iid)
+            if d.get("kind") == "group" and d.get("group_id") is not None:
+                gids.append(int(d["group_id"]))
+        return gids
+
     def run_smart_select(self, rule: str) -> None:
         s = self._store.get_state()
         dry = s.dry_run
@@ -407,6 +417,14 @@ class DuplicatesView(tk.Frame):
             if not _filter_aware_all_members_visible(g, s.results_file_filter):
                 continue
             files = list(g.files)
+            if s.results_file_filter != "all":
+                fk = s.results_file_filter
+                files = [
+                    f for f in files
+                    if classify_file(
+                        (getattr(f, "extension", None) or Path(f.path).suffix).lower()
+                    ) == fk
+                ]
             if len(files) < 2:
                 continue
             if rule == "select_except_oldest":

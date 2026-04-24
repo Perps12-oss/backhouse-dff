@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Fast duplicate file finder"
 requires-python = ">=3.10"
 
+[project.scripts]
+cerebro = "cerebro.cli:main"
+
 # ----------------------------------------------------------------------------
 # ruff — linter + formatter, replaces flake8/black/isort
 # ----------------------------------------------------------------------------

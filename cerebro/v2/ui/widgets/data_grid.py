@@ -68,6 +68,20 @@ class DataGrid(tk.Frame):
 
         self._style = ttk.Style()
         self._style.theme_use("default")
+        # Custom Treeview style names need the default Treeview layout; otherwise
+        # ttk on Windows raises: Layout <name> not found.
+        try:
+            base_layout = self._style.layout("Treeview")
+            if base_layout:
+                self._style.layout(self._style_name, base_layout)
+        except tk.TclError:
+            pass
+        try:
+            hlayout = self._style.layout("Treeview.Heading")
+            if hlayout:
+                self._style.layout(f"{self._style_name}.Heading", hlayout)
+        except tk.TclError:
+            pass
         self._style.configure(
             self._style_name,
             background="#FFFFFF",

@@ -490,6 +490,90 @@ class DeleteCelebrationOverlay:
             pass
 
 
+class GroupDeleteDialog:
+    """Shown when a group header row is selected and DELETE is clicked.
+
+    Offers a single safe action: keep the largest copy and trash the rest.
+    result: ``"keep_one"`` | ``"cancel"``
+    """
+
+    def __init__(self, parent, *, group) -> None:
+        self.result: str = "cancel"
+
+        n_files = len(group.files)
+        try:
+            reclaimable_str = format_bytes(int(group.reclaimable), decimals=1)
+        except Exception:
+            reclaimable_str = f"{group.reclaimable} bytes"
+
+        try:
+            import customtkinter as _ctk
+            win = _ctk.CTkToplevel(parent)
+            win.configure(fg_color=theme_color("base.backgroundElevated"))
+        except Exception:
+            win = tk.Toplevel(parent)
+            win.configure(bg=theme_color("base.backgroundElevated"))
+
+        self._win = win
+        win.title("Delete Duplicate Group")
+        win.resizable(False, False)
+        win.transient(parent)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        bg = theme_color("base.backgroundElevated")
+        pad = 24
+
+        header = tk.Frame(win, bg=bg)
+        header.pack(fill="x", padx=pad, pady=(pad, 0))
+        tk.Label(header, text="🗂", font=("", 26),
+                 bg=bg, fg=theme_color("base.foreground")).pack(side="left", padx=(0, 12))
+        tk.Label(header, text=f"Delete Group #{group.group_id}?",
+                 font=("", 15, "bold"), bg=bg, fg=theme_color("base.foreground"),
+                 justify="left", wraplength=340).pack(side="left")
+
+        body = (
+            f"This group has {n_files} copies of the same file.\n"
+            f"The largest copy will be kept; the other {n_files - 1} "
+            f"will be moved to the Recycle Bin, freeing {reclaimable_str}."
+        )
+        tk.Label(win, text=body, font=("", 11), bg=bg,
+                 fg=theme_color("base.foregroundSecondary"),
+                 justify="left", wraplength=420, anchor="w").pack(
+            fill="x", padx=pad, pady=(12, 20))
+
+        tk.Frame(win, height=1, bg="#2d3748").pack(fill="x")
+
+        btn_row = tk.Frame(win, bg=bg)
+        btn_row.pack(fill="x", padx=pad, pady=(12, pad))
+
+        def _keep_one() -> None:
+            self.result = "keep_one"
+            win.destroy()
+
+        def _cancel() -> None:
+            self.result = "cancel"
+            win.destroy()
+
+        tk.Button(btn_row, text="Cancel", command=_cancel,
+                  font=("", 11), relief="flat", padx=16, pady=6,
+                  bg=theme_color("button.secondary"),
+                  fg=theme_color("base.foreground"),
+                  cursor="hand2").pack(side="right", padx=(8, 0))
+
+        tk.Button(btn_row, text="Keep Best — Delete Duplicates", command=_keep_one,
+                  font=("", 11, "bold"), relief="flat", padx=16, pady=6,
+                  bg=theme_color("button.danger"), fg="#ffffff",
+                  cursor="hand2").pack(side="right")
+
+        win.update_idletasks()
+        win.minsize(480, 1)
+        px = parent.winfo_rootx() + max(0, (parent.winfo_width() - win.winfo_width()) // 2)
+        py = parent.winfo_rooty() + max(0, (parent.winfo_height() - win.winfo_height()) // 2)
+        win.geometry(f"+{px}+{py}")
+        win.grab_set()
+        parent.wait_window(win)
+
+
 # --- Backward-compatible aliases for delete_flow (underscore-prefixed names) ---
 _DeleteDialog = DeleteConfirmDialog
 _DeleteProgressDialog = DeleteProgressDialog

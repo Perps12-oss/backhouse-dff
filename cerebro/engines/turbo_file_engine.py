@@ -91,6 +91,16 @@ class TurboFileEngine(BaseEngine):
                 type="bool",
                 default=False,
             ),
+            EngineOption(
+                name="incremental_scan",
+                display_name="Incremental Scan (use hash cache)",
+                type="bool",
+                default=True,
+                tooltip=(
+                    "Re-use cached file hashes from previous scans. "
+                    "Disable to force a full re-hash of every file."
+                ),
+            ),
         ]
 
     # -- lifecycle -------------------------------------------------------------
@@ -172,6 +182,7 @@ class TurboFileEngine(BaseEngine):
                 logger.info("xxhash not installed — using sha256 fallback")
 
         # Build TurboScanConfig from UI options — accept both naming conventions.
+        use_cache = bool(opts.get("incremental_scan", True))
         cfg = TurboScanConfig(
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
@@ -181,7 +192,7 @@ class TurboFileEngine(BaseEngine):
             use_full_hash=True,
             hash_algorithm=hash_algo,
             progress_callback=self._on_turbo_progress,
-            cache_dir=default_cerebro_cache_dir(),
+            cache_dir=default_cerebro_cache_dir() if use_cache else None,
         )
 
         # Filter protected folders out of roots

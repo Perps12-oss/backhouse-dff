@@ -1208,6 +1208,9 @@ class ResultsPage(tk.Frame):
             return
         paths = self._dupes.get_selected_file_paths()
         if not paths:
+            group_ids = self._dupes.get_selected_group_ids()
+            if group_ids:
+                self._delete_selected_group(group_ids[0])
             return
         items = [
             DeleteItem(path_str=p, size=_size_on_disk(p)) for p in paths
@@ -1226,6 +1229,39 @@ class ResultsPage(tk.Frame):
             on_navigate_home=self._on_navigate_home,
             on_rescan=self._on_rescan,
             source_tag="results_page",
+            dry_run=dry,
+        )
+
+    def _delete_selected_group(self, group_id: int) -> None:
+        group = next((g for g in self._groups if g.group_id == group_id), None)
+        if not group or len(group.files) < 2:
+            return
+        from cerebro.v2.ui.delete_ceremony_widgets import GroupDeleteDialog
+        dlg = GroupDeleteDialog(self, group=group)
+        if dlg.result != "keep_one":
+            return
+        keeper = max(group.files, key=lambda f: int(getattr(f, "size", 0) or 0))
+        items = [
+            DeleteItem(path_str=str(f.path), size=int(getattr(f, "size", 0) or 0))
+            for f in group.files
+            if f is not keeper
+        ]
+        if not items:
+            return
+        self._toolbar.set_has_selection(False)
+        dry = (
+            self._store.get_state().dry_run
+            if self._use_state_for_view and self._store
+            else False
+        )
+        run_delete_ceremony(
+            parent=self,
+            items=items,
+            scan_mode=self._scan_mode,
+            on_remove_paths=self._remove_paths,
+            on_navigate_home=self._on_navigate_home,
+            on_rescan=self._on_rescan,
+            source_tag="results_page.group_delete",
             dry_run=dry,
         )
 

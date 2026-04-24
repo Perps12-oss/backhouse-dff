@@ -51,6 +51,7 @@ class ScanOrchestrator:
         "files_classic" mode (FileDedupEngine, ~600 LOC independent classic
         pipeline) was removed in the post-v1 audit Cut 3.
         """
+        from cerebro.engines.burst_detection_engine import BurstDetectionEngine
         from cerebro.engines.empty_folder_engine import EmptyFolderEngine
         from cerebro.engines.image_dedup_engine import ImageDedupEngine
         from cerebro.engines.large_file_engine import LargeFileEngine
@@ -64,6 +65,7 @@ class ScanOrchestrator:
         self._engines["music"]         = MusicDedupEngine()
         self._engines["empty_folders"] = EmptyFolderEngine()
         self._engines["large_files"]   = LargeFileEngine()
+        self._engines["burst"]         = BurstDetectionEngine()
 
     def register_engine(self, mode: str, engine: BaseEngine) -> None:
         """

@@ -68,7 +68,7 @@ class CerebroCoordinator:
         )
         if not is_terminal:
             t = time.monotonic()
-            if t - self._last_progress_mon < 0.1:
+            if t - self._last_progress_mon < 0.05:
                 return
             self._last_progress_mon = t
         self._store.dispatch(ScanProgressSnapshot(scan_progress_to_dict(p)))
