@@ -196,3 +196,29 @@ def fmt_size(n: int) -> str:
     if n < 1024 ** 3:
         return f"{n / 1024 ** 2:.1f} MB"
     return f"{n / 1024 ** 3:.1f} GB"
+
+
+def glass_container(
+    content: ft.Control,
+    t: ThemeTokens,
+    *,
+    padding: int = 16,
+    border_radius: int | None = None,
+    expand: bool = False,
+) -> ft.Container:
+    """Create a glassmorphism-styled container."""
+    br = border_radius or t.border_radius
+    return ft.Container(
+        content=content,
+        padding=padding,
+        border_radius=br,
+        bgcolor=t.colors.glass_bg,
+        border=ft.border.all(1, t.colors.glass_border),
+        shadow=ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=t.shadow_blur,
+            offset=ft.Offset(0, t.shadow_offset_y),
+            color="#00000015",
+        ),
+        expand=expand,
+    )

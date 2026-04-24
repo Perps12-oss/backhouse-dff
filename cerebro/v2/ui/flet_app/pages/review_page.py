@@ -75,12 +75,24 @@ class ReviewPage(ft.Column):
 
         # Compare navigation bar
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
+        self._delete_btn = ft.ElevatedButton(
+            "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
+            on_click=lambda e: self._delete_compare_side("b"),
+            style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
+        )
+        self._keep_btn = ft.OutlinedButton(
+            "Keep A", icon=ft.icons.Icons.CHECK,
+            on_click=lambda e: self._delete_compare_side("a"),
+            style=ft.ButtonStyle(color=t.colors.success),
+        )
         self._cmp_bar = ft.Row(
             [
                 ft.TextButton("← Grid", on_click=self._to_grid),
                 ft.TextButton("← Prev", on_click=self._prev_group),
                 ft.TextButton("Next →", on_click=self._next_group),
                 self._cmp_title,
+                self._keep_btn,
+                self._delete_btn,
                 ft.TextButton("Open A", on_click=lambda e: self._open_side("a")),
                 ft.TextButton("Open B", on_click=lambda e: self._open_side("b")),
             ],
@@ -301,6 +313,7 @@ class ReviewPage(ft.Column):
         self._update_compare_panels()
         self._update_compare_chrome()
         self._enter_mode("compare")
+        self._bind_keys()
 
     def _update_compare_panels(self) -> None:
         t = self._t
@@ -393,6 +406,46 @@ class ReviewPage(ft.Column):
             btn.update()
         if self._mode == "grid":
             self._refresh_grid()
+
+    # -- Navigation -----------------------------------------------------------
+
+    # -- Keyboard navigation --------------------------------------------------
+
+    def _bind_keys(self) -> None:
+        self._page.on_keyboard_event = self._on_key
+
+    def _on_key(self, e: ft.KeyboardEvent) -> None:
+        if self._mode != "compare":
+            return
+        if e.key == "Arrow Left":
+            self._prev_group()
+        elif e.key == "Arrow Right":
+            self._next_group()
+        elif e.key == "D" or e.key == "d":
+            self._delete_compare_side("b")
+        elif e.key == "K" or e.key == "k":
+            self._delete_compare_side("a")
+
+    # -- Delete from compare --------------------------------------------------
+
+    def _delete_compare_side(self, side: str) -> None:
+        f = self._compare_a if side == "a" else self._compare_b
+        if not f:
+            return
+        path = str(f.path)
+        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+        service = DeleteService()
+        new_groups, *_ = service.delete_and_prune([path], self._groups)
+        self._groups = new_groups
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._bridge.coordinator.results_files_removed([path])
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        gid = self._compare_gid
+        if gid not in self._group_files:
+            gid = self._groups[0].group_id
+        self._enter_compare(gid)
 
     # -- Navigation -----------------------------------------------------------
 

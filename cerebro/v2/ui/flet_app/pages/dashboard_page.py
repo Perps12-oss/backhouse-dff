@@ -83,6 +83,13 @@ class DashboardPage(ft.Column):
         )
 
         # Action buttons
+        self._stop_btn = ft.OutlinedButton(
+            "Stop Scan",
+            icon=ft.icons.Icons.STOP,
+            on_click=self._stop_scan,
+            visible=False,
+            style=ft.ButtonStyle(color=t.colors.danger),
+        )
         self._actions = ft.Row(
             [
                 ft.OutlinedButton(
@@ -99,6 +106,7 @@ class DashboardPage(ft.Column):
                         color=t.colors.bg,
                     ),
                 ),
+                self._stop_btn,
             ],
             alignment=ft.MainAxisAlignment.CENTER,
             spacing=s.lg,
@@ -189,9 +197,11 @@ class DashboardPage(ft.Column):
             self._status.update()
             return
 
+        self._stop_btn.visible = True
         self._progress.visible = True
         self._progress_label.visible = True
         self._status.value = "Starting scan..."
+        self._stop_btn.update()
         self._progress.update()
         self._progress_label.update()
         self._status.update()
@@ -220,10 +230,12 @@ class DashboardPage(ft.Column):
     def _on_scan_complete(self, results: list, mode: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
+        self._stop_btn.visible = False
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
         self._status.update()
         self._progress.update()
         self._progress_label.update()
+        self._stop_btn.update()
 
         self._bridge.dispatch_scan_complete(results, mode)
         self._bridge.navigate("duplicates")
@@ -231,7 +243,16 @@ class DashboardPage(ft.Column):
     def _on_scan_error(self, msg: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
+        self._stop_btn.visible = False
         self._status.value = f"Scan error: {msg}"
         self._status.update()
         self._progress.update()
         self._progress_label.update()
+        self._stop_btn.update()
+
+    def _stop_scan(self, e: ft.ControlEvent) -> None:
+        self._bridge.backend.cancel_scan()
+        self._stop_btn.visible = False
+        self._status.value = "Cancelling scan..."
+        self._status.update()
+        self._stop_btn.update()

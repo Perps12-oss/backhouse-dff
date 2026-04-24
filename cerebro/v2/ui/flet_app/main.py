@@ -35,7 +35,7 @@ def _main(page: ft.Page) -> None:
     page.window.height = 800
     page.window.min_width = 800
     page.window.min_height = 600
-    page.theme_mode = ft.ThemeMode.LIGHT
+    page.theme_mode = ft.ThemeMode.SYSTEM
     page.padding = 0
     page.spacing = 0
 
@@ -43,6 +43,11 @@ def _main(page: ft.Page) -> None:
     page.theme = ft.Theme(
         color_scheme_seed=theme.colors.primary,
         font_family=theme.typography.family,
+    )
+    dark_theme = theme_for_mode("dark")
+    page.dark_theme = ft.Theme(
+        color_scheme_seed=dark_theme.colors.primary,
+        font_family=dark_theme.typography.family,
     )
 
     # -- Services -------------------------------------------------------------
