@@ -223,32 +223,40 @@ class DashboardPage(ft.Column):
         self._progress_label.value = f"{scanned:,} files scanned  ·  {elapsed:.1f}s"
         if total > 0:
             self._progress.value = scanned / total
-        self._status.update()
-        self._progress.update()
-        self._progress_label.update()
+        try:
+            self._status.update()
+            self._progress.update()
+            self._progress_label.update()
+        except Exception:
+            pass
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
-        self._status.update()
-        self._progress.update()
-        self._progress_label.update()
-        self._stop_btn.update()
+        try:
+            self._status.update()
+            self._progress.update()
+            self._progress_label.update()
+            self._stop_btn.update()
+        except Exception:
+            pass
 
         self._bridge.dispatch_scan_complete(results, mode)
-        self._bridge.navigate("duplicates")
 
     def _on_scan_error(self, msg: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan error: {msg}"
-        self._status.update()
-        self._progress.update()
-        self._progress_label.update()
-        self._stop_btn.update()
+        try:
+            self._status.update()
+            self._progress.update()
+            self._progress_label.update()
+            self._stop_btn.update()
+        except Exception:
+            pass
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
         self._bridge.backend.cancel_scan()

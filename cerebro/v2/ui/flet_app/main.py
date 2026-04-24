@@ -6,8 +6,9 @@ the Flet application with the navigation-rail layout.
 
 from __future__ import annotations
 
+import datetime
 import logging
-from typing import Dict
+from typing import Dict, List
 
 import flet as ft
 
@@ -91,6 +92,8 @@ def _main(page: ft.Page) -> None:
     page.on_route_change = _on_route_change
     page.route = default_route()
 
+    _scan_history: List[Dict] = []
+
     def _sync_groups_from_state(s: AppState) -> None:
         groups = list(s.groups)
         mode = s.scan_mode or "files"
@@ -110,13 +113,30 @@ def _main(page: ft.Page) -> None:
             layout.navigate_to(tab)
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
             _sync_groups_from_state(new_state)
+        if isinstance(action, ScanCompleted):
+            groups = list(new_state.groups)
+            total_files = sum(len(g.files) for g in groups)
+            total_bytes = sum(g.reclaimable for g in groups)
+            _scan_history.append({
+                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "folder": "",
+                "groups_found": len(groups),
+                "files_scanned": total_files,
+                "bytes_reclaimable": total_bytes,
+                "mode": new_state.scan_mode or "files",
+            })
+            history_page.load_history(list(_scan_history))
 
     bridge.set_on_state_change(_on_state_change)
     bridge.subscribe()
 
-    def _on_scan_complete(results, mode) -> None:
-        bridge.dispatch_scan_complete(results, mode)
+    def _on_theme_change(mode: str) -> None:
+        for p in (dashboard_page, results_page, review_page, history_page, settings_page):
+            try:
+                p.apply_theme(mode)
+            except Exception:
+                _log.exception("apply_theme failed on %s", type(p).__name__)
 
-    backend.set_on_complete(_on_scan_complete)
+    bridge.set_on_theme_change(_on_theme_change)
 
     _log.info("Cerebro Flet UI initialized")

@@ -175,22 +175,11 @@ class ScanOrchestrator:
 
             self._active_engine.start(wrapper_callback)
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
-            # Report error via progress callback — must be dispatched on the main
-            # thread because the callback updates Tkinter widgets (C-1 fix).
             if self._progress_callback:
                 error_progress = ScanProgress(
                     state=ScanState.ERROR,
                     current_file=f"Error: {str(e)}"
                 )
-                try:
-                    import tkinter as _tk
-                    root = _tk._default_root  # type: ignore[attr-defined]
-                    if root is not None:
-                        root.after(0, lambda p=error_progress: self._progress_callback(p) if self._progress_callback else None)
-                        return
-                except Exception:
-                    pass
-                # Fallback: no Tk root available (tests, headless)
                 self._progress_callback(error_progress)
 
     def pause(self) -> None:

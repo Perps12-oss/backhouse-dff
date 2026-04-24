@@ -89,3 +89,15 @@ class SettingsPage(ft.Column):
 
     def on_show(self) -> None:
         pass
+
+    def apply_theme(self, mode: str) -> None:
+        self._t = theme_for_mode(mode)
+        self._build()
+        for btn in self._theme_buttons.controls:
+            key = getattr(btn, "data", None) or ""
+            active = key == mode
+            btn.style = ft.ButtonStyle(
+                bgcolor=self._t.colors.primary if active else self._t.colors.bg3,
+                color=self._t.colors.bg if active else self._t.colors.fg2,
+            )
+        self.update()

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 import flet as ft
 
+from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import (
@@ -237,6 +238,13 @@ class ReviewPage(ft.Column):
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._groups)
 
+    def _is_mounted(self) -> bool:
+        """Return True only when this control is attached to a Flet page."""
+        try:
+            return self.page is not None
+        except RuntimeError:
+            return False
+
     # -- Mode management ------------------------------------------------------
 
     def _enter_mode(self, mode: str) -> None:
@@ -259,9 +267,10 @@ class ReviewPage(ft.Column):
             self._cmp_bar.visible = True
             self._content.controls.append(self._compare_view)
 
-        self._content.update()
-        self._filter_bar.update()
-        self._cmp_bar.update()
+        if self._is_mounted():
+            self._content.update()
+            self._filter_bar.update()
+            self._cmp_bar.update()
 
     def _to_grid(self, e=None) -> None:
         self._enter_mode("grid")
@@ -276,7 +285,8 @@ class ReviewPage(ft.Column):
             for f in g.files
             if self._passes_filter(f)
         ]
-        self._grid.update()
+        if self._is_mounted():
+            self._grid.update()
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -371,8 +381,9 @@ class ReviewPage(ft.Column):
         t = self._t
         self._compare_panel_a.content = self._build_compare_side(self._compare_a, "A")
         self._compare_panel_b.content = self._build_compare_side(self._compare_b, "B")
-        self._compare_panel_a.update()
-        self._compare_panel_b.update()
+        if self._is_mounted():
+            self._compare_panel_a.update()
+            self._compare_panel_b.update()
 
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
         t = self._t
@@ -414,7 +425,8 @@ class ReviewPage(ft.Column):
         name_a = Path(str(getattr(self._compare_a, "path", ""))).name if self._compare_a else "(A)"
         name_b = Path(str(getattr(self._compare_b, "path", ""))).name if self._compare_b else "(no peer)"
         self._cmp_title.value = f"Group {idx + 1}/{total}  ·  {count} copies  ·  {name_a}  ↔  {name_b}"
-        self._cmp_title.update()
+        if self._is_mounted():
+            self._cmp_title.update()
 
     def _prev_group(self, e=None) -> None:
         if self._compare_gid is None:
@@ -485,20 +497,55 @@ class ReviewPage(ft.Column):
         f = self._compare_a if side == "a" else self._compare_b
         if not f:
             return
+        t = self._t
+        name = Path(str(f.path)).name
         path = str(f.path)
-        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
-        service = DeleteService()
-        new_groups, *_ = service.delete_and_prune([path], self._groups)
-        self._groups = new_groups
-        self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._bridge.coordinator.results_files_removed([path])
-        if not self._groups:
-            self._enter_mode("empty")
-            return
-        gid = self._compare_gid
-        if gid not in self._group_files:
-            gid = self._groups[0].group_id
-        self._enter_compare(gid)
+
+        def _do_delete(policy: DeletionPolicy) -> None:
+            from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+            service = DeleteService()
+            new_groups, *_ = service.delete_and_prune([path], self._groups, policy)
+            self._groups = new_groups
+            self._group_files = {g.group_id: list(g.files) for g in self._groups}
+            self._bridge.coordinator.results_files_removed([path])
+            if not self._groups:
+                self._enter_mode("empty")
+                return
+            gid = self._compare_gid
+            if gid not in self._group_files:
+                gid = self._groups[0].group_id
+            self._enter_compare(gid)
+
+        def _on_trash(e) -> None:
+            self._bridge.flet_page.close(dialog)
+            _do_delete(DeletionPolicy.TRASH)
+
+        def _on_permanent(e) -> None:
+            self._bridge.flet_page.close(dialog)
+            _do_delete(DeletionPolicy.PERMANENT)
+
+        def _on_cancel(e) -> None:
+            self._bridge.flet_page.close(dialog)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirm Deletion"),
+            content=ft.Text(f'Delete "{name}"?'),
+            actions=[
+                ft.TextButton("Cancel", on_click=_on_cancel),
+                ft.OutlinedButton(
+                    "Delete Permanently",
+                    on_click=_on_permanent,
+                    style=ft.ButtonStyle(color=t.colors.danger),
+                ),
+                ft.ElevatedButton(
+                    "Move to Trash",
+                    on_click=_on_trash,
+                    style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
+                ),
+            ],
+        )
+        self._bridge.flet_page.open(dialog)
 
     # -- Navigation -----------------------------------------------------------
 
@@ -507,3 +554,26 @@ class ReviewPage(ft.Column):
             self._to_grid()
             return
         self._bridge.navigate("duplicates")
+
+    def apply_theme(self, mode: str) -> None:
+        saved_groups = list(self._groups)
+        saved_gfiles = dict(self._group_files)
+        saved_mode = self._mode
+        saved_gid = self._compare_gid
+        saved_a = self._compare_a
+        saved_b = self._compare_b
+        self._t = theme_for_mode(mode)
+        self._build()
+        self._groups = saved_groups
+        self._group_files = saved_gfiles
+        self._compare_gid = saved_gid
+        self._compare_a = saved_a
+        self._compare_b = saved_b
+        if saved_mode == "empty" or not saved_groups:
+            self._enter_mode("empty")
+        elif saved_mode == "compare" and saved_gid is not None:
+            self._enter_compare(saved_gid)
+        else:
+            self._enter_mode("grid")
+        if self._is_mounted():
+            self.update()

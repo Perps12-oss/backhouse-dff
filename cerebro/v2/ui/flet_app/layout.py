@@ -88,6 +88,7 @@ class AppLayout(ft.Row):
         self._nav.update()
 
         builder = self._builders.get(key)
+        inner = None
         if builder:
             inner = builder()
             self._switcher.content = ft.Container(expand=True, content=inner)
@@ -98,6 +99,8 @@ class AppLayout(ft.Row):
                 content=ft.Text("Page not found"),
             )
         self._switcher.update()
+        if inner is not None and hasattr(inner, "on_show"):
+            inner.on_show()
 
         route_info = ROUTE_MAP[key]
         self._page.route = route_info.route

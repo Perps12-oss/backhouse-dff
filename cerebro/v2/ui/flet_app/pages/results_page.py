@@ -139,6 +139,16 @@ class ResultsPage(ft.Column):
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._groups)
 
+    def on_show(self) -> None:
+        """Called by layout when this page becomes visible — re-renders if needed."""
+        self._refresh()
+
+    def _is_mounted(self) -> bool:
+        try:
+            return self.page is not None
+        except RuntimeError:
+            return False
+
     # -- Selection ------------------------------------------------------------
 
     def _toggle_file(self, path: str) -> None:
@@ -185,7 +195,8 @@ class ResultsPage(ft.Column):
             self._selection_label.value = f"{count:,} files selected  ·  {fmt_size(total_bytes)}"
         else:
             self._selection_label.value = ""
-        self._action_bar.update()
+        if self._is_mounted():
+            self._action_bar.update()
 
     # -- Delete ---------------------------------------------------------------
 
@@ -277,7 +288,8 @@ class ResultsPage(ft.Column):
         total_files = sum(len(g.files) for g in filtered)
         recoverable = sum(g.reclaimable for g in filtered)
         self._summary.value = f"{len(filtered):,} groups  ·  {total_files:,} files  ·  {fmt_size(recoverable)} recoverable"
-        self._summary.update()
+        if self._is_mounted():
+            self._summary.update()
         self._update_selection_ui()
 
         if not filtered:
@@ -285,8 +297,9 @@ class ResultsPage(ft.Column):
                 self.controls.append(self._empty)
             if self._group_list in self.controls:
                 self.controls.remove(self._group_list)
-            self._empty.update()
-            self.update()
+            if self._is_mounted():
+                self._empty.update()
+                self.update()
             return
 
         if self._empty in self.controls:
@@ -295,8 +308,9 @@ class ResultsPage(ft.Column):
             self.controls.append(self._group_list)
 
         self._group_list.controls = [self._build_group_card(g) for g in filtered]
-        self._group_list.update()
-        self.update()
+        if self._is_mounted():
+            self._group_list.update()
+            self.update()
 
     def _build_group_card(self, group: DuplicateGroup) -> ft.Container:
         t = self._t
@@ -377,3 +391,17 @@ class ResultsPage(ft.Column):
         layout = fp.controls[0] if fp.controls else None
         if isinstance(layout, AppLayout):
             layout.navigate_to("review")
+
+    def apply_theme(self, mode: str) -> None:
+        saved_groups = list(self._groups)
+        saved_filter = self._filter_key
+        saved_scan_mode = self._scan_mode
+        saved_selected = set(self._selected_paths)
+        self._t = theme_for_mode(mode)
+        self._build()
+        self._groups = saved_groups
+        self._filter_key = saved_filter
+        self._scan_mode = saved_scan_mode
+        self._selected_paths = saved_selected
+        self._refresh()
+        self.update()
