@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 """
-TabBar — 36 px light tab strip with 6 named tabs.
+TabBar — navigation strip for FINAL PLAN v2.0 §1.1.
 
-Active:   white bg, bold text, 3 px #E74C3C underline.
-Inactive: #F0F0F0 bg, gray text.
-Disabled: #F0F0F0 bg, #BBBBBB text, not clickable.
-Badge:    small red pill on the Results tab showing duplicate count.
+Fixed tabs: Dashboard, Duplicates, History, Settings.
+Forbidden: extra primary tabs, "Scan" as a page, "Review" as a page.
 """
 
 import tkinter as tk
@@ -25,12 +23,10 @@ _ACCENT      = "#E74C3C"
 _BADGE_BG    = "#E74C3C"
 
 TABS: List[Tuple[str, str]] = [
-    ("welcome",     "Welcome"),
-    ("scan",        "Scan"),
-    ("results",     "Results"),
-    ("review",      "Review"),
-    ("history",     "History"),
-    ("diagnostics", "Diagnostics"),
+    ("dashboard",  "Dashboard"),
+    ("duplicates", "Duplicates"),
+    ("history",    "History"),
+    ("settings",   "Settings"),
 ]
 
 
@@ -56,7 +52,6 @@ class _Tab(tk.Frame):
         self._t: dict        = {}
         self._a11y_installed = False
 
-        # Inner frame holds label + optional badge side-by-side
         self._inner = tk.Frame(self, bg=_SURFACE)
         self._inner.pack(fill="both", expand=True, padx=12)
 
@@ -69,7 +64,6 @@ class _Tab(tk.Frame):
         )
         self._lbl.pack(side="left", fill="y")
 
-        # Badge — hidden until count > 0
         self._badge_text = tk.StringVar(value="")
         self._badge = tk.Label(
             self._inner,
@@ -81,7 +75,6 @@ class _Tab(tk.Frame):
             pady=0,
         )
 
-        # 3 px bottom indicator
         self._indicator = tk.Frame(self, height=self._INDICATOR_H, bg=_SURFACE)
         self._indicator.pack(side="bottom", fill="x")
 
@@ -93,7 +86,6 @@ class _Tab(tk.Frame):
         self._badge.bind("<Enter>",    self._hover_in)
         self._badge.bind("<Leave>",    self._hover_out)
 
-        # Keyboard: activate + move between tabs (WCAG 2.1.1, 2.4.1)
         self.bind("<Return>",     self._key_activate)
         self.bind("<Key-Return>", self._key_activate)
         self.bind("<space>",      self._key_activate)
@@ -208,11 +200,10 @@ class TabBar(tk.Frame):
 
         self._on_tab_changed = on_tab_changed
         self._tabs: Dict[str, _Tab] = {}
-        self._active_key: str = "welcome"
+        self._active_key: str = "dashboard"
         self._t = ThemeApplicator.get().build_tokens()
 
         self._build()
-        # Bottom border drawn as a child frame
         self._bottom_border = tk.Frame(self, bg=_BORDER, height=1)
         self._bottom_border.pack(side="bottom", fill="x")
         ThemeApplicator.get().register(self._apply_theme)
@@ -230,8 +221,7 @@ class TabBar(tk.Frame):
             )
             tab.pack(side="left", fill="y")
             self._tabs[key] = tab
-        self._tabs["welcome"].set_active(True)
-        self._tabs["review"].set_disabled(True)
+        self._tabs["dashboard"].set_active(True)
         for tab in self._tabs.values():
             tab.apply_theme(self._t)
 
@@ -281,11 +271,7 @@ class TabBar(tk.Frame):
         if self._active_key in self._tabs and not self._tabs[self._active_key].is_disabled():
             self._tabs[self._active_key].focus_set()
 
-    # ------------------------------------------------------------------
-    # Public API
-
     def set_active_key(self, key: str) -> None:
-        """Paint the strip for ``key`` only — used after store state updates (no callback)."""
         if key not in self._tabs:
             return
         if key == self._active_key:
@@ -297,7 +283,6 @@ class TabBar(tk.Frame):
         self._tabs[key].set_active(True)
 
     def switch_to(self, key: str) -> None:
-        """Legacy alias: prefer :meth:`set_active_key` for store-driven UIs."""
         self.set_active_key(key)
 
     def get_active(self) -> str:
@@ -307,10 +292,10 @@ class TabBar(tk.Frame):
         self._on_tab_changed = cb
 
     def set_results_badge(self, count: int) -> None:
-        self._tabs["results"].set_badge(count)
+        self._tabs["duplicates"].set_badge(count)
 
     def enable_review(self) -> None:
-        self._tabs["review"].set_disabled(False)
+        pass
 
     def disable_review(self) -> None:
-        self._tabs["review"].set_disabled(True)
+        pass

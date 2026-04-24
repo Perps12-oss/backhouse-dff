@@ -208,10 +208,40 @@ class TurboFileEngine(BaseEngine):
             self._emit_progress()
             return
 
+        # Validate roots; emit a network_error progress for unreachable paths
+        # but continue scanning any reachable ones.
+        reachable_roots: List[Path] = []
+        for root in roots:
+            try:
+                if root.exists():
+                    reachable_roots.append(root)
+                else:
+                    logger.warning("Scan root not found, skipping: %s", root)
+                    self._progress = ScanProgress(
+                        state=ScanState.SCANNING,
+                        stage="network_error",
+                        current_file=f"Network path unreachable: {root}",
+                    )
+                    self._emit_progress()
+            except (OSError, PermissionError, TimeoutError) as exc:
+                logger.warning("Cannot reach scan root %s: %s", root, exc)
+                self._progress = ScanProgress(
+                    state=ScanState.SCANNING,
+                    stage="network_error",
+                    current_file=f"Network path unreachable: {root}",
+                )
+                self._emit_progress()
+
+        if not reachable_roots:
+            self._state = ScanState.COMPLETED
+            self._progress = ScanProgress(state=ScanState.COMPLETED)
+            self._emit_progress()
+            return
+
         scanner = TurboScanner(cfg)
 
         # Drain the generator ( TurboScanner.scan yields nothing but is a gen )
-        for _ in scanner.scan(roots):
+        for _ in scanner.scan(reachable_roots):
             if self._cancel_event.is_set():
                 self._state = ScanState.CANCELLED
                 self._progress = ScanProgress(state=ScanState.CANCELLED)

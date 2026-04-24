@@ -42,7 +42,7 @@ def test_reduce_scan_completed_sets_mode_and_tab() -> None:
     assert s1.mode is AppMode.RESULTS
     assert s1.scan_mode == "photos"
     assert len(s1.groups) == 1
-    assert s1.active_tab == "results"
+    assert s1.active_tab == "duplicates"
     assert s1.selected_group_id is None
     assert s1.review_unlocked is True
     assert s1.results_file_filter == "all"
@@ -148,11 +148,11 @@ def test_review_view_filter_changed() -> None:
 
 def test_set_active_tab() -> None:
     s0 = create_initial_state()
-    s1 = reduce(s0, SetActiveTab("scan"))
-    assert s1.active_tab == "scan"
+    s1 = reduce(s0, SetActiveTab("history"))
+    assert s1.active_tab == "history"
     assert s1.mode is AppMode.IDLE
-    s2 = reduce(s1, SetActiveTab("results"))
-    assert s2.active_tab == "results"
+    s2 = reduce(s1, SetActiveTab("duplicates"))
+    assert s2.active_tab == "duplicates"
     assert s2.mode is AppMode.RESULTS
 
 
@@ -160,8 +160,8 @@ def test_set_active_tab_while_scanning_preserves_mode() -> None:
     s0 = create_initial_state()
     s1 = reduce(s0, ScanStarted("files"))
     assert s1.mode is AppMode.SCANNING
-    s2 = reduce(s1, SetActiveTab("welcome"))
-    assert s2.active_tab == "welcome"
+    s2 = reduce(s1, SetActiveTab("dashboard"))
+    assert s2.active_tab == "dashboard"
     assert s2.mode is AppMode.SCANNING
 
 
@@ -182,14 +182,15 @@ def test_scan_lifecycle() -> None:
     assert s4.scan_progress == {}
 
 
-def test_set_active_tab_review_blocked_until_unlocked() -> None:
+def test_set_active_tab_duplicates_works() -> None:
     s0 = create_initial_state()
-    s1 = reduce(s0, SetActiveTab("review"))
-    assert s1 is s0
+    s1 = reduce(s0, SetActiveTab("duplicates"))
+    assert s1.active_tab == "duplicates"
+    assert s1.mode is AppMode.RESULTS
     s2 = reduce(s0, ScanCompleted([_one_file_group()], "files"))
-    s3 = reduce(s2, SetActiveTab("review"))
-    assert s3.active_tab == "review"
-    assert s3.mode is AppMode.REVIEW
+    s3 = reduce(s2, SetActiveTab("duplicates"))
+    assert s3.active_tab == "duplicates"
+    assert s3.mode is AppMode.RESULTS
 
 
 def test_set_active_tab_unknown_key() -> None:
@@ -204,7 +205,7 @@ def test_reduce_review_navigate() -> None:
     s1 = reduce(s0, ReviewNavigate(7, None))
     assert s1.mode is AppMode.REVIEW
     assert s1.selected_group_id == 7
-    assert s1.active_tab == "review"
+    assert s1.active_tab == "duplicates"
 
 
 def test_store_dispatches_to_listeners() -> None:

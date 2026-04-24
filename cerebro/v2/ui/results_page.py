@@ -18,10 +18,13 @@ if TYPE_CHECKING:
 
 from cerebro.v2.state import StateStore
 from cerebro.v2.state.actions import (
+    ResultsFilesRemoved,
     ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
+    ScanCompleted,
     SetDryRun,
 )
+from cerebro.v2.ui.widgets.treemap import TreemapWidget
 from cerebro.v2.state.app_state import AppState
 
 _log = logging.getLogger(__name__)
@@ -958,6 +961,15 @@ class ResultsPage(tk.Frame):
         self._stats_bar = _StatsBar(self)
         self._stats_bar.pack(fill="x")
 
+        self._treemap_pane = tk.Frame(self, bg=self._t.get("bg", _WHITE), height=120)
+        self._treemap_pane.pack(fill="x")
+        self._treemap_pane.pack_propagate(False)
+        self._treemap = TreemapWidget(
+            self._treemap_pane,
+            on_group_select=self._on_treemap_select,
+        )
+        self._treemap.pack(fill="both", expand=True)
+
         self._search_row = tk.Frame(self, bg=self._t.get("bg", _WHITE))
         self._search_row.pack(fill="x", padx=8, pady=(4, 0))
         tk.Label(
@@ -1076,6 +1088,16 @@ class ResultsPage(tk.Frame):
         if isinstance(action, ResultsViewFilterChanged):
             self._filter = s.results_file_filter
             self._filter_bar._set_active(s.results_file_filter)
+        if isinstance(action, ScanCompleted):
+            self._groups = list(action.groups)
+            self._treemap.load(self._groups)
+        if isinstance(action, ResultsFilesRemoved):
+            self._groups = list(s.groups)
+            self._treemap.load(self._groups)
+
+    def _on_treemap_select(self, group_id: int) -> None:
+        if self._dupes is not None and hasattr(self._dupes, "scroll_to_group"):
+            self._dupes.scroll_to_group(group_id)
 
     def _on_filter_key(self, key: str) -> None:
         if self._use_state_for_view and self._coordinator is not None:
@@ -1112,6 +1134,11 @@ class ResultsPage(tk.Frame):
             pass
         if self._dupes is not None:
             self._dupes.apply_theme(t)
+        try:
+            self._treemap_pane.configure(bg=bg)
+            self._treemap.apply_theme(t)
+        except (tk.TclError, AttributeError):
+            pass
         for child in (
             getattr(self, "_stats_bar", None),
             getattr(self, "_toolbar", None),
@@ -1179,6 +1206,7 @@ class ResultsPage(tk.Frame):
             largest_dup=largest_dup,
             biggest_group=biggest_group,
         )
+        self._treemap.load(self._groups)
 
     def _refresh_type_counts(self) -> None:
         counts: Dict[str, int] = {

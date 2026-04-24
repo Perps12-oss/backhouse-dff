@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Optional, Callable, List, Dict
 from pathlib import Path
 
@@ -36,6 +36,102 @@ except ImportError:
 
 from cerebro.v2.core.design_tokens import Spacing, Typography, Dimensions
 from cerebro.v2.core.theme_bridge_v2 import theme_color, subscribe_to_theme
+
+
+# ---------------------------------------------------------------------------
+# Network / UNC path dialog
+# ---------------------------------------------------------------------------
+
+class NetworkPathDialog:
+    """Lets the user type a UNC path or network/mapped-drive path.
+
+    Usage::
+
+        dlg = NetworkPathDialog(parent_widget)
+        dlg.show()
+        if dlg.result:
+            # dlg.result is a non-empty string entered by the user
+            ...
+    """
+
+    def __init__(self, parent: tk.Misc) -> None:
+        self.result: Optional[str] = None
+        self._parent = parent
+
+    def show(self) -> None:
+        """Display the modal dialog and populate ``self.result`` on success."""
+        win = tk.Toplevel(self._parent)
+        win.title("Add Network Path")
+        win.resizable(False, False)
+        win.grab_set()  # modal
+
+        # ── Label ──────────────────────────────────────────────────────────
+        lbl = tk.Label(
+            win,
+            text=r"Enter network path  (e.g. \\server\share  or  Z:\)",
+            padx=12, pady=8,
+        )
+        lbl.grid(row=0, column=0, columnspan=3, sticky="w")
+
+        # ── Entry ──────────────────────────────────────────────────────────
+        entry_var = tk.StringVar()
+        entry = tk.Entry(win, textvariable=entry_var, width=52)
+        entry.grid(row=1, column=0, columnspan=2, padx=(12, 4), pady=4, sticky="ew")
+        entry.focus_set()
+
+        # ── Browse button ──────────────────────────────────────────────────
+        def _browse() -> None:
+            chosen = filedialog.askdirectory(
+                title="Select network folder",
+                parent=win,
+            )
+            if chosen:
+                entry_var.set(chosen)
+
+        btn_browse = tk.Button(win, text="Browse…", command=_browse)
+        btn_browse.grid(row=1, column=2, padx=(0, 12), pady=4)
+
+        # ── Warning label (hidden until validation fails) ──────────────────
+        warn_var = tk.StringVar()
+        warn_lbl = tk.Label(win, textvariable=warn_var, fg="orange",
+                            wraplength=380, justify="left", padx=12)
+        warn_lbl.grid(row=2, column=0, columnspan=3, sticky="w")
+
+        # ── Add / Cancel buttons ───────────────────────────────────────────
+        def _add() -> None:
+            raw = entry_var.get().strip()
+            if not raw:
+                warn_var.set("Please enter a path.")
+                return
+
+            from cerebro.utils.paths import validate_scan_path
+            ok, reason = validate_scan_path(raw)
+            if not ok:
+                # Warn but still allow adding (network may be temporarily offline)
+                warn_var.set(f"Warning: {reason}\nThe path will still be added.")
+                win.after(1500, _commit)  # auto-commit after brief pause
+                return
+            _commit()
+
+        def _commit() -> None:
+            self.result = entry_var.get().strip()
+            win.destroy()
+
+        def _cancel() -> None:
+            win.destroy()
+
+        btn_frame = tk.Frame(win)
+        btn_frame.grid(row=3, column=0, columnspan=3, pady=(4, 10))
+        tk.Button(btn_frame, text="Add", width=10, command=_add).pack(
+            side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", width=10, command=_cancel).pack(
+            side="left", padx=6)
+
+        # Bind Enter key to Add action
+        win.bind("<Return>", lambda _e: _add())
+        win.bind("<Escape>", lambda _e: _cancel())
+
+        win.wait_window()
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +175,20 @@ class ScanFolderList(CTkScrollableFrame):
             hover_color=theme_color(self._add_hover_key),
             corner_radius=Spacing.BORDER_RADIUS_SM,
         )
-        self._add_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.SM))
+        self._add_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.XS))
         self._add_btn.configure(command=self._trigger_add)
+
+        self._add_network_btn = CTkButton(
+            self,
+            text="+ Add Network Path",
+            height=Dimensions.BUTTON_HEIGHT_MD,
+            font=Typography.FONT_SM,
+            fg_color=theme_color("base.backgroundElevated"),
+            hover_color=theme_color(self._add_hover_key),
+            corner_radius=Spacing.BORDER_RADIUS_SM,
+        )
+        self._add_network_btn.pack(fill="x", padx=Spacing.SM, pady=(0, Spacing.SM))
+        self._add_network_btn.configure(command=self._trigger_add_network)
 
     def _apply_theme(self) -> None:
         try:
@@ -95,6 +203,13 @@ class ScanFolderList(CTkScrollableFrame):
         try:
             self._add_btn.configure(
                 fg_color=theme_color(self._add_color_key),
+                hover_color=theme_color(self._add_hover_key),
+            )
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            pass
+        try:
+            self._add_network_btn.configure(
+                fg_color=theme_color("base.backgroundElevated"),
                 hover_color=theme_color(self._add_hover_key),
             )
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
@@ -114,6 +229,12 @@ class ScanFolderList(CTkScrollableFrame):
         path = filedialog.askdirectory(title="Select folder")
         if path:
             self.add_folder(Path(path))
+
+    def _trigger_add_network(self) -> None:
+        dlg = NetworkPathDialog(self)
+        dlg.show()
+        if dlg.result:
+            self.add_folder(Path(dlg.result))
 
     def add_folder(self, path: Path) -> None:
         if path in self._folders:
