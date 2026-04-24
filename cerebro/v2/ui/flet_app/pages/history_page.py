@@ -45,7 +45,7 @@ class HistoryPage(ft.Column):
                     spacing=t.spacing.md,
                 ),
                 padding=t.spacing.xxl,
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment(0.5, 0.5),
                 expand=True,
             ),
         ]

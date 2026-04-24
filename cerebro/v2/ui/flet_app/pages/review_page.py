@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import (
     FILTER_EXTS, EXT_ALL_KNOWN, ThemeTokens, classify_file, fmt_size, theme_for_mode,
 )
@@ -142,7 +143,7 @@ class ReviewPage(ft.Column):
                 spacing=t.spacing.md,
             ),
             expand=True,
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment(0.5, 0.5),
         )
 
         # Grid view
@@ -157,21 +158,23 @@ class ReviewPage(ft.Column):
         )
 
         # Compare view
+        self._compare_panel_a = ft.Container(
+            expand=True,
+            padding=t.spacing.md,
+            border=ft.border.all(1, t.colors.border),
+            border_radius=t.border_radius,
+        )
+        self._compare_panel_b = ft.Container(
+            expand=True,
+            padding=t.spacing.md,
+            border=ft.border.all(1, t.colors.border),
+            border_radius=t.border_radius,
+        )
         self._compare_view = ft.Row(
             [
-                self._compare_panel_a = ft.Container(
-                    expand=True,
-                    padding=t.spacing.md,
-                    border=ft.border.all(1, t.colors.border),
-                    border_radius=t.border_radius,
-                ),
+                self._compare_panel_a,
                 ft.VerticalDivider(width=1),
-                self._compare_panel_b = ft.Container(
-                    expand=True,
-                    padding=t.spacing.md,
-                    border=ft.border.all(1, t.colors.border),
-                    border_radius=t.border_radius,
-                ),
+                self._compare_panel_b,
             ],
             expand=True,
             visible=False,
@@ -207,7 +210,25 @@ class ReviewPage(ft.Column):
         self._enter_mode("grid")
 
     def apply_pruned_groups(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
-        self.load_results(groups, mode)
+        self._groups = list(groups)
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        if self._mode == "compare":
+            if self._compare_gid is None or self._compare_gid not in self._group_files:
+                self._enter_compare(self._groups[0].group_id)
+                return
+            files = self._group_files[self._compare_gid]
+            if not files:
+                self._enter_compare(self._groups[0].group_id)
+                return
+            self._compare_a = files[0]
+            self._compare_b = files[1] if len(files) > 1 else None
+            self._update_compare_panels()
+            self._update_compare_chrome()
+        else:
+            self._refresh_grid()
 
     def on_show(self) -> None:
         if not self._groups:
@@ -220,6 +241,8 @@ class ReviewPage(ft.Column):
 
     def _enter_mode(self, mode: str) -> None:
         self._mode = mode
+        if mode != "compare":
+            self._page.on_keyboard_event = None
         self._content.controls.clear()
 
         if mode == "empty":
@@ -264,13 +287,33 @@ class ReviewPage(ft.Column):
         exts = FILTER_EXTS.get(self._filter_key)
         return ext.lower() in exts if exts else True
 
+    def _thumb_widget(self, path: Path, edge: int) -> ft.Control:
+        t = self._t
+        if is_image_path(path):
+            b64 = get_thumbnail_cache().get_base64(path)
+            if b64:
+                return ft.Image(
+                    src=f"data:image/jpeg;base64,{b64}",
+                    width=edge,
+                    height=edge,
+                    fit=ft.BoxFit.CONTAIN,
+                    border_radius=8,
+                )
+        return ft.Icon(
+            ft.icons.Icons.INSERT_DRIVE_FILE,
+            size=max(28, edge // 2),
+            color=t.colors.primary,
+        )
+
     def _build_tile(self, f: DuplicateFile) -> ft.Container:
         t = self._t
-        name = Path(str(f.path)).name
-        return ft.Container(
+        p = Path(str(f.path))
+        name = p.name
+        thumb = self._thumb_widget(p, 72)
+        tile = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=40, color=t.colors.primary),
+                    thumb,
                     ft.Text(
                         name,
                         size=t.typography.size_xs,
@@ -290,6 +333,15 @@ class ReviewPage(ft.Column):
             bgcolor=t.colors.bg,
             on_click=lambda e, file=f: self._on_tile_clicked(file),
         )
+
+        def _hover(e: ft.ControlEvent) -> None:
+            raw = getattr(e, "data", None)
+            enter = raw is True or str(raw).lower() in ("true", "1", "enter")
+            tile.bgcolor = t.colors.bg3 if enter else t.colors.bg
+            tile.update()
+
+        tile.on_hover = _hover
+        return tile
 
     def _on_tile_clicked(self, f: DuplicateFile) -> None:
         gid = next(
@@ -331,11 +383,13 @@ class ReviewPage(ft.Column):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 expand=True,
             )
-        name = Path(str(f.path)).name
+        p = Path(str(f.path))
+        name = p.name
+        thumb = self._thumb_widget(p, 120)
         return ft.Column(
             [
                 ft.Text(f"Side {label}", size=t.typography.size_sm, weight=ft.FontWeight.BOLD, color=t.colors.primary),
-                ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=64, color=t.colors.fg_muted),
+                thumb,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 ft.Text(fmt_size(f.size), size=t.typography.size_sm, color=t.colors.fg2),
                 ft.Text(
@@ -407,8 +461,6 @@ class ReviewPage(ft.Column):
         if self._mode == "grid":
             self._refresh_grid()
 
-    # -- Navigation -----------------------------------------------------------
-
     # -- Keyboard navigation --------------------------------------------------
 
     def _bind_keys(self) -> None:
@@ -417,13 +469,14 @@ class ReviewPage(ft.Column):
     def _on_key(self, e: ft.KeyboardEvent) -> None:
         if self._mode != "compare":
             return
-        if e.key == "Arrow Left":
+        k = e.key.lower().replace(" ", "")
+        if k in ("arrowleft", "left"):
             self._prev_group()
-        elif e.key == "Arrow Right":
+        elif k in ("arrowright", "right"):
             self._next_group()
-        elif e.key == "D" or e.key == "d":
+        elif k == "d":
             self._delete_compare_side("b")
-        elif e.key == "K" or e.key == "k":
+        elif k == "k":
             self._delete_compare_side("a")
 
     # -- Delete from compare --------------------------------------------------

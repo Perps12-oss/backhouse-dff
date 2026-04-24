@@ -7,12 +7,11 @@ are swapped into. All pages receive the same consistent chrome.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES, RouteInfo, key_for_route
-from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES, key_for_route
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -34,7 +33,18 @@ class AppLayout(ft.Row):
         self._bridge = state_bridge
         self._builders = page_builders
         self._current_key: str = "dashboard"
-        self._content_slot = ft.Container(expand=True)
+
+        self._switcher = ft.AnimatedSwitcher(
+            expand=True,
+            content=ft.Container(
+                expand=True,
+                alignment=ft.Alignment(0.5, 0.5),
+                content=ft.Text(""),
+            ),
+            duration=220,
+            reverse_duration=120,
+            transition=ft.AnimatedSwitcherTransition.FADE,
+        )
 
         nav_destinations = [
             ft.NavigationRailDestination(
@@ -58,7 +68,7 @@ class AppLayout(ft.Row):
         self.controls = [
             self._nav,
             ft.VerticalDivider(width=1),
-            self._content_slot,
+            self._switcher,
         ]
 
     def _on_nav_change(self, e: ft.ControlEvent) -> None:
@@ -79,10 +89,15 @@ class AppLayout(ft.Row):
 
         builder = self._builders.get(key)
         if builder:
-            self._content_slot.content = builder()
+            inner = builder()
+            self._switcher.content = ft.Container(expand=True, content=inner)
         else:
-            self._content_slot.content = ft.Text("Page not found")
-        self._content_slot.update()
+            self._switcher.content = ft.Container(
+                expand=True,
+                alignment=ft.Alignment(0.5, 0.5),
+                content=ft.Text("Page not found"),
+            )
+        self._switcher.update()
 
         route_info = ROUTE_MAP[key]
         self._page.route = route_info.route

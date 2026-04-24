@@ -12,7 +12,8 @@ from typing import Dict
 import flet as ft
 
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.app_state import create_initial_state
+from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted
+from cerebro.v2.state.app_state import AppState, create_initial_state
 from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.flet_app.layout import AppLayout
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, default_route, key_for_route
@@ -50,46 +51,35 @@ def _main(page: ft.Page) -> None:
         font_family=dark_theme.typography.family,
     )
 
-    # -- Services -------------------------------------------------------------
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
     backend = BackendService()
     bridge = StateBridge(page, store, coordinator, backend)
 
-    # -- Page builders --------------------------------------------------------
-    def _build_dashboard() -> ft.Control:
-        from cerebro.v2.ui.flet_app.pages.dashboard_page import DashboardPage
-        return DashboardPage(bridge)
+    # Singleton pages so scan results / state survive tab switches.
+    from cerebro.v2.ui.flet_app.pages.dashboard_page import DashboardPage
+    from cerebro.v2.ui.flet_app.pages.results_page import ResultsPage
+    from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+    from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
+    from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
 
-    def _build_results() -> ft.Control:
-        from cerebro.v2.ui.flet_app.pages.results_page import ResultsPage
-        return ResultsPage(bridge)
-
-    def _build_review() -> ft.Control:
-        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
-        return ReviewPage(bridge)
-
-    def _build_history() -> ft.Control:
-        from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
-        return HistoryPage(bridge)
-
-    def _build_settings() -> ft.Control:
-        from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
-        return SettingsPage(bridge)
+    dashboard_page = DashboardPage(bridge)
+    results_page = ResultsPage(bridge)
+    review_page = ReviewPage(bridge)
+    history_page = HistoryPage(bridge)
+    settings_page = SettingsPage(bridge)
 
     builders: Dict[str, ...] = {
-        "dashboard": _build_dashboard,
-        "duplicates": _build_results,
-        "review": _build_review,
-        "history": _build_history,
-        "settings": _build_settings,
+        "dashboard": lambda: dashboard_page,
+        "duplicates": lambda: results_page,
+        "review": lambda: review_page,
+        "history": lambda: history_page,
+        "settings": lambda: settings_page,
     }
 
-    # -- Layout ---------------------------------------------------------------
     layout = AppLayout(page, bridge, builders)
     page.add(layout)
 
-    # -- Route handling -------------------------------------------------------
     def _on_route_change(e: ft.RouteChangeEvent) -> None:
         key = key_for_route(e.route)
         layout.navigate_to(key)
@@ -97,16 +87,29 @@ def _main(page: ft.Page) -> None:
     page.on_route_change = _on_route_change
     page.route = default_route()
 
-    # -- State bridge subscription ---------------------------------------------
-    def _on_state_change(new_state) -> None:
-        mode = new_state.active_tab
-        if mode and mode != layout.current_key:
-            layout.navigate_to(mode)
+    def _sync_groups_from_state(s: AppState) -> None:
+        groups = list(s.groups)
+        mode = s.scan_mode or "files"
+        if not groups:
+            results_page.load_results([], mode)
+            review_page.load_results([], mode)
+            return
+        results_page.load_results(groups, mode)
+        if layout.current_key == "review":
+            review_page.apply_pruned_groups(groups, mode)
+        else:
+            review_page.load_results(groups, mode)
+
+    def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
+        tab = new_state.active_tab
+        if tab and tab in builders and tab != layout.current_key:
+            layout.navigate_to(tab)
+        if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
+            _sync_groups_from_state(new_state)
 
     bridge.set_on_state_change(_on_state_change)
     bridge.subscribe()
 
-    # -- Wire scan completion to results page ----------------------------------
     def _on_scan_complete(results, mode) -> None:
         bridge.dispatch_scan_complete(results, mode)
 

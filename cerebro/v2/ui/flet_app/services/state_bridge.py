@@ -8,23 +8,14 @@ to read current state without direct store access.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.actions import (
-    ResultsViewFilterChanged,
-    ResultsViewTextFilterChanged,
-    ReviewViewFilterChanged,
-    ScanCompleted,
-    ScanProgressSnapshot,
-    ScanStarted,
-    SetActiveTab,
-)
-from cerebro.v2.state.app_state import AppState, AppMode
+from cerebro.v2.state.app_state import AppState
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.backend_service import BackendService
@@ -52,8 +43,7 @@ class StateBridge:
         self._coordinator = coordinator
         self._backend = backend
         self._unsubscribe: Optional[Callable[[], None]] = None
-        self._on_state_change: Optional[Callable[[AppState], None]] = None
-        self._last_mode: AppMode = AppMode.IDLE
+        self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
 
     @property
     def store(self) -> StateStore:
@@ -80,15 +70,15 @@ class StateBridge:
             self._unsubscribe()
             self._unsubscribe = None
 
-    def set_on_state_change(self, cb: Callable[[AppState], None]) -> None:
-        """Register a callback fired on every state change."""
+    def set_on_state_change(self, cb: Callable[[AppState, AppState, object], None]) -> None:
+        """Register a callback fired on every state change (new, old, action)."""
         self._on_state_change = cb
 
     def _on_store_change(self, new: AppState, old: AppState, action: object) -> None:
         """Store listener: triggers UI refresh via page.update()."""
         if self._on_state_change:
             try:
-                self._on_state_change(new)
+                self._on_state_change(new, old, action)
             except Exception:
                 _log.exception("State change callback failed")
         try:

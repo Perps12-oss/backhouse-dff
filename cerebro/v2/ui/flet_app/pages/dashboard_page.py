@@ -51,7 +51,7 @@ class DashboardPage(ft.Column):
                 spacing=s.sm,
             ),
             padding=t.spacing.xxl,
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment(0.5, 0.5),
         )
 
         # Scan mode selector
@@ -133,15 +133,15 @@ class DashboardPage(ft.Column):
         self.controls = [
             self._hero,
             ft.Container(content=self._mode_row, padding=ft.padding.only(bottom=s.lg),
-                         alignment=ft.alignment.center),
+                         alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._folder_row, padding=ft.padding.symmetric(horizontal=s.xl)),
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md),
-                         alignment=ft.alignment.center),
+                         alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs),
-                         alignment=ft.alignment.center),
-            ft.Container(content=self._progress_label, alignment=ft.alignment.center),
+                         alignment=ft.Alignment(0.5, 0.5)),
+            ft.Container(content=self._progress_label, alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md),
-                         alignment=ft.alignment.center),
+                         alignment=ft.Alignment(0.5, 0.5)),
         ]
 
     def _select_mode(self, key: str) -> None:

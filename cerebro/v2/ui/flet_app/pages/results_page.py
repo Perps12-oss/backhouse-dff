@@ -56,7 +56,7 @@ class ResultsPage(ft.Column):
             "Move to Trash",
             icon=ft.icons.Icons.DELETE_OUTLINE,
             on_click=self._on_delete_clicked,
-            style=ft.ButtonStyle(bgcolor=t.colors.danger, color=ft.colors.bg),
+            style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
             visible=False,
         )
         self._permanent_btn = ft.OutlinedButton(
@@ -118,7 +118,7 @@ class ResultsPage(ft.Column):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
-            expand=True, alignment=ft.alignment.center,
+            expand=True, alignment=ft.Alignment(0.5, 0.5),
         )
 
         self.controls = [
@@ -146,6 +146,14 @@ class ResultsPage(ft.Column):
             self._selected_paths.discard(path)
         else:
             self._selected_paths.add(path)
+        self._update_selection_ui()
+
+    def _on_file_checkbox(self, e: ft.ControlEvent, path: str) -> None:
+        checked = bool(getattr(e.control, "value", False))
+        if checked:
+            self._selected_paths.add(path)
+        else:
+            self._selected_paths.discard(path)
         self._update_selection_ui()
 
     def _select_all_except_largest(self, e=None) -> None:
@@ -305,7 +313,7 @@ class ResultsPage(ft.Column):
                         ft.Checkbox(
                             label=str(Path(str(f.path)).name),
                             value=str(f.path) in self._selected_paths,
-                            on_change=lambda e, p=str(f.path): self._toggle_file(p),
+                            on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
                             label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
                         ),
                         ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
