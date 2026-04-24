@@ -12,3 +12,4 @@ _holding_cleanup_review/
 diagnostics/
 build/
 dist/
+.claude/

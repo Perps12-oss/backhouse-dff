@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for CEREBRO (CustomTkinter + cerebro).
+PyInstaller spec for CEREBRO (Flet + Flutter desktop).
 
 Build (onedir, no console):
   pyinstaller --noconfirm CEREBRO.spec
@@ -18,18 +18,17 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 block_cipher = None
 spec_root = Path(SPECPATH).resolve()
 
-# --- Third-party assets (CTk themes, fonts, etc.) ---
+# --- Third-party assets ---
 datas: list[tuple[str, str]] = []
 binaries: list = []
 hiddenimports: list[str] = [
-    "PIL._tkinter_finder",
     "yaml",
     "send2trash",
     "sqlite3",
-    "darkdetect",
+    "flet",
 ]
 
-for pkg in ("customtkinter", "PIL"):
+for pkg in ("flet", "PIL"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -38,16 +37,7 @@ for pkg in ("customtkinter", "PIL"):
     except Exception:
         pass
 
-# Optional drag-and-drop (pip install tkinterdnd2); harmless if absent at build time.
-try:
-    d, b, h = collect_all("tkinterdnd2")
-    datas += d
-    binaries += b
-    hiddenimports += h
-except Exception:
-    hiddenimports.append("tkinterdnd2")
-
-# Whole cerebro package (engines, v2 UI, theme JSON under cerebro/themes, etc.)
+# Whole cerebro package (engines, v2 UI, etc.)
 hiddenimports += collect_submodules("cerebro")
 
 # Theme JSON is loaded by path — ensure tree is present under _MEIPASS/cerebro/themes
@@ -70,9 +60,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Shrink bundle — test stack not needed in shipped GUI
         "pytest",
         "unittest",
+        "customtkinter",
+        "tkinterdnd2",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

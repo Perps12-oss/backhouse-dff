@@ -1,4 +1,4 @@
-"""CEREBRO v2 launcher (CustomTkinter)."""
+"""CEREBRO v2 launcher — Flet (Flutter) UI."""
 
 from __future__ import annotations
 
@@ -9,10 +9,9 @@ from cerebro.runtime_deps import ensure_runtime_dependencies
 
 def main() -> int:
     ensure_runtime_dependencies()
-    # Import UI only after optional bootstrap (so pip can install CustomTkinter first).
-    from cerebro.v2.ui.app_shell import run_app
+    from cerebro.v2.ui.flet_app.main import run_flet_app
 
-    run_app()
+    run_flet_app()
     return 0
 
 
