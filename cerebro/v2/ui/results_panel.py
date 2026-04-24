@@ -474,6 +474,9 @@ class ResultsPanel(CTkFrame):
         self._bulk_selection_in_progress: bool = False
         self._on_file_row_focus: Optional[Callable[[str], None]] = None
 
+    # ------------------------------------------------------------------
+    # File data helpers
+    # ------------------------------------------------------------------
     def _fd_path(self, fd) -> str:
         if isinstance(fd, dict):
             return str(fd.get("path", ""))
@@ -484,6 +487,9 @@ class ResultsPanel(CTkFrame):
             return int(fd.get("size", 0))
         return int(getattr(fd, "size", 0))
 
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
     def _apply_theme(self) -> None:
         """Reconfigure all widget colors when theme changes."""
         self.configure(fg_color=theme_color("results.background"))
@@ -497,6 +503,9 @@ class ResultsPanel(CTkFrame):
             if lbl:
                 lbl.configure(text_color=theme_color("base.foregroundSecondary"))
 
+    # ------------------------------------------------------------------
+    # UI construction helpers
+    # ------------------------------------------------------------------
     def _build_status_bar(self) -> None:
         """Build review summary strip (counts, mode/view, and selection stats)."""
         self._status_frame = CTkFrame(
@@ -678,7 +687,6 @@ class ResultsPanel(CTkFrame):
     # ===================
     # EVENT HANDLERS
     # ===================
-
     def _on_filter_changed(self, filter_key: str) -> None:
         """Handle filter tab change — receives a FilterType key directly."""
         if filter_key != self._current_filter:
@@ -783,7 +791,6 @@ class ResultsPanel(CTkFrame):
     # ------------------------------------------------------------------
     # Context menu actions
     # ------------------------------------------------------------------
-
     def _open_file(self, path: str) -> None:
         import sys, subprocess
         try:
@@ -880,7 +887,6 @@ class ResultsPanel(CTkFrame):
     # ===================
     # PUBLIC API
     # ===================
-
     def load_results(self, groups: List[DuplicateGroup]) -> None:
         """
         Load duplicate groups into results panel.
@@ -1804,5 +1810,3 @@ class _FilterBar(CTkFrame):
         except (tk.TclError, AttributeError) as exc:
             logger.debug("Filter bar theme application skipped: %s", exc)
         self._refresh_styles()
-
-

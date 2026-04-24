@@ -1,0 +1,131 @@
+"""Backend service: threads scan execution behind an async-safe interface.
+
+Wraps ScanOrchestrator and provides:
+- Threaded scan execution with progress callbacks
+- Cancellation support via threading.Event
+- Async-safe result delivery back to Flet's UI thread
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
+from cerebro.engines.orchestrator import ScanOrchestrator
+
+_log = logging.getLogger(__name__)
+
+
+class BackendService:
+    """Facade over ScanOrchestrator with threaded execution and Flet-safe callbacks."""
+
+    def __init__(self) -> None:
+        self._orchestrator = ScanOrchestrator()
+        self._cancel_event = threading.Event()
+        self._scanning = False
+        self._scan_lock = threading.Lock()
+
+        self._on_progress: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._on_complete: Optional[Callable[[List[DuplicateGroup], str], None]] = None
+        self._on_error: Optional[Callable[[str], None]] = None
+
+    @property
+    def orchestrator(self) -> ScanOrchestrator:
+        return self._orchestrator
+
+    @property
+    def is_scanning(self) -> bool:
+        return self._scanning
+
+    # -- Callback registration ------------------------------------------------
+
+    def set_on_progress(self, cb: Callable[[Dict[str, Any]], None]) -> None:
+        self._on_progress = cb
+
+    def set_on_complete(self, cb: Callable[[List[DuplicateGroup], str], None]) -> None:
+        self._on_complete = cb
+
+    def set_on_error(self, cb: Callable[[str], None]) -> None:
+        self._on_error = cb
+
+    # -- Scan lifecycle -------------------------------------------------------
+
+    def start_scan(
+        self,
+        folders: List[Path],
+        mode: str = "files",
+        protected: Optional[List[Path]] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Start a scan in a background thread. Returns False if already scanning."""
+        with self._scan_lock:
+            if self._scanning:
+                return False
+            self._scanning = True
+            self._cancel_event.clear()
+
+        def _worker() -> None:
+            try:
+                self._orchestrator.set_mode(mode)
+                self._orchestrator.start_scan(
+                    folders=folders,
+                    protected=protected or [],
+                    options=options or {},
+                    progress_callback=self._handle_progress,
+                )
+                results = self._orchestrator.get_results()
+                if self._on_complete:
+                    self._on_complete(results, mode)
+            except Exception as exc:
+                _log.exception("Scan worker failed")
+                if self._on_error:
+                    self._on_error(str(exc))
+            finally:
+                with self._scan_lock:
+                    self._scanning = False
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        return True
+
+    def cancel_scan(self) -> None:
+        """Request scan cancellation."""
+        self._cancel_event.set()
+        try:
+            self._orchestrator.cancel()
+        except Exception:
+            _log.exception("Cancel failed")
+
+    # -- Engine introspection -------------------------------------------------
+
+    def get_results(self) -> List[DuplicateGroup]:
+        return self._orchestrator.get_results()
+
+    def probe_mode(self, mode_key: str) -> Optional[Any]:
+        from cerebro.v2.core.engine_deps import probe_mode as _probe
+        return _probe(mode_key)
+
+    # -- Internal -------------------------------------------------------------
+
+    def _handle_progress(self, progress: ScanProgress) -> None:
+        if self._cancel_event.is_set():
+            return
+        if self._on_progress:
+            data = {
+                "state": progress.state.value if progress.state else "",
+                "files_scanned": progress.files_scanned,
+                "files_total": progress.files_total,
+                "duplicates_found": progress.duplicates_found,
+                "groups_found": progress.groups_found,
+                "bytes_reclaimable": progress.bytes_reclaimable,
+                "elapsed_seconds": progress.elapsed_seconds,
+                "current_file": progress.current_file or "",
+                "stage": progress.stage or "",
+            }
+            self._on_progress(data)
+        if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
+            with self._scan_lock:
+                self._scanning = False
