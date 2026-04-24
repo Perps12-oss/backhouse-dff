@@ -24,7 +24,7 @@ _REQUIRED: Tuple[Tuple[str, str], ...] = (
     ("psutil", "psutil"),
     ("PIL", "Pillow"),
     ("send2trash", "send2trash"),
-    ("customtkinter", "customtkinter"),
+    ("flet", "flet"),
     ("imagehash", "imagehash"),
     ("numpy", "numpy"),
 )
@@ -75,15 +75,6 @@ def _pip_install(pip_names: Sequence[str], requirements: Path | None) -> int:
     return subprocess.call(cmd)
 
 
-def _warn_optional_drag_drop() -> None:
-    if importlib.util.find_spec("tkinterdnd2") is None:
-        print(
-            "[CEREBRO] Optional: install tkinterdnd2 for drag-and-drop folders "
-            "(pip install tkinterdnd2).",
-            file=sys.stderr,
-        )
-
-
 def ensure_runtime_dependencies() -> None:
     """Install missing PyPI packages when running from source, then restart the process.
 
@@ -109,7 +100,6 @@ def ensure_runtime_dependencies() -> None:
 
     missing = _missing_pip_names()
     if not missing:
-        _warn_optional_drag_drop()
         return
 
     print(

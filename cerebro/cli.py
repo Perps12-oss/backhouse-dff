@@ -40,8 +40,8 @@ def main(argv: List[str] | None = None) -> int:
 def _cmd_gui() -> int:
     from cerebro.runtime_deps import ensure_runtime_dependencies
     ensure_runtime_dependencies()
-    from cerebro.v2.ui.app_shell import run_app
-    run_app()
+    from cerebro.v2.ui.flet_app.main import run_flet_app
+    run_flet_app()
     return 0
 
 

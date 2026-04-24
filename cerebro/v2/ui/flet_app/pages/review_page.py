@@ -49,6 +49,17 @@ class ReviewPage(ft.Column):
         t = self._t
 
         # Top bar
+        self._title_lbl = ft.Text(
+            "Review",
+            size=t.typography.size_lg,
+            weight=ft.FontWeight.BOLD,
+            color=t.colors.fg,
+        )
+        self._summary_lbl = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg2,
+        )
         self._top_bar = ft.Row(
             [
                 ft.TextButton(
@@ -56,28 +67,20 @@ class ReviewPage(ft.Column):
                     on_click=self._go_back,
                     style=ft.ButtonStyle(color=t.colors.primary),
                 ),
-                self._title_lbl = ft.Text(
-                    "Review",
-                    size=t.typography.size_lg,
-                    weight=ft.FontWeight.BOLD,
-                    color=t.colors.fg,
-                ),
-                self._summary_lbl = ft.Text(
-                    "",
-                    size=t.typography.size_sm,
-                    color=t.colors.fg2,
-                ),
+                self._title_lbl,
+                self._summary_lbl,
             ],
             alignment=ft.MainAxisAlignment.START,
         )
 
         # Compare navigation bar
+        self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
         self._cmp_bar = ft.Row(
             [
                 ft.TextButton("← Grid", on_click=self._to_grid),
                 ft.TextButton("← Prev", on_click=self._prev_group),
                 ft.TextButton("Next →", on_click=self._next_group),
-                self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600),
+                self._cmp_title,
                 ft.TextButton("Open A", on_click=lambda e: self._open_side("a")),
                 ft.TextButton("Open B", on_click=lambda e: self._open_side("b")),
             ],

@@ -44,6 +44,11 @@ class ResultsPage(ft.Column):
         t = self._t
 
         # Header
+        self._summary = ft.Text(
+            "",
+            size=t.typography.size_base,
+            color=t.colors.fg2,
+        )
         self._header = ft.Row(
             [
                 ft.Text(
@@ -52,11 +57,7 @@ class ResultsPage(ft.Column):
                     weight=ft.FontWeight.BOLD,
                     color=t.colors.fg,
                 ),
-                self._summary = ft.Text(
-                    "",
-                    size=t.typography.size_base,
-                    color=t.colors.fg2,
-                ),
+                self._summary,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
