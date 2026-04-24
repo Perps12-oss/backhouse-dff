@@ -14,8 +14,23 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from datetime import datetime
+from pathlib import Path
 from tkinter import ttk
-from typing import List
+from typing import Any, Optional
+
+from cerebro.v2.state.actions import (
+    DeletionHistoryDataLoaded,
+    HistoryDataLoaded,
+    HistoryGridFilterChanged,
+    HistoryGridPageChanged,
+    HistoryGridSortChanged,
+    HistorySubTabChanged,
+)
+from cerebro.v2.state.history_view import (
+    apply_scan_history_view,
+    default_sort_asc_for_column,
+    row_to_entry_proxy,
+)
 
 from cerebro.v2.ui.design_tokens import (
     BORDER, CARD_BG, FONT_BODY, FONT_HEADER, FONT_SMALL, FONT_TITLE,
@@ -111,10 +126,13 @@ class _SectionHeader(tk.Frame):
 class _SubTabBar(tk.Frame):
     TABS = [("scan", "Scan History"), ("deletion", "Deletion History")]
 
-    def __init__(self, parent: tk.Widget, on_change) -> None:
+    def __init__(
+        self, parent: tk.Widget, on_change, *, state_driven: bool = False
+    ) -> None:
         super().__init__(parent, bg=NAVY_MID, height=34)
         self.pack_propagate(False)
         self._on_change = on_change
+        self._state_driven = state_driven
         self._active = "scan"
         self._btns: dict[str, tk.Label] = {}
         self._colors = _page_colors({})
@@ -128,12 +146,23 @@ class _SubTabBar(tk.Frame):
             lbl.bind("<Button-1>", lambda e, k=key: self._select(k))
             self._btns[key] = lbl
 
-        self._select("scan")
+        if self._state_driven:
+            self._paint()
+        else:
+            self._select("scan")
+
+    def set_active_key(self, key: str) -> None:
+        if key in self._btns:
+            self._active = key
+            self._paint()
 
     def _select(self, key: str) -> None:
-        self._active = key
-        self._paint()
-        self._on_change(key)
+        if self._state_driven:
+            self._on_change(key)
+        else:
+            self._active = key
+            self._paint()
+            self._on_change(key)
 
     def _paint(self) -> None:
         bar = self._colors["bar"]
@@ -158,7 +187,7 @@ class _SubTabBar(tk.Frame):
 # ---------------------------------------------------------------------------
 
 class _ScanHistoryPanel(tk.Frame):
-    """Treeview showing scan history entries, loaded from SQLite."""
+    """Scan history: sort / filter / pagination driven by :class:`AppState` (Blueprint §3)."""
 
     _COLS = ("date", "mode", "folders", "groups", "files", "reclaimable", "duration")
     _HEADINGS = {
@@ -173,15 +202,45 @@ class _ScanHistoryPanel(tk.Frame):
 
     _STYLE_NAME = "History.Treeview"
 
-    def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        on_session_click=None,
+        store: Any = None,
+        coordinator: Any = None,
+    ) -> None:
         super().__init__(parent, bg=NAVY)
         self._on_session_click = on_session_click
-        self._entries: list = []
+        self._store = store
+        self._coordinator = coordinator
+        self._unsub: Any = None
+        self._iid_to_row: dict = {}
+        self._filter_var = tk.StringVar(value="")
+        self._filter_after: Optional[str] = None
+        self._toolbar: tk.Frame | None = None
+        self._filter_entry: tk.Entry | None = None
+        self._pg_frame: tk.Frame | None = None
+        self._pg_lbl: tk.Label | None = None
         self._header: _SectionHeader | None = None
         self._sep: tk.Frame | None = None
         self._tree_frame: tk.Frame | None = None
         self._colors = _page_colors({})
         self._build()
+        if self._store is not None:
+            self._unsub = self._store.subscribe(self._on_store)
+
+    def _on_store(self, s: Any, _old: Any, action: Any) -> None:
+        if not isinstance(
+            action,
+            (
+                HistoryDataLoaded,
+                HistoryGridSortChanged,
+                HistoryGridFilterChanged,
+                HistoryGridPageChanged,
+            ),
+        ):
+            return
+        self._render_from_state(s)
 
     def _build(self) -> None:
         self._header = _SectionHeader(
@@ -191,6 +250,22 @@ class _ScanHistoryPanel(tk.Frame):
         self._header.pack(fill="x")
         self._sep = tk.Frame(self, bg=BORDER, height=1)
         self._sep.pack(fill="x")
+
+        # Filter row (state-driven path only; legacy list mode has no filter)
+        self._toolbar = None
+        self._filter_entry = None
+        if self._coordinator is not None:
+            self._toolbar = tk.Frame(self, bg=NAVY)
+            self._toolbar.pack(fill="x", padx=PAD_X, pady=(PAD_Y // 2, 0))
+            fl = tk.Label(
+                self._toolbar, text="Filter:", bg=NAVY, fg=TEXT_SECONDARY, font=FONT_SMALL,
+            )
+            fl.pack(side="left", padx=(0, 8))
+            self._filter_entry = tk.Entry(
+                self._toolbar, textvariable=self._filter_var, width=32, font=FONT_SMALL,
+            )
+            self._filter_entry.pack(side="left", fill="x", expand=True)
+            self._filter_entry.bind("<KeyRelease>", self._on_filter_key)
 
         self._tree_frame = tk.Frame(self, bg=NAVY)
         self._tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
@@ -215,7 +290,8 @@ class _ScanHistoryPanel(tk.Frame):
             selectmode="browse", style=self._STYLE_NAME,
         )
         for col, (text, width) in self._HEADINGS.items():
-            self._tree.heading(col, text=text)
+            sort_cmd = (lambda c=col: self._on_sort_column(c)) if self._coordinator else None
+            self._tree.heading(col, text=text, command=sort_cmd)
             anchor = "w" if col == "date" else "center"
             self._tree.column(col, width=width, anchor=anchor)
 
@@ -225,10 +301,117 @@ class _ScanHistoryPanel(tk.Frame):
         self._tree.pack(fill="both", expand=True)
         self._tree.bind("<Double-1>", self._on_row_double_click)
 
+        # Pagination (only when state-driven; legacy mode shows list without pager)
+        self._pg_frame = None
+        self._pg_lbl = None
+        if self._coordinator is not None and self._store is not None:
+            self._pg_frame = tk.Frame(self, bg=NAVY_MID, height=28)
+            self._pg_frame.pack(fill="x", padx=PAD_X, pady=(4, 0))
+            self._pg_frame.pack_propagate(False)
+            tk.Button(
+                self._pg_frame, text="<< Prev", command=self._on_page_prev,
+                font=FONT_SMALL, relief="flat", padx=8,
+            ).pack(side="left", padx=(0, 8))
+            self._pg_lbl = tk.Label(
+                self._pg_frame, text="Page —", bg=NAVY_MID, fg=TEXT_SECONDARY, font=FONT_SMALL,
+            )
+            self._pg_lbl.pack(side="left", expand=True)
+            tk.Button(
+                self._pg_frame, text="Next >>", command=self._on_page_next,
+                font=FONT_SMALL, relief="flat", padx=8,
+            ).pack(side="right")
+
         self._count_lbl = tk.Label(
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
         )
         self._count_lbl.pack(fill="x", side="bottom", pady=(PAD_Y, 0))
+
+    def _on_filter_key(self, _event) -> None:
+        if not self._coordinator:
+            return
+        if self._filter_after is not None:
+            try:
+                self.after_cancel(self._filter_after)
+            except (tk.TclError, ValueError):
+                pass
+            self._filter_after = None
+        self._filter_after = str(self.after(250, self._apply_filter_debounced))
+
+    def _apply_filter_debounced(self) -> None:
+        self._filter_after = None
+        if self._coordinator is not None:
+            self._coordinator.history_set_filter(self._filter_var.get())
+
+    def _on_sort_column(self, col: str) -> None:
+        if not (self._coordinator and self._store):
+            return
+        s = self._store.get_state()
+        if s.history_sort_column == col:
+            new_asc = not s.history_sort_asc
+        else:
+            new_asc = default_sort_asc_for_column(col)
+        self._coordinator.history_set_sort(col, new_asc)
+
+    def _on_page_prev(self) -> None:
+        if not (self._coordinator and self._store):
+            return
+        p = int(self._store.get_state().history_page)
+        if p > 0:
+            self._coordinator.history_set_page(p - 1)
+
+    def _on_page_next(self) -> None:
+        if not (self._coordinator and self._store):
+            return
+        s = self._store.get_state()
+        _slice, _nf, n_pages, cpage, _ta = apply_scan_history_view(
+            s.history_scan_rows,
+            s.history_sort_column,
+            s.history_sort_asc,
+            s.history_filter,
+            s.history_page,
+            s.history_page_size,
+        )
+        if cpage < n_pages - 1 and self._coordinator:
+            self._coordinator.history_set_page(cpage + 1)
+
+    def _render_from_state(self, s: Any) -> None:
+        if not self._store or not self._coordinator:
+            return
+        page_rows, n_filtered, n_pages, cpage, n_all = apply_scan_history_view(
+            s.history_scan_rows,
+            s.history_sort_column,
+            s.history_sort_asc,
+            s.history_filter,
+            s.history_page,
+            s.history_page_size,
+        )
+        if cpage != s.history_page:
+            self._coordinator.history_set_page(cpage)
+            return
+        self._iid_to_row = {}
+        self._tree.delete(*self._tree.get_children())
+        for rowd in page_rows:
+            ts = float(rowd.get("ts") or 0)
+            date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts else "—"
+            mode = str(rowd.get("mode", "")).replace("_", " ").title()
+            folders = str(rowd.get("folder_count", 0))
+            groups = str(rowd.get("groups", 0))
+            files = str(rowd.get("files", 0))
+            rec = _fmt_bytes(int(rowd.get("bytes", 0)))
+            dur = _fmt_dur(float(rowd.get("duration", 0.0)))
+            iid = self._tree.insert(
+                "", "end",
+                values=(date, mode, folders, groups, files, rec, dur),
+            )
+            self._iid_to_row[iid] = rowd
+        if self._pg_lbl is not None:
+            self._pg_lbl.configure(
+                text=f"  Page {cpage + 1} / {n_pages}  ·  {n_filtered} of {n_all} scans shown  ",
+            )
+        hint = "  Double-click a row to open session" if n_filtered and self._on_session_click else ""
+        self._count_lbl.configure(
+            text=f"  {n_all} scan total · {n_filtered} match filter{hint}",
+        )
 
     def apply_theme(self, colors: dict) -> None:
         self._colors = colors
@@ -237,9 +420,29 @@ class _ScanHistoryPanel(tk.Frame):
             self._header.apply_theme(colors)
         if self._sep is not None:
             self._sep.configure(bg=colors["border"])
+        if self._toolbar is not None:
+            self._toolbar.configure(bg=colors["bg"])
+            for c in self._toolbar.winfo_children():
+                if isinstance(c, (tk.Label, tk.Entry, tk.Button)):
+                    try:
+                        c.configure(
+                            bg=colors["bg"] if not isinstance(c, ttk.Button) else None,
+                        )
+                    except (tk.TclError, TypeError, ValueError):
+                        pass
         if self._tree_frame is not None:
             self._tree_frame.configure(bg=colors["bg"])
+        if self._pg_frame is not None:
+            self._pg_frame.configure(bg=colors["bar"])
+        if self._pg_lbl is not None:
+            self._pg_lbl.configure(bg=colors["bar"], fg=colors["fg2"])
         self._count_lbl.configure(bg=colors["bar"], fg=colors["fg_muted"])
+        for fl in (getattr(self, "_filter_entry", None),):
+            if fl is not None and isinstance(fl, tk.Entry):
+                try:
+                    fl.configure(bg=colors["card"], fg=colors["fg"], insertbackground=colors["fg"])
+                except (tk.TclError, TypeError, ValueError):
+                    pass
 
         style = ttk.Style()
         style.configure(
@@ -262,9 +465,31 @@ class _ScanHistoryPanel(tk.Frame):
             background=[("selected", colors["row_sel"])],
             foreground=[("selected", colors["row_sel_fg"])],
         )
+        tfb = self._pg_frame
+        if tfb is not None:
+            for c in tfb.winfo_children():
+                if isinstance(c, tk.Button):
+                    try:
+                        c.configure(
+                            bg=colors["bar"], fg=colors["fg2"],
+                            activebackground=colors["bar"], activeforeground=colors["fg"],
+                        )
+                    except (tk.TclError, TypeError, ValueError):
+                        pass
+        tlab = self._toolbar
+        if tlab is not None and tlab.winfo_children():
+            c0 = tlab.winfo_children()[0]
+            if isinstance(c0, tk.Label):
+                try:
+                    c0.configure(bg=colors["bg"], fg=colors["fg2"])
+                except (tk.TclError, TypeError, ValueError):
+                    pass
 
     def load(self) -> None:
-        threading.Thread(target=self._worker, daemon=True).start()
+        if self._coordinator is not None:
+            threading.Thread(target=self._worker, daemon=True).start()
+        else:
+            threading.Thread(target=self._worker_legacy, daemon=True).start()
 
     def _worker(self) -> None:
         try:
@@ -272,27 +497,43 @@ class _ScanHistoryPanel(tk.Frame):
             entries = get_scan_history_db().get_recent(limit=500)
         except Exception:
             entries = []
-        self.after(0, lambda: self._populate(entries))
+        def _ok() -> None:
+            if self._coordinator is not None:
+                self._coordinator.history_data_loaded(entries)
+        self.after(0, _ok)
 
-    def _populate(self, entries) -> None:
-        self._entries = list(entries)
-        self._iid_to_idx: dict[str, int] = {}
+    def _worker_legacy(self) -> None:
+        try:
+            from cerebro.v2.core.scan_history_db import get_scan_history_db
+            entries = get_scan_history_db().get_recent(limit=500)
+        except Exception:
+            entries = []
+        self.after(0, lambda: self._populate_legacy(entries))
+
+    def _populate_legacy(self, entries) -> None:
+        if self._coordinator is not None:
+            return
+        from cerebro.v2.state.history_view import scan_entry_to_row
+
+        rows = [scan_entry_to_row(e) for e in entries]
         self._tree.delete(*self._tree.get_children())
-        for idx, entry in enumerate(entries):
-            ts  = entry.timestamp or 0
+        for rowd in rows:
+            ts = float(rowd.get("ts") or 0)
             date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts else "—"
-            mode = entry.mode.replace("_", " ").title()
-            folders = str(len(entry.folders))
-            groups  = str(entry.groups_found)
-            files   = str(entry.files_found)
-            rec     = _fmt_bytes(entry.bytes_reclaimable)
-            dur     = _fmt_dur(entry.duration_seconds)
-            iid = self._tree.insert("", "end", values=(date, mode, folders, groups, files, rec, dur))
-            self._iid_to_idx[iid] = idx
-        count = len(entries)
-        hint = "  Double-click a row to load session" if count and self._on_session_click else ""
+            mode = str(rowd.get("mode", "")).replace("_", " ").title()
+            self._tree.insert(
+                "", "end",
+                values=(
+                    date, mode,
+                    str(rowd.get("folder_count", 0)),
+                    str(rowd.get("groups", 0)),
+                    str(rowd.get("files", 0)),
+                    _fmt_bytes(int(rowd.get("bytes", 0))),
+                    _fmt_dur(float(rowd.get("duration", 0.0))),
+                ),
+            )
         self._count_lbl.configure(
-            text=f"  {count} scan{'s' if count != 1 else ''} recorded{hint}"
+            text=f"  {len(rows)} scan{'s' if len(rows) != 1 else ''} recorded",
         )
 
     def _on_row_double_click(self, event) -> None:
@@ -301,9 +542,9 @@ class _ScanHistoryPanel(tk.Frame):
         sel = self._tree.selection()
         if not sel:
             return
-        idx = self._iid_to_idx.get(sel[0])
-        if idx is not None and idx < len(self._entries):
-            self._on_session_click(self._entries[idx])
+        rowd = self._iid_to_row.get(sel[0])
+        if rowd is not None:
+            self._on_session_click(row_to_entry_proxy(rowd))
 
     def _clear(self) -> None:
         from cerebro.v2.ui.feedback import confirm_yes_no
@@ -337,13 +578,23 @@ class _DeletionHistoryPanel(tk.Frame):
 
     _STYLE_NAME = "Deletion.Treeview"
 
-    def __init__(self, parent: tk.Widget) -> None:
+    def __init__(self, parent: tk.Widget, store: Any = None, coordinator: Any = None) -> None:
         super().__init__(parent, bg=NAVY)
+        self._store = store
+        self._coordinator = coordinator
+        self._unsub: Any = None
         self._header: _SectionHeader | None = None
         self._sep: tk.Frame | None = None
         self._tree_frame: tk.Frame | None = None
         self._colors = _page_colors({})
         self._build()
+        if self._store is not None:
+            self._unsub = self._store.subscribe(self._on_store)
+
+    def _on_store(self, s: Any, _old: Any, action: Any) -> None:
+        if not isinstance(action, DeletionHistoryDataLoaded):
+            return
+        self._render_from_state(s)
 
     def _build(self) -> None:
         self._header = _SectionHeader(
@@ -432,9 +683,45 @@ class _DeletionHistoryPanel(tk.Frame):
             rows = get_default_history_manager().get_recent_history(limit=500)
         except Exception:
             rows = []
-        self.after(0, lambda: self._populate(rows))
+        if self._coordinator is not None:
+            self.after(0, lambda: self._coordinator.deletion_history_data_loaded(rows))
+        else:
+            self.after(0, lambda: self._populate(rows))
+
+    def _render_from_state(self, s: Any) -> None:
+        if not (self._store and self._coordinator):
+            return
+        self._fill_tree_from_dicts(s.history_deletion_rows)
+
+    def _fill_tree_from_dicts(self, data: list) -> None:
+        self._tree.delete(*self._tree.get_children())
+        for d in data:
+            try:
+                path = d.get("path", "")
+                filename = d.get("filename", Path(str(path)).name)
+                size = int(d.get("size", 0) or 0)
+                del_date = d.get("deletion_date", "")
+                mode = d.get("mode", "")
+                try:
+                    dt = datetime.fromisoformat(str(del_date))
+                    date_txt = dt.strftime("%Y-%m-%d %H:%M")
+                except (ValueError, TypeError):
+                    date_txt = str(del_date)
+                size_txt = _fmt_bytes(size)
+                self._tree.insert(
+                    "", "end",
+                    values=(date_txt, str(filename), str(path), size_txt, str(mode)),
+                )
+            except (ValueError, TypeError, KeyError, OSError, AttributeError):
+                continue
+        count = len(data)
+        self._count_lbl.configure(
+            text=f"  {count} entr{'y' if count == 1 else 'ies'} recorded"
+        )
 
     def _populate(self, rows) -> None:
+        if self._coordinator is not None:
+            return
         self._tree.delete(*self._tree.get_children())
         for row in rows:
             try:
@@ -474,13 +761,29 @@ class _DeletionHistoryPanel(tk.Frame):
 class HistoryPage(tk.Frame):
     """Full-page History tab for AppShell (Scan History + Deletion History sub-tabs)."""
 
-    def __init__(self, parent: tk.Widget, on_session_click=None) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        on_session_click=None,
+        store: Any = None,
+        coordinator: Any = None,
+    ) -> None:
         super().__init__(parent, bg=NAVY)
         self._on_session_click = on_session_click
+        self._store = store
+        self._coordinator = coordinator
+        self._unsub: Any = None
         self._panels: dict[str, tk.Frame] = {}
         self._current: str = "scan"
         self._colors = _page_colors({})
         self._build()
+        if self._coordinator is not None and self._store is not None:
+            self._unsub = self._store.subscribe(self._on_store_history)
+            k0 = str(self._store.get_state().ui.get("history_subtab", "scan"))
+            if k0 in self._panels:
+                self._current = k0
+                self._tab_bar.set_active_key(k0)
+                self._panels[k0].tkraise()
         ThemeApplicator.get().register(self._apply_theme)
 
     def _build(self) -> None:
@@ -504,14 +807,23 @@ class HistoryPage(tk.Frame):
         self._panels["scan"] = _ScanHistoryPanel(
             self._container,
             on_session_click=self._on_session_click,
+            store=self._store,
+            coordinator=self._coordinator,
         )
-        self._panels["deletion"] = _DeletionHistoryPanel(self._container)
+        self._panels["deletion"] = _DeletionHistoryPanel(
+            self._container,
+            store=self._store,
+            coordinator=self._coordinator,
+        )
 
         for panel in self._panels.values():
             panel.grid(row=0, column=0, sticky="nsew")
 
-        # Build sub-tab bar after panels exist; _SubTabBar.__init__ triggers on_change.
-        self._tab_bar = _SubTabBar(self, self._on_subtab)
+        st_driven = self._coordinator is not None and self._store is not None
+        # Sub-tab: dispatch → store (state_driven) or local raise.
+        self._tab_bar = _SubTabBar(
+            self, self._on_subtab, state_driven=st_driven,
+        )
         self._tab_bar.pack(fill="x", before=self._container)
         self._sub_sep = tk.Frame(self, bg=BORDER, height=1)
         self._sub_sep.pack(fill="x", before=self._container)
@@ -537,8 +849,21 @@ class HistoryPage(tk.Frame):
                     pass
 
     def _on_subtab(self, key: str) -> None:
-        self._current = key
-        self._panels[key].tkraise()
+        if self._coordinator is not None:
+            self._coordinator.history_set_subtab(key)
+        else:
+            self._current = key
+            self._panels[key].tkraise()
+
+    def _on_store_history(self, s: Any, _old: Any, action: Any) -> None:
+        if not isinstance(action, HistorySubTabChanged):
+            return
+        k = str(s.ui.get("history_subtab", "scan"))
+        if k not in self._panels:
+            k = "scan"
+        self._current = k
+        self._tab_bar.set_active_key(k)
+        self._panels[k].tkraise()
 
     def refresh(self) -> None:
         """Reload history panels from the database (all subtabs)."""
@@ -552,4 +877,10 @@ class HistoryPage(tk.Frame):
 
     def on_show(self) -> None:
         """Called when this page becomes visible — trigger a data load."""
+        if self._coordinator is not None and self._store is not None:
+            k = str(self._store.get_state().ui.get("history_subtab", "scan"))
+            if k in self._panels:
+                self._current = k
+                self._tab_bar.set_active_key(k)
+                self._panels[k].tkraise()
         self._panels[self._current].load()

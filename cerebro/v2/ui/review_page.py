@@ -46,7 +46,7 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, TYPE_CHECKING
 
 from cerebro.v2.ui.results_page import (
     _EXT_ALL_KNOWN,
@@ -68,7 +68,13 @@ except ImportError:
     CTkButton = tk.Button  # type: ignore[misc,assignment]
 
 from cerebro.engines.base_engine import DuplicateGroup, DuplicateFile
+from cerebro.v2.state import StateStore
+from cerebro.v2.state.actions import ReviewViewFilterChanged
+from cerebro.v2.state.app_state import AppState
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
+
+if TYPE_CHECKING:
+    from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.widgets.virtual_thumb_grid import VirtualThumbGrid
 from cerebro.v2.ui.delete_flow import run_delete_ceremony, DeleteItem
 
@@ -146,6 +152,8 @@ class ReviewPage(tk.Frame):
         on_navigate_results: Optional[Callable[[], None]]     = None,
         on_navigate_home:    Optional[Callable[[], None]]     = None,
         on_rescan:           Optional[Callable[[], None]]     = None,
+        store:               Optional[StateStore]             = None,
+        coordinator:         Optional["CerebroCoordinator"]   = None,
         **kw,
     ) -> None:
         initial = ThemeApplicator.get().build_tokens()
@@ -156,6 +164,9 @@ class ReviewPage(tk.Frame):
         self._on_navigate_results = on_navigate_results
         self._on_navigate_home    = on_navigate_home
         self._on_rescan           = on_rescan
+        self._store = store
+        self._coordinator = coordinator
+        self._use_state_for_view = store is not None and coordinator is not None
 
         self._groups:   List[DuplicateGroup] = []
         self._rows:     List[Dict]           = []       # flat rows shown in grid (filtered)
@@ -177,6 +188,8 @@ class ReviewPage(tk.Frame):
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
         self._enter_mode("empty")
+        if self._store is not None:
+            self._store.subscribe(self._on_store)
 
     # ------------------------------------------------------------------
     # Build — top chrome, body (grid + lazy compare), empty state
@@ -233,7 +246,9 @@ class ReviewPage(tk.Frame):
         # is loaded; hidden in empty/compare so chrome stays minimal.
         self._filter_wrap = tk.Frame(self, bg=bg)
         self._filter_bar = _FilterListBar(
-            self._filter_wrap, on_filter=self._apply_type_filter,
+            self._filter_wrap,
+            on_filter=self._on_filter_key,
+            state_driven=self._use_state_for_view,
         )
         self._filter_bar.pack(fill="x")
 
@@ -464,7 +479,10 @@ class ReviewPage(tk.Frame):
 
         self._ensure_filter_wrap()
         self._refresh_type_counts()
-        self._apply_type_filter(self._filter)
+        if self._use_state_for_view and self._store is not None:
+            self._apply_review_filter_from_state(self._store.get_state())
+        else:
+            self._apply_type_filter(self._filter)
         self._update_summary()
         # Compare mode for the picked group — pick A = first file, B = second.
         gid = group_id if any(g.group_id == group_id for g in self._groups) \
@@ -485,15 +503,78 @@ class ReviewPage(tk.Frame):
             return
         self._ensure_filter_wrap()
         self._refresh_type_counts()
-        self._apply_type_filter(self._filter)
+        if self._use_state_for_view and self._store is not None:
+            self._apply_review_filter_from_state(self._store.get_state())
+        else:
+            self._apply_type_filter(self._filter)
         self._update_summary()
         self._enter_mode("grid")
+
+    def apply_pruned_groups(
+        self,
+        groups: List[DuplicateGroup],
+        mode: str = "files",
+    ) -> None:
+        """Refresh after :class:`ResultsFilesRemoved` while preserving grid vs compare (AppShell, review tab)."""
+        self._groups = list(groups)
+        self._scan_mode = mode or "files"
+        if not self._groups:
+            self._hide_filter_wrap()
+            self._enter_mode("empty")
+            return
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._all_rows = self._flatten_rows(self._groups)
+        self._ensure_filter_wrap()
+        self._refresh_type_counts()
+        if self._use_state_for_view and self._store is not None:
+            self._apply_review_filter_from_state(self._store.get_state())
+        else:
+            self._apply_type_filter(self._filter)
+        self._update_summary()
+        if self._mode == "compare":
+            if self._compare_gid is None or self._compare_gid not in self._group_files:
+                self._enter_compare(self._groups[0].group_id)
+                return
+            files = self._group_files[self._compare_gid]
+            if not files:
+                self._enter_compare(self._groups[0].group_id)
+                return
+            self._compare_a = files[0]
+            self._compare_b = files[1] if len(files) > 1 else None
+            try:
+                if self._compare_panel is not None:
+                    self._compare_panel.load_comparison(
+                        self._compare_a, self._compare_b
+                    )
+            except Exception:  # pylint: disable=broad-except
+                pass
+            self._update_compare_chrome()
+        # grid: thumb list already updated in _apply_type_filter
 
     def on_show(self) -> None:
         """AppShell hook when this tab becomes active."""
         if not self._groups:
             self._hide_filter_wrap()
             self._enter_mode("empty")
+
+    def _on_store(self, s: AppState, _old: AppState, action: object) -> None:
+        if not self._use_state_for_view or not self._all_rows:
+            return
+        if isinstance(action, ReviewViewFilterChanged):
+            self._apply_review_filter_from_state(s)
+
+    def _on_filter_key(self, key: str) -> None:
+        if self._use_state_for_view and self._coordinator is not None:
+            self._coordinator.review_set_filter(key)
+        else:
+            self._apply_type_filter(key)
+
+    def _apply_review_filter_from_state(self, s: AppState) -> None:
+        if not self._use_state_for_view:
+            return
+        self._filter = s.review_file_filter
+        self._filter_bar._set_active(s.review_file_filter)
+        self._apply_type_filter(s.review_file_filter)
 
     # ------------------------------------------------------------------
     # File-type filter (same buckets / extensions as Results page)
@@ -528,8 +609,11 @@ class ReviewPage(tk.Frame):
             counts[classify_file(r.get("extension", ""))] += 1
         self._filter_bar.set_counts(counts)
         if self._filter != "all" and counts.get(self._filter, 0) == 0:
-            self._filter = "all"
-            self._filter_bar._set_active("all")
+            if self._use_state_for_view and self._coordinator is not None:
+                self._coordinator.review_set_filter("all")
+            else:
+                self._filter = "all"
+                self._filter_bar._set_active("all")
 
     def _apply_type_filter(self, key: str) -> None:
         self._filter = key
@@ -861,14 +945,26 @@ class ReviewPage(tk.Frame):
     def _remove_paths(self, paths: Set[str]) -> None:
         if not paths:
             return
-        # Prune groups in place.
+        if self._use_state_for_view and self._coordinator is not None:
+            self._coordinator.results_files_removed(paths)
+            return
+        # Prune groups in place (no store; tests / legacy embeds).
         new_groups: List[DuplicateGroup] = []
+        path_set = {str(Path(p)) for p in paths}
         for g in self._groups:
-            surviving = [f for f in g.files if str(f.path) not in paths]
+            surviving = [f for f in g.files if str(f.path) not in path_set]
             if not surviving:
                 continue
             g.files = surviving
-            new_groups.append(g)
+            if len(surviving) < 2:
+                continue
+            new_groups.append(
+                DuplicateGroup(
+                    group_id=g.group_id,
+                    files=surviving,
+                    similarity_type=g.similarity_type,
+                )
+            )
         self._groups = new_groups
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
         self._all_rows = self._flatten_rows(self._groups)

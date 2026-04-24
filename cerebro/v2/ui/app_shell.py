@@ -41,6 +41,7 @@ from cerebro.v2.coordinator         import CerebroCoordinator
 from cerebro.v2.state import (
     Action,
     AppState,
+    ResultsFilesRemoved,
     ReviewNavigate,
     ScanCompleted,
     StateStore,
@@ -135,6 +136,8 @@ class AppShell(CTk):
         self._history_page = HistoryPage(
             self._page_container,
             on_session_click=self._on_history_session_click,
+            store=self._store,
+            coordinator=self._coordinator,
         )
         self._pages["history"] = self._history_page
 
@@ -155,6 +158,8 @@ class AppShell(CTk):
             # summary dialog (→ scan).
             on_navigate_home=lambda: self.switch_tab("welcome"),
             on_rescan=lambda: self.switch_tab("scan"),
+            store=self._store,
+            coordinator=self._coordinator,
         )
         self._pages["review"] = self._review_page
 
@@ -163,6 +168,8 @@ class AppShell(CTk):
             on_open_group=self._on_open_group,
             on_navigate_home=lambda: self.switch_tab("welcome"),
             on_rescan=lambda: self.switch_tab("scan"),
+            store=self._store,
+            coordinator=self._coordinator,
         )
         self._pages["results"] = self._results_page
 
@@ -324,6 +331,21 @@ class AppShell(CTk):
             gid = s.selected_group_id
             if gid is not None:
                 self._review_page.load_group(glist, gid, mode=s.scan_mode)
+        elif isinstance(action, ResultsFilesRemoved):
+            results = s.groups
+            mode = s.scan_mode
+            self._results_page.load_results(results, mode=mode)
+            try:
+                if s.active_tab == "review":
+                    self._review_page.apply_pruned_groups(results, mode=mode)
+                else:
+                    self._review_page.load_results(results, mode=mode)
+            except Exception:  # pylint: disable=broad-except
+                _log.exception("ReviewPage refresh after ResultsFilesRemoved failed")
+            dup_count = sum(max(0, len(g.files) - 1) for g in results)
+            self.set_results_badge(dup_count)
+            if dup_count == 0:
+                self.disable_review_tab()
 
         # Idempotent: ``set_active_key`` / ``_apply_visible_page`` no-op if already in sync
         self._sync_chrome_to_state(s)

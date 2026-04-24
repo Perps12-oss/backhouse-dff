@@ -12,7 +12,14 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, ttk
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cerebro.v2.coordinator import CerebroCoordinator
+
+from cerebro.v2.state import StateStore
+from cerebro.v2.state.actions import ResultsViewFilterChanged, ResultsViewSortChanged
+from cerebro.v2.state.app_state import AppState
 
 _log = logging.getLogger(__name__)
 
@@ -115,6 +122,16 @@ def _col_x_widths(total_w: int):
         result.append((name, x, cw))
         x += cw
     return result
+
+
+def _row_sort_key(col: str) -> Callable[[Dict], object]:
+    key_map: Dict[str, Callable[[Dict], object]] = {
+        "Name":     lambda r: r.get("name", "").lower(),
+        "Size":     lambda r: r.get("size", 0),
+        "Date":     lambda r: r.get("date", ""),
+        "Folder":   lambda r: r.get("folder", "").lower(),
+    }
+    return key_map.get(col, lambda r: r.get("name", "").lower())
 
 
 # ===========================================================================
@@ -247,6 +264,11 @@ class VirtualFileGrid(tk.Canvas):
 
     # ------------------------------------------------------------------
     # Data
+
+    def set_sort_state(self, col: str, asc: bool) -> None:
+        """Row order is already from state; only sync sort metadata (no re-sort)."""
+        self._sort_col = col
+        self._sort_asc = asc
 
     def load(self, rows: List[Dict]) -> None:
         self._rows = rows
@@ -465,13 +487,7 @@ class VirtualFileGrid(tk.Canvas):
         else:
             self._sort_col = col
             self._sort_asc = True
-        key_map = {
-            "Name": lambda r: r.get("name", "").lower(),
-            "Size": lambda r: r.get("size", 0),
-            "Date": lambda r: r.get("date", ""),
-            "Folder": lambda r: r.get("folder", "").lower(),
-        }
-        key = key_map.get(col, lambda r: r.get("name", ""))
+        key = _row_sort_key(col)
         self._rows.sort(key=key, reverse=not self._sort_asc)
         self._checked.clear()
         self._selected_idx = None
@@ -486,7 +502,14 @@ class VirtualFileGrid(tk.Canvas):
 class _ColHeader(tk.Canvas):
     H = 28
 
-    def __init__(self, parent, on_sort: Callable[[str], None], **kw) -> None:
+    def __init__(
+        self,
+        parent,
+        on_sort: Callable[[str], None],
+        *,
+        state_driven: bool = False,
+        **kw,
+    ) -> None:
         t = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", t.get("bg2", _HDR_BG))
         kw.setdefault("height", self.H)
@@ -495,6 +518,7 @@ class _ColHeader(tk.Canvas):
         self._on_sort   = on_sort
         self._sort_col  = "Name"
         self._sort_asc  = True
+        self._state_driven = state_driven
         self._t         = t
         self.bind("<Configure>", lambda _e: self._render())
         self.bind("<Button-1>",  self._on_click)
@@ -530,10 +554,13 @@ class _ColHeader(tk.Canvas):
             if col_name in ("☐",):
                 continue
             if cx <= event.x < cx + cw:
-                self._sort_col = col_name
-                self._sort_asc = not self._sort_asc if col_name == self._sort_col else True
-                self._render()
-                self._on_sort(col_name)
+                if self._state_driven:
+                    self._on_sort(col_name)
+                else:
+                    self._sort_col = col_name
+                    self._sort_asc = not self._sort_asc if col_name == self._sort_col else True
+                    self._render()
+                    self._on_sort(col_name)
                 break
 
     def set_sort(self, col: str, asc: bool) -> None:
@@ -815,12 +842,20 @@ class _FilterListBar(tk.Frame):
         ("other", "Other"),
     ]
 
-    def __init__(self, master, on_filter: Callable[[str], None], **kw) -> None:
+    def __init__(
+        self,
+        master,
+        on_filter: Callable[[str], None],
+        *,
+        state_driven: bool = False,
+        **kw,
+    ) -> None:
         kw.setdefault("bg", _WHITE)
         kw.setdefault("height", self.H)
         super().__init__(master, **kw)
         self.pack_propagate(False)
         self._on_filter = on_filter
+        self._state_driven = state_driven
         self._active = "all"
         self._lbls: Dict[str, tk.Label] = {}
         self._seps: List[tk.Label] = []
@@ -899,7 +934,8 @@ class _FilterListBar(tk.Frame):
     def _click(self, key: str) -> None:
         if key in self._disabled:
             return
-        self._set_active(key)
+        if not self._state_driven:
+            self._set_active(key)
         self._on_filter(key)
 
     def _hover(self, key: str, inside: bool) -> None:
@@ -957,6 +993,8 @@ class ResultsPage(tk.Frame):
                  on_open_group: Optional[Callable[[int, List[DuplicateGroup]], None]] = None,
                  on_navigate_home: Optional[Callable[[], None]] = None,
                  on_rescan: Optional[Callable[[], None]] = None,
+                 store: Optional[StateStore] = None,
+                 coordinator: Optional["CerebroCoordinator"] = None,
                  **kw) -> None:
         initial = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", initial.get("bg", _WHITE))
@@ -966,6 +1004,9 @@ class ResultsPage(tk.Frame):
         # overlay and when the user picks "Rescan" in the summary dialog.
         self._on_navigate_home = on_navigate_home
         self._on_rescan        = on_rescan
+        self._store = store
+        self._coordinator = coordinator
+        self._use_state_for_view = store is not None and coordinator is not None
         self._groups:   List[DuplicateGroup] = []
         self._all_rows: List[Dict]           = []  # flat, unfiltered
         self._filter    = "all"
@@ -975,6 +1016,8 @@ class ResultsPage(tk.Frame):
         self._build()
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
+        if self._store is not None:
+            self._store.subscribe(self._on_store)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -988,10 +1031,16 @@ class ResultsPage(tk.Frame):
         )
         self._toolbar.pack(fill="x")
 
-        self._filter_bar = _FilterListBar(self, on_filter=self._apply_filter)
+        self._filter_bar = _FilterListBar(
+            self,
+            on_filter=self._on_filter_key,
+            state_driven=self._use_state_for_view,
+        )
         self._filter_bar.pack(fill="x")
 
-        self._col_hdr = _ColHeader(self, on_sort=self._on_sort)
+        self._col_hdr = _ColHeader(
+            self, on_sort=self._on_sort, state_driven=self._use_state_for_view
+        )
         self._col_hdr.pack(fill="x")
 
         self._body = tk.Frame(self, bg=self._t.get("bg", _WHITE))
@@ -1021,6 +1070,55 @@ class ResultsPage(tk.Frame):
 
     # ------------------------------------------------------------------
     # Theme
+
+    def _on_store(self, s: AppState, _old: AppState, action: object) -> None:
+        if not self._use_state_for_view or not self._all_rows:
+            return
+        if isinstance(action, (ResultsViewFilterChanged, ResultsViewSortChanged)):
+            self._apply_from_state(s)
+
+    def _on_filter_key(self, key: str) -> None:
+        if self._use_state_for_view and self._coordinator is not None:
+            self._coordinator.results_set_filter(key)
+        else:
+            self._apply_filter(key)
+
+    def _apply_from_state(self, s: AppState) -> None:
+        if not self._use_state_for_view:
+            return
+        self._filter = s.results_file_filter
+        self._filter_bar._set_active(s.results_file_filter)
+        self._col_hdr.set_sort(
+            s.results_file_sort_column, s.results_file_sort_asc
+        )
+        rows = self._rows_for_filter_key(s.results_file_filter)
+        key_fn = _row_sort_key(s.results_file_sort_column)
+        rows = list(rows)
+        rows.sort(key=key_fn, reverse=not s.results_file_sort_asc)
+        self._grid.load(rows)
+        self._grid.set_sort_state(
+            s.results_file_sort_column, s.results_file_sort_asc
+        )
+
+    def _reapply_file_list_view(self) -> None:
+        if self._use_state_for_view and self._store is not None:
+            self._apply_from_state(self._store.get_state())
+        else:
+            self._apply_filter(self._filter)
+
+    def _rows_for_filter_key(self, key: str) -> List[Dict]:
+        if key == "other":
+            return [
+                r for r in self._all_rows
+                if (r.get("extension", "") or "").lower() not in _EXT_ALL_KNOWN
+            ]
+        exts = _FILTER_EXTS.get(key)
+        if exts is None:
+            return list(self._all_rows)
+        return [
+            r for r in self._all_rows
+            if (r.get("extension", "") or "").lower() in exts
+        ]
 
     def _apply_theme(self, t: dict) -> None:
         self._t = t
@@ -1057,7 +1155,7 @@ class ResultsPage(tk.Frame):
         self._empty_lbl.place_forget()
         self._all_rows = self._build_rows(groups)
         self._refresh_type_counts()
-        self._apply_filter(self._filter)
+        self._reapply_file_list_view()
 
         total_files = sum(len(g.files) for g in groups)
         dupes       = sum(max(0, len(g.files) - 1) for g in groups)
@@ -1099,8 +1197,11 @@ class ResultsPage(tk.Frame):
             counts[classify_file(r.get("extension", ""))] += 1
         self._filter_bar.set_counts(counts)
         if self._filter != "all" and counts.get(self._filter, 0) == 0:
-            self._filter = "all"
-            self._filter_bar._set_active("all")
+            if self._use_state_for_view and self._coordinator is not None:
+                self._coordinator.results_set_filter("all")
+            else:
+                self._filter = "all"
+                self._filter_bar._set_active("all")
 
     def _build_rows(self, groups: List[DuplicateGroup]) -> List[Dict]:
         rows = []
@@ -1125,27 +1226,26 @@ class ResultsPage(tk.Frame):
 
     def _apply_filter(self, key: str) -> None:
         self._filter = key
-        if key == "other":
-            rows = [
-                r for r in self._all_rows
-                if (r.get("extension", "") or "").lower() not in _EXT_ALL_KNOWN
-            ]
-        else:
-            exts = _FILTER_EXTS.get(key)
-            if exts is None:
-                rows = self._all_rows
-            else:
-                rows = [
-                    r for r in self._all_rows
-                    if (r.get("extension", "") or "").lower() in exts
-                ]
+        rows = self._rows_for_filter_key(key)
         self._grid.load(rows)
 
     # ------------------------------------------------------------------
     # Sorting
 
     def _on_sort(self, col: str) -> None:
-        self._grid.sort_by(col)
+        if (
+            self._use_state_for_view
+            and self._coordinator is not None
+            and self._store is not None
+        ):
+            s = self._store.get_state()
+            if s.results_file_sort_column == col:
+                new_asc = not s.results_file_sort_asc
+            else:
+                new_asc = True
+            self._coordinator.results_set_sort(col, new_asc)
+        else:
+            self._grid.sort_by(col)
 
     # ------------------------------------------------------------------
     # Selection / check
@@ -1186,6 +1286,10 @@ class ResultsPage(tk.Frame):
         )
 
     def _remove_paths(self, paths: Set[str]) -> None:
+        if self._use_state_for_view and self._coordinator is not None:
+            self._grid._checked.clear()
+            self._coordinator.results_files_removed(paths)
+            return
         self._all_rows = [r for r in self._all_rows if r["path"] not in paths]
         self._grid._checked.clear()
         # Recount first; may auto-revert active filter to "all" if the current
@@ -1193,7 +1297,7 @@ class ResultsPage(tk.Frame):
         # tab. Re-apply the (possibly updated) active filter to repopulate the
         # grid from the pruned _all_rows.
         self._refresh_type_counts()
-        self._apply_filter(self._filter)
+        self._reapply_file_list_view()
         self._grid._fire_check_change()
 
     def _move_checked(self) -> None:

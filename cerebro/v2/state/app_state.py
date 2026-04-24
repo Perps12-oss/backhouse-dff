@@ -40,8 +40,10 @@ class AppState:
     filters: Dict[str, Any] = field(default_factory=dict)
     scan_progress: Dict[str, Any] = field(default_factory=dict)
     """Last engine snapshot from :class:`cerebro.engines.base_engine.ScanProgress`; cleared when idle or on results."""
-    ui: Dict[str, Any] = field(default_factory=dict)
-    """View chrome: expanded keys, preview toggles, etc. (Sprint 2+)."""
+    ui: Dict[str, Any] = field(
+        default_factory=lambda: {"history_subtab": "scan"},
+    )
+    """View chrome: e.g. ``history_subtab`` (``scan`` | ``deletion``)."""
     scan_mode: str = "files"
     """Active engine mode key (``files`` / ``photos`` / ...)."""
     active_tab: str = "welcome"
@@ -50,6 +52,21 @@ class AppState:
     """True after a scan has completed; required before ``active_tab`` may be ``review``."""
     dry_run: bool = False
     """Reserved: dry-run deletion (Blueprint §4)."""
+    # --- Scan History grid (Sprint 2, Blueprint §3) — list[dict] rows from DB snapshot
+    history_scan_rows: List[Dict[str, Any]] = field(default_factory=list)
+    history_sort_column: str = "date"
+    history_sort_asc: bool = False
+    history_filter: str = ""
+    history_page: int = 0
+    history_page_size: int = 30
+    # Results (duplicate file list) view — type filter + column sort
+    results_file_filter: str = "all"
+    results_file_sort_column: str = "Name"
+    results_file_sort_asc: bool = True
+    # Review page — file-type filter (same buckets as Results)
+    review_file_filter: str = "all"
+    # Deletion History sub-tab (mirrors ``HistoryDataLoaded`` for scan)
+    history_deletion_rows: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def create_initial_state() -> AppState:

@@ -14,7 +14,17 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
 from cerebro.v2.state import (
+    DeletionHistoryDataLoaded,
+    HistoryDataLoaded,
+    HistoryGridFilterChanged,
+    HistoryGridPageChanged,
+    HistoryGridSortChanged,
+    HistorySubTabChanged,
     ReviewNavigate,
+    ReviewViewFilterChanged,
+    ResultsViewFilterChanged,
+    ResultsFilesRemoved,
+    ResultsViewSortChanged,
     ScanCompleted,
     ScanEnded,
     ScanProgressSnapshot,
@@ -22,6 +32,8 @@ from cerebro.v2.state import (
     SetActiveTab,
     StateStore,
 )
+from cerebro.v2.state.deletion_history_view import deletion_db_row_to_dict
+from cerebro.v2.state.history_view import scan_entry_to_row
 from cerebro.v2.state.scan_progress import scan_progress_to_dict
 
 
@@ -83,3 +95,37 @@ class CerebroCoordinator:
             tuple(groups) if groups is not None else None
         )
         self._store.dispatch(ReviewNavigate(int(group_id), snap))
+
+    def history_data_loaded(self, entries: Iterable) -> None:
+        """Main thread: replace ``AppState.history_scan_rows`` from DB rows."""
+        rows = tuple(scan_entry_to_row(e) for e in entries)
+        self._store.dispatch(HistoryDataLoaded(rows))
+
+    def history_set_sort(self, column: str, sort_asc: bool) -> None:
+        self._store.dispatch(HistoryGridSortChanged(column, sort_asc))
+
+    def history_set_filter(self, text: str) -> None:
+        self._store.dispatch(HistoryGridFilterChanged(text))
+
+    def history_set_page(self, page_index: int) -> None:
+        self._store.dispatch(HistoryGridPageChanged(page_index))
+
+    def deletion_history_data_loaded(self, rows: Iterable) -> None:
+        """Call from the main thread; ``rows`` are raw tuples from the deletion history DB."""
+        t = tuple(deletion_db_row_to_dict(r) for r in rows)
+        self._store.dispatch(DeletionHistoryDataLoaded(t))
+
+    def history_set_subtab(self, key: str) -> None:
+        self._store.dispatch(HistorySubTabChanged(key))
+
+    def review_set_filter(self, filter_key: str) -> None:
+        self._store.dispatch(ReviewViewFilterChanged(filter_key))
+
+    def results_set_sort(self, column: str, sort_asc: bool) -> None:
+        self._store.dispatch(ResultsViewSortChanged(column, sort_asc))
+
+    def results_set_filter(self, filter_key: str) -> None:
+        self._store.dispatch(ResultsViewFilterChanged(filter_key))
+
+    def results_files_removed(self, paths: Iterable[str]) -> None:
+        self._store.dispatch(ResultsFilesRemoved(tuple(str(p) for p in paths)))

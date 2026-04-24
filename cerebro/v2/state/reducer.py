@@ -4,7 +4,17 @@ from dataclasses import replace
 
 from cerebro.v2.state.actions import (
     Action,
+    DeletionHistoryDataLoaded,
+    HistoryDataLoaded,
+    HistoryGridFilterChanged,
+    HistoryGridPageChanged,
+    HistoryGridSortChanged,
+    HistorySubTabChanged,
     ReviewNavigate,
+    ReviewViewFilterChanged,
+    ResultsViewFilterChanged,
+    ResultsFilesRemoved,
+    ResultsViewSortChanged,
     ScanCompleted,
     ScanEnded,
     ScanProgressSnapshot,
@@ -12,7 +22,25 @@ from cerebro.v2.state.actions import (
     SetActiveTab,
 )
 from cerebro.v2.state.app_state import AppMode, AppState, VALID_MAIN_TAB_KEYS
+from cerebro.v2.state.groups_prune import prune_paths_from_groups
+from cerebro.v2.state.history_view import HISTORY_SCAN_VALID_COLUMNS
 
+
+RESULTS_FILE_VALID_FILTERS: frozenset[str] = frozenset(
+    (
+        "all",
+        "pictures",
+        "music",
+        "videos",
+        "documents",
+        "archives",
+        "other",
+    )
+)
+RESULTS_FILE_VALID_SORT_COLUMNS: frozenset[str] = frozenset(
+    ("Name", "Size", "Date", "Folder")
+)
+HISTORY_PAGE_VALID_SUBTABS: frozenset[str] = frozenset(("scan", "deletion"))
 
 def _mode_for_main_tab(key: str) -> AppMode:
     if key in ("welcome", "scan", "history", "diagnostics"):
@@ -82,6 +110,10 @@ def reduce(state: AppState, action: Action) -> AppState:
             active_tab="results",
             review_unlocked=True,
             scan_progress={},
+            results_file_filter="all",
+            results_file_sort_column="Name",
+            results_file_sort_asc=True,
+            review_file_filter="all",
         )
 
     if isinstance(action, ReviewNavigate):
@@ -93,5 +125,80 @@ def reduce(state: AppState, action: Action) -> AppState:
             active_tab="review",
             review_unlocked=True,
         )
+
+    if isinstance(action, HistoryDataLoaded):
+        return replace(
+            state,
+            history_scan_rows=[dict(r) for r in action.rows],
+            history_page=0,
+        )
+
+    if isinstance(action, HistoryGridSortChanged):
+        col = action.column
+        if col not in HISTORY_SCAN_VALID_COLUMNS:
+            col = "date"
+        return replace(
+            state,
+            history_sort_column=col,
+            history_sort_asc=bool(action.sort_asc),
+            history_page=0,
+        )
+
+    if isinstance(action, HistoryGridFilterChanged):
+        return replace(
+            state,
+            history_filter=str(action.text),
+            history_page=0,
+        )
+
+    if isinstance(action, HistoryGridPageChanged):
+        return replace(
+            state,
+            history_page=max(0, int(action.page_index)),
+        )
+
+    if isinstance(action, ResultsViewSortChanged):
+        col = action.column
+        if col not in RESULTS_FILE_VALID_SORT_COLUMNS:
+            col = "Name"
+        return replace(
+            state,
+            results_file_sort_column=col,
+            results_file_sort_asc=bool(action.sort_asc),
+        )
+
+    if isinstance(action, ResultsViewFilterChanged):
+        fk = action.filter_key
+        if fk not in RESULTS_FILE_VALID_FILTERS:
+            fk = "all"
+        return replace(
+            state,
+            results_file_filter=fk,
+        )
+
+    if isinstance(action, ResultsFilesRemoved):
+        if not action.paths:
+            return state
+        new_groups = prune_paths_from_groups(state.groups, action.paths)
+        return replace(state, groups=new_groups)
+
+    if isinstance(action, DeletionHistoryDataLoaded):
+        return replace(
+            state,
+            history_deletion_rows=[dict(r) for r in action.rows],
+        )
+
+    if isinstance(action, HistorySubTabChanged):
+        key = action.key
+        if key not in HISTORY_PAGE_VALID_SUBTABS:
+            key = "scan"
+        ui = {**state.ui, "history_subtab": key}
+        return replace(state, ui=ui)
+
+    if isinstance(action, ReviewViewFilterChanged):
+        fk = action.filter_key
+        if fk not in RESULTS_FILE_VALID_FILTERS:
+            fk = "all"
+        return replace(state, review_file_filter=fk)
 
     raise TypeError(f"Unsupported action: {type(action).__name__}")
