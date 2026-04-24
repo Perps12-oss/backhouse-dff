@@ -52,20 +52,24 @@ class ScanOrchestrator:
         pipeline) was removed in the post-v1 audit Cut 3.
         """
         from cerebro.engines.burst_detection_engine import BurstDetectionEngine
+        from cerebro.engines.document_dedup_engine import DocumentDedupEngine
         from cerebro.engines.empty_folder_engine import EmptyFolderEngine
         from cerebro.engines.image_dedup_engine import ImageDedupEngine
         from cerebro.engines.large_file_engine import LargeFileEngine
         from cerebro.engines.music_dedup_engine import MusicDedupEngine
+        from cerebro.engines.similar_folder_engine import SimilarFolderEngine
         from cerebro.engines.turbo_file_engine import TurboFileEngine
         from cerebro.engines.video_dedup_engine import VideoDedupEngine
 
-        self._engines["files"]         = TurboFileEngine()
-        self._engines["photos"]        = ImageDedupEngine()
-        self._engines["videos"]        = VideoDedupEngine()
-        self._engines["music"]         = MusicDedupEngine()
-        self._engines["empty_folders"] = EmptyFolderEngine()
-        self._engines["large_files"]   = LargeFileEngine()
-        self._engines["burst"]         = BurstDetectionEngine()
+        self._engines["files"]           = TurboFileEngine()
+        self._engines["photos"]          = ImageDedupEngine()
+        self._engines["videos"]          = VideoDedupEngine()
+        self._engines["music"]           = MusicDedupEngine()
+        self._engines["empty_folders"]   = EmptyFolderEngine()
+        self._engines["large_files"]     = LargeFileEngine()
+        self._engines["burst"]           = BurstDetectionEngine()
+        self._engines["documents"]       = DocumentDedupEngine()
+        self._engines["similar_folders"] = SimilarFolderEngine()
 
     def register_engine(self, mode: str, engine: BaseEngine) -> None:
         """

@@ -194,8 +194,8 @@ class BurstDetectionEngine(BaseEngine):
                         continue
                     if item.suffix.lower() in IMAGE_EXTENSIONS:
                         image_files.append(item)
-            except PermissionError as exc:
-                logger.warning("Permission denied: %s", exc)
+            except (OSError, PermissionError, TimeoutError) as exc:
+                logger.warning("Cannot access folder %s: %s", folder, exc)
 
         if not image_files:
             self._state = ScanState.COMPLETED

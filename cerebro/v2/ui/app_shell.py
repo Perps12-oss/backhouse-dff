@@ -1,13 +1,12 @@
 """
-AppShell — new top-level CTk window for the CEREBRO UI overhaul.
+AppShell — top-level CTk window for CEREBRO (FINAL PLAN v2.0).
 
+Navigation (FIXED — §1.1): Dashboard, Duplicates, History, Settings
+Global Advanced Toggle (§1.2): in title bar
 Layout (top to bottom):
-  TitleBar   (32 px, #0B1929)
-  TabBar     (36 px, #F0F0F0)
-  Page area  (remaining height — 6 CTkFrames stacked, one shown at a time)
-
-Phase 1 ships placeholder content for all 6 tabs.
-Later phases call replace_page(key, real_frame) to fill each slot.
+  TitleBar   (32 px)
+  TabBar     (36 px) + AdvancedToggle
+  Page area  (remaining height — 4 pages, one shown at a time)
 """
 from __future__ import annotations
 
@@ -29,35 +28,36 @@ except ImportError:
 
 from cerebro.v2.ui.title_bar       import TitleBar
 from cerebro.v2.ui.tab_bar         import TabBar
-from cerebro.v2.ui.welcome_page    import WelcomePage
-from cerebro.v2.ui.scan_page       import ScanPage
-from cerebro.v2.ui.results_page    import ResultsPage
-from cerebro.v2.ui.review_page      import ReviewPage
-from cerebro.v2.ui.history_page     import HistoryPage
-from cerebro.v2.ui.diagnostics_page import DiagnosticsPage
+from cerebro.v2.ui.advanced_toggle import AdvancedToggle
+from cerebro.v2.ui.dashboard_page  import DashboardPage
+from cerebro.v2.ui.duplicates_page import DuplicatesPage
+from cerebro.v2.ui.history_page    import HistoryPage
+from cerebro.v2.ui.settings_page   import SettingsPage
 from cerebro.v2.ui.a11y import apply_focus_ring, first_focusable_descendant
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.engines.orchestrator   import ScanOrchestrator
 from cerebro.v2.coordinator         import CerebroCoordinator
 from cerebro.v2.state import (
     Action,
+    AdvancedModeToggled,
     AppState,
     ResultsFilesRemoved,
-    ReviewNavigate,
     ScanCompleted,
     StateStore,
     create_initial_state,
+)
+
+from cerebro.v2.state.actions import (
+    ScanStarted,
+    ScanEnded,
+    ReviewNavigate,
 )
 
 _PAGE_BG_FALLBACK = "#F0F0F0"
 
 
 class AppShell(CTk):
-    """
-    Root window for the CEREBRO UI overhaul.
-
-    Phase 1 deliverable: TitleBar + TabBar + 6 switchable placeholder pages.
-    """
+    """Root window for the CEREBRO UI (FINAL PLAN v2.0)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -69,21 +69,11 @@ class AppShell(CTk):
         self._build_ui()
 
     def _bootstrap_tkdnd(self) -> None:
-        # tkinterdnd2 monkey-patches drop_target_register / dnd_bind onto
-        # tkinter.BaseWidget at import time, but those methods only succeed
-        # once the native tkdnd Tcl package has been loaded into this
-        # interpreter. TkinterDnD.Tk does that inside its __init__; since
-        # AppShell subclasses CTk (which does not), we load it here so that
-        # any descendant widget can become a drop target.
         try:
             from tkinterdnd2 import TkinterDnD
             self.TkdndVersion = TkinterDnD._require(self)
         except Exception as e:
             _log.debug("tkinterdnd2 unavailable, drag-and-drop disabled: %s", e)
-
-    # ------------------------------------------------------------------
-    # Window setup
-    # ------------------------------------------------------------------
 
     def _setup_window(self) -> None:
         self.title("CEREBRO")
@@ -102,17 +92,12 @@ class AppShell(CTk):
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
-
     def _build_ui(self) -> None:
-        # Register root with ThemeApplicator so any caller (Settings dialog,
-        # quick dropdown, etc.) can trigger a global re-dispatch without
-        # threading a reference all the way through.
         ThemeApplicator.get().set_root(self)
         toks0 = ThemeApplicator.get().build_tokens()
         skip_bg = toks0.get("bg", _PAGE_BG_FALLBACK)
+
+        # Skip-to-content link for accessibility
         self._skip_bar = tk.Frame(self, bg=skip_bg, height=30)
         self._skip_bar.pack(fill="x")
         self._skip_bar.pack_propagate(False)
@@ -136,6 +121,7 @@ class AppShell(CTk):
             focus_color=toks0.get("focus_ring", toks0.get("accent", "#2563EB")),
         )
 
+        # Title bar
         self._title_bar = TitleBar(
             self,
             on_settings=self._open_settings,
@@ -143,83 +129,69 @@ class AppShell(CTk):
         )
         self._title_bar.pack(fill="x")
 
+        # Tab bar + Advanced toggle row
+        nav_row = tk.Frame(self, bg=toks0.get("tab_bg", _PAGE_BG_FALLBACK))
+        nav_row.pack(fill="x")
+
         self._tab_bar = TabBar(
-            self,
+            nav_row,
             on_tab_changed=self._on_main_bar_tab_request,
         )
-        self._tab_bar.pack(fill="x")
+        self._tab_bar.pack(side="left", fill="x", expand=True)
 
+        self._advanced_toggle = AdvancedToggle(
+            nav_row,
+            on_toggle=self._on_advanced_toggle,
+        )
+        self._advanced_toggle.pack(side="right")
+
+        # Page container
         self._page_container = CTkFrame(self, fg_color=_PAGE_BG_FALLBACK)
         self._page_container.pack(fill="both", expand=True)
 
-        # Re-paint shell chrome (root window + page container) whenever the
-        # theme changes so no surface is left at the hard-coded fallback color.
         ThemeApplicator.get().register(self._apply_shell_theme)
 
+        # Build pages (FINAL PLAN §1.1: Dashboard, Duplicates, History, Settings)
         self._pages: Dict[str, CTkFrame] = {}
 
-        self._history_page = HistoryPage(
+        self._pages["dashboard"] = DashboardPage(
+            self._page_container,
+            on_start_scan=self._start_scan_from_dashboard,
+            on_open_session=self._on_open_session,
+            on_cancel_scan=self._cancel_scan_from_dashboard,
+            store=self._store,
+            coordinator=self._coordinator,
+        )
+
+        self._pages["duplicates"] = DuplicatesPage(
+            self._page_container,
+            on_open_group=self._on_open_group,
+            on_navigate_home=lambda: self.switch_tab("dashboard"),
+            on_rescan=self._rescan_from_duplicates,
+            store=self._store,
+            coordinator=self._coordinator,
+        )
+
+        self._pages["history"] = HistoryPage(
             self._page_container,
             on_session_click=self._on_history_session_click,
             store=self._store,
             coordinator=self._coordinator,
         )
-        self._pages["history"] = self._history_page
 
-        self._diagnostics_page = DiagnosticsPage(
+        self._pages["settings"] = SettingsPage(
             self._page_container,
-            on_scan_history_cleared=self._on_scan_history_cleared,
-        )
-        self._pages["diagnostics"] = self._diagnostics_page
-
-        self._review_page = ReviewPage(
-            self._page_container,
-            on_back=lambda: self.switch_tab("results"),
-            on_navigate_results=lambda: self.switch_tab("results"),
-            # Needed by Review's Smart-Select flow — it reuses the same
-            # delete ceremony as Results, so both pages must agree on
-            # where the user lands after a successful batch delete
-            # (celebration → welcome) and after picking Rescan in the
-            # summary dialog (→ scan).
-            on_navigate_home=lambda: self.switch_tab("welcome"),
-            on_rescan=lambda: self.switch_tab("scan"),
             store=self._store,
             coordinator=self._coordinator,
         )
-        self._pages["review"] = self._review_page
 
-        self._results_page = ResultsPage(
-            self._page_container,
-            on_open_group=self._on_open_group,
-            on_navigate_home=lambda: self.switch_tab("welcome"),
-            on_rescan=lambda: self.switch_tab("scan"),
-            store=self._store,
-            coordinator=self._coordinator,
-        )
-        self._pages["results"] = self._results_page
+        self._current_page: str = "dashboard"
+        self._pages["dashboard"].place(relwidth=1, relheight=1)
 
-        self._pages["welcome"] = WelcomePage(
-            self._page_container,
-            on_start_scan=lambda: self.switch_tab("scan"),
-            on_open_session=self._on_open_session,
-        )
-
-        self._pages["scan"] = ScanPage(
-            self._page_container,
-            orchestrator=self._orchestrator,
-            on_scan_complete=self._coordinator.scan_completed,
-            coordinator=self._coordinator,
-            store=self._store,
-        )
-
-        self._current_page: str = "welcome"
-        self._pages["welcome"].place(relwidth=1, relheight=1)
-        # Single render path: scan + review navigation flow through the store
-        # (Cerebro_Blueprint_v2.0 §0.1, CEREBRO Implementation Rules §2).
+        # State subscription
         self._store.subscribe(self._on_app_state_changed)
 
-        # Apply the initial theme globally. This also fires engine listeners,
-        # syncs CTk appearance mode, and dispatches tokens to every shell hook.
+        # Apply initial theme
         ta = ThemeApplicator.get()
         initial_theme = "Cerebro Dark"
         try:
@@ -229,23 +201,11 @@ class AppShell(CTk):
             pass
         ta.apply(initial_theme, self)
 
-    def _make_placeholder(self, key: str) -> CTkFrame:
-        """Muted label placeholder shown until a later phase provides real content."""
-        frame = CTkFrame(self._page_container, fg_color=_PAGE_BG_FALLBACK)
-        CTkLabel(
-            frame,
-            text=key.upper(),
-            font=("Segoe UI", 22, "bold"),
-            text_color="#CCCCCC",
-        ).place(relx=0.5, rely=0.5, anchor="center")
-        return frame
-
     # ------------------------------------------------------------------
-    # Shell chrome theming (root window + page container)
+    # Shell chrome theming
     # ------------------------------------------------------------------
 
     def _apply_shell_theme(self, t: dict) -> None:
-        """Paint the root window and page container with the active theme."""
         bg = t.get("bg", _PAGE_BG_FALLBACK)
         try:
             self._skip_bar.configure(bg=bg)
@@ -277,7 +237,6 @@ class AppShell(CTk):
                 pass
 
     def _focus_main_content(self) -> None:
-        """Bypass repeated chrome (2.4.1); focus the active page or a focusable in it."""
         s = self._store.get_state()
         page = self._pages.get(s.active_tab)
         if page is not None:
@@ -293,7 +252,7 @@ class AppShell(CTk):
             self._tab_bar.focus_active_tab()
 
     # ------------------------------------------------------------------
-    # Tab switching (store is the only navigation source; Blueprint §0.1)
+    # Tab switching (store is the only navigation source)
     # ------------------------------------------------------------------
 
     def _on_main_bar_tab_request(self, key: str) -> None:
@@ -310,32 +269,33 @@ class AppShell(CTk):
             page.on_show()
 
     def _sync_chrome_to_state(self, s: AppState) -> None:
-        """One subscriber step: tab strip + page stack follow ``s.active_tab``."""
         self._tab_bar.set_active_key(s.active_tab)
         self._apply_visible_page(s.active_tab)
 
     def switch_tab(self, key: str) -> None:
-        """Programmatically navigate to a main tab (dispatches, then subscriber paints)."""
         self._coordinator.set_active_tab(key)
+
+    # ------------------------------------------------------------------
+    # Advanced toggle (FINAL PLAN §1.2)
+    # ------------------------------------------------------------------
+
+    def _on_advanced_toggle(self, value: bool) -> None:
+        self._coordinator.toggle_advanced(value)
+        for page in self._pages.values():
+            if hasattr(page, "set_advanced"):
+                page.set_advanced(value)
 
     # ------------------------------------------------------------------
     # Title bar actions
     # ------------------------------------------------------------------
 
     def _open_settings(self, anchor: Optional[tk.Widget] = None) -> None:
-        if hasattr(self, "_settings_win") and self._settings_win.winfo_exists():
-            self._settings_win.lift()
-            return
-        from cerebro.v2.ui.settings_dialog import SettingsDialog, Settings, get_settings_path
-        self._settings_win = SettingsDialog(self, Settings.load(get_settings_path()))
+        self.switch_tab("settings")
 
     def _open_themes(self, anchor: Optional[tk.Widget] = None) -> None:
-        """Open the one-click quick theme dropdown anchored to the title bar link."""
         if hasattr(self, "_themes_win") and self._themes_win is not None:
             try:
                 if self._themes_win.winfo_exists():
-                    # Use _close() so pending after() callbacks and focus are cleared
-                    # before the widget is destroyed (avoids TclError on idle focus).
                     closer = getattr(self._themes_win, "_close", None)
                     if callable(closer):
                         closer()
@@ -358,24 +318,111 @@ class AppShell(CTk):
             _log.warning("Theme dropdown error: %s", e)
 
     def switch_theme(self, theme_name: str) -> None:
-        """Apply a theme globally through the single ThemeApplicator entry point."""
         ThemeApplicator.get().apply(theme_name, self)
 
-    def _on_open_session(self, session) -> None:
-        """Restore saved duplicate groups from ``~/.cerebro/scan_snapshots/`` and open Results."""
-        from tkinter import messagebox
+    # ------------------------------------------------------------------
+    # Scan flow
+    # ------------------------------------------------------------------
 
+    def _start_scan_from_dashboard(self, folders: list = (), mode: str = "files") -> None:
+        if not folders:
+            return
+        self._coordinator.scan_started(mode)
+        self._run_scan_inline(list(folders), mode)
+
+    def _cancel_scan_from_dashboard(self) -> None:
+        try:
+            self._orchestrator.cancel()
+        except Exception:
+            pass
+
+    def _rescan_from_duplicates(self) -> None:
+        self.switch_tab("dashboard")
+        dash = self._pages.get("dashboard")
+        if dash is not None and hasattr(dash, "enter_config"):
+            self.after(50, dash.enter_config)
+
+    def _run_scan_inline(self, folders: list, mode: str) -> None:
+        import threading
+        from pathlib import Path
+
+        orchestrator = self._orchestrator
+        orchestrator.set_mode(mode)
+
+        def _progress_cb(p) -> None:
+            self.after(0, lambda: self._coordinator.report_scan_progress(p))
+
+        def _worker() -> None:
+            try:
+                orchestrator.start_scan(
+                    [Path(f) for f in folders], [], {}, _progress_cb
+                )
+                # start_scan is async; poll until the engine finishes
+                import time
+                from cerebro.engines.base_engine import ScanState
+                while True:
+                    prog = orchestrator.get_progress()
+                    if prog.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
+                        break
+                    time.sleep(0.1)
+                prog = orchestrator.get_progress()
+                if prog.state == ScanState.COMPLETED:
+                    groups = orchestrator.get_results()
+                    self.after(0, lambda: self._coordinator.scan_completed(groups, mode))
+                    self.after(0, lambda: self.switch_tab("duplicates"))
+                else:
+                    self.after(0, lambda: self._coordinator.scan_ended("cancelled"))
+            except Exception as e:
+                _log.exception("Scan error: %s", e)
+                self.after(0, lambda: self._coordinator.scan_ended("error"))
+
+        threading.Thread(target=_worker, daemon=True, name="scan-worker").start()
+
+    # ------------------------------------------------------------------
+    # State change handler
+    # ------------------------------------------------------------------
+
+    def _on_app_state_changed(self, s: AppState, _old: AppState, action: Action) -> None:
+        if isinstance(action, ScanCompleted):
+            self._apply_scan_completed(s)
+        elif isinstance(action, ResultsFilesRemoved):
+            self._apply_results_files_removed(s)
+
+        self._sync_chrome_to_state(s)
+
+    def _apply_scan_completed(self, s: AppState) -> None:
+        results = s.groups
+        mode = s.scan_mode
+        if hasattr(self._pages["duplicates"], "load_results"):
+            self._pages["duplicates"].load_results(results, mode=mode)
+        dup_count = sum(max(0, len(g.files) - 1) for g in results if hasattr(g, "files"))
+        self.set_results_badge(dup_count)
+        try:
+            if hasattr(self._pages["dashboard"], "refresh"):
+                self._pages["dashboard"].refresh()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _apply_results_files_removed(self, s: AppState) -> None:
+        results = s.groups
+        mode = s.scan_mode
+        if hasattr(self._pages["duplicates"], "load_results"):
+            self._pages["duplicates"].load_results(results, mode=mode)
+        dup_count = sum(max(0, len(g.files) - 1) for g in results if hasattr(g, "files"))
+        self.set_results_badge(dup_count)
+
+    def _on_open_group(self, group_id: int, groups: list) -> None:
+        pass
+
+    def _on_open_session(self, session) -> None:
+        from tkinter import messagebox
         from cerebro.v2.persistence import (
             load_last_scan_snapshot,
             load_scan_results_for_session_timestamp,
         )
 
         if session is None:
-            messagebox.showinfo(
-                "No session",
-                "There is no recent scan to open.",
-                parent=self,
-            )
+            messagebox.showinfo("No session", "There is no recent scan to open.", parent=self)
             return
         try:
             ts = float(getattr(session, "timestamp", 0) or 0.0)
@@ -387,105 +434,26 @@ class AppShell(CTk):
         else:
             last = load_last_scan_snapshot()
             if last is None:
-                messagebox.showinfo(
-                    "No saved results",
-                    "Run a scan at least once to save results on this computer, then try again.",
-                    parent=self,
-                )
+                messagebox.showinfo("No saved results", "Run a scan at least once.", parent=self)
                 return
             groups, mode, snap_ts = last[0], last[1], last[2]
             if ts and abs(snap_ts - ts) > 2.0:
-                messagebox.showinfo(
-                    "Results not on disk for this session",
-                    "Only the most recent completed scan is kept in full. "
-                    "For older runs, only summary stats remain in history.",
-                    parent=self,
-                )
+                messagebox.showinfo("Not on disk", "Only the most recent scan is kept in full.", parent=self)
                 return
         if not groups:
-            messagebox.showinfo(
-                "No results",
-                "Saved session had no duplicate groups to show.",
-                parent=self,
-            )
+            messagebox.showinfo("No results", "Saved session had no duplicates.", parent=self)
             return
         self._coordinator.scan_completed(list(groups), mode)
-        self.switch_tab("results")
-
-    def _on_app_state_changed(self, s: AppState, _old: AppState, action: Action) -> None:
-        """Store subscriber: apply state-derived views, then a single shell sync to ``s``."""
-        if isinstance(action, ScanCompleted):
-            self._apply_scan_completed_to_pages(s)
-        elif isinstance(action, ReviewNavigate):
-            self._apply_review_navigate(s, action)
-        elif isinstance(action, ResultsFilesRemoved):
-            self._apply_results_files_removed_to_pages(s)
-
-        # One chrome step: tab strip + visible page follow ``s.active_tab``
-        self._sync_chrome_to_state(s)
-
-    def _apply_scan_completed_to_pages(self, s: AppState) -> None:
-        results = s.groups
-        mode = s.scan_mode
-        self._results_page.load_results(results, mode=mode)
-        try:
-            self._review_page.load_results(results, mode=mode)
-        except Exception:  # pylint: disable=broad-except
-            _log.exception("ReviewPage.load_results failed")
-        dup_count = sum(max(0, len(g.files) - 1) for g in results)
-        self.set_results_badge(dup_count)
-        self.enable_review_tab()
-        try:
-            self._pages["welcome"].refresh()
-        except (AttributeError, tk.TclError):
-            pass
-
-    def _apply_review_navigate(self, s: AppState, action: ReviewNavigate) -> None:
-        glist = list(action.groups) if action.groups is not None else s.groups
-        gid = s.selected_group_id
-        if gid is not None:
-            self._review_page.load_group(glist, gid, mode=s.scan_mode)
-
-    def _apply_results_files_removed_to_pages(self, s: AppState) -> None:
-        results = s.groups
-        mode = s.scan_mode
-        self._results_page.load_results(results, mode=mode)
-        try:
-            if s.active_tab == "review":
-                self._review_page.apply_pruned_groups(results, mode=mode)
-            else:
-                self._review_page.load_results(results, mode=mode)
-        except Exception:  # pylint: disable=broad-except
-            _log.exception("ReviewPage refresh after ResultsFilesRemoved failed")
-        dup_count = sum(max(0, len(g.files) - 1) for g in results)
-        self.set_results_badge(dup_count)
-        if dup_count == 0:
-            self.disable_review_tab()
-
-    def _on_open_group(self, group_id: int, groups: list) -> None:
-        """Double-click in Results: navigate via coordinator + store."""
-        self._coordinator.review_open_group(group_id, groups)
-
-    def _on_scan_history_cleared(self) -> None:
-        """Scan history DB was cleared from Diagnostics — refresh in-memory UIs."""
-        try:
-            self._pages["welcome"].refresh()
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            self._history_page.refresh()
-        except (AttributeError, tk.TclError):
-            pass
+        self.switch_tab("duplicates")
 
     def _on_history_session_click(self, entry) -> None:
-        self.switch_tab("results")
+        self.switch_tab("duplicates")
 
     # ------------------------------------------------------------------
-    # Public API for later phases
+    # Public API
     # ------------------------------------------------------------------
 
     def replace_page(self, key: str, frame: CTkFrame) -> None:
-        """Swap a placeholder frame with real page content."""
         old = self._pages.get(key)
         if old is not None:
             old.place_forget()
@@ -501,34 +469,26 @@ class AppShell(CTk):
         self._tab_bar.set_results_badge(count)
 
     def enable_review_tab(self) -> None:
-        self._tab_bar.enable_review()
+        pass
 
     def disable_review_tab(self) -> None:
-        self._tab_bar.disable_review()
-
-    # ------------------------------------------------------------------
-    # Run
-    # ------------------------------------------------------------------
+        pass
 
     def run(self) -> None:
         self.mainloop()
 
 
 def run_app() -> None:
-    """Entry point for the overhauled CEREBRO app."""
     app = AppShell()
     app.run()
 
 
-class _ThemeQuickDropdown(tk.Toplevel):
-    """Lightweight one-click theme picker anchored under the title-bar link.
+# ---------------------------------------------------------------------------
+# Theme Quick Dropdown (preserved from original)
+# ---------------------------------------------------------------------------
 
-    Behavior:
-      - Borderless popup (``overrideredirect``).
-      - Scrollable list of theme names, current theme shown with a check mark.
-      - Click a row -> apply theme globally and close.
-      - Losing focus or pressing ``Escape`` closes without changes.
-    """
+class _ThemeQuickDropdown(tk.Toplevel):
+    """Lightweight one-click theme picker anchored under the title-bar link."""
 
     ROW_H = 26
     WIDTH = 220
@@ -546,7 +506,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
         self._master  = master
         self._outside_bind_id: Optional[str] = None
         self._dismissed = False
-        # ``after`` ids must be cancelled in _close() so no callback runs after destroy.
         self._after_topmost_id: Optional[Any] = None
         self._after_guard_id: Optional[Any] = None
         self.overrideredirect(True)
@@ -560,7 +519,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
             self._names = []
             self._active = ""
 
-        # Use current theme tokens so the dropdown matches the rest of the UI.
         tokens = ThemeApplicator.get().build_tokens()
         self._bg      = tokens.get("bg2", "#1C2333")
         self._fg      = tokens.get("fg", "#E6EDF3")
@@ -569,14 +527,11 @@ class _ThemeQuickDropdown(tk.Toplevel):
         self._accent  = tokens.get("accent", "#22D3EE")
         self._border  = tokens.get("border", "#30363D")
 
-        self.configure(bg=self._border)  # acts as 1 px border around inner frame
+        self.configure(bg=self._border)
 
         self._build()
         self._place_under(anchor)
 
-        # Keep the borderless popup above the main window on Windows, where
-        # overrideredirect + transient can otherwise z-order the popup behind
-        # its parent and swallow the pick click.
         try:
             self.lift()
             self.attributes("-topmost", True)
@@ -585,23 +540,14 @@ class _ThemeQuickDropdown(tk.Toplevel):
             pass
 
         self.bind("<Escape>", lambda _e: self._close())
-        # Detect clicks anywhere outside the popup (the FocusOut channel is
-        # unreliable for overrideredirect Toplevels on Windows — it can fire
-        # spuriously before a row click lands, dismissing the dropdown).
-        # Deferred so the Button-1 event that opened the popup doesn't also
-        # bubble up into this handler and dismiss it immediately.
         self._after_guard_id = self.after(0, self._install_outside_click_guard)
-
-    # ------------------------------------------------------------------
 
     def _build(self) -> None:
         outer = tk.Frame(self, bg=self._border)
         outer.pack(fill="both", expand=True, padx=1, pady=1)
 
-        canvas = tk.Canvas(
-            outer, bg=self._bg, highlightthickness=0, bd=0,
-            width=self.WIDTH - 2,
-        )
+        canvas = tk.Canvas(outer, bg=self._bg, highlightthickness=0, bd=0,
+                           width=self.WIDTH - 2)
         vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
 
@@ -634,17 +580,14 @@ class _ThemeQuickDropdown(tk.Toplevel):
         check = tk.Label(
             row,
             text="\u2713" if is_active else " ",
-            bg=self._bg,
-            fg=self._accent,
+            bg=self._bg, fg=self._accent,
             font=("Segoe UI", 10, "bold"),
-            width=2,
-            anchor="center",
+            width=2, anchor="center",
         )
         check.pack(side="left", padx=(4, 0))
 
         lbl = tk.Label(
-            row,
-            text=name,
+            row, text=name,
             bg=self._bg,
             fg=self._fg if is_active else self._fg_mute,
             font=("Segoe UI", 10, "bold") if is_active else ("Segoe UI", 10),
@@ -658,10 +601,7 @@ class _ThemeQuickDropdown(tk.Toplevel):
             c.configure(bg=self._hover)
         def _leave(_e=None, r=row, l=lbl, c=check, active=is_active):
             r.configure(bg=self._bg)
-            l.configure(
-                bg=self._bg,
-                fg=self._fg if active else self._fg_mute,
-            )
+            l.configure(bg=self._bg, fg=self._fg if active else self._fg_mute)
             c.configure(bg=self._bg)
         def _click(_e=None, n=name):
             self._pick(n)
@@ -671,20 +611,14 @@ class _ThemeQuickDropdown(tk.Toplevel):
             w.bind("<Leave>", _leave)
             w.bind("<Button-1>", _click)
 
-    # ------------------------------------------------------------------
-
     def _place_under(self, anchor: Optional[tk.Widget]) -> None:
         visible_rows = min(len(self._names), self.MAX_VISIBLE)
         visible_rows = max(1, visible_rows)
-        height = visible_rows * self.ROW_H + 2  # +2 for the 1 px border frame
+        height = visible_rows * self.ROW_H + 2
 
         if anchor is not None and anchor.winfo_exists():
             try:
                 anchor.update_idletasks()
-                # Anchor the popup's left edge to the Themes label's left edge
-                # so the dropdown falls directly beneath the button instead of
-                # drifting far to the left. Only shift left if that would push
-                # the popup past the right edge of the screen.
                 x = anchor.winfo_rootx()
                 y = anchor.winfo_rooty() + anchor.winfo_height() + 4
             except tk.TclError:
@@ -694,7 +628,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
             x = self.master.winfo_rootx() + 40
             y = self.master.winfo_rooty() + 40
 
-        # Keep the popup on-screen horizontally.
         try:
             screen_w = self.winfo_screenwidth()
             if x + self.WIDTH > screen_w - 4:
@@ -705,9 +638,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
             pass
 
         self.geometry(f"{self.WIDTH}x{height}+{x}+{y}")
-        # Force the position to be realised before the popup is shown; on
-        # Windows, ``overrideredirect`` Toplevels can otherwise briefly render
-        # at (0, 0) before picking up the requested geometry.
         self.update_idletasks()
 
     def _deferred_clear_topmost(self) -> None:
@@ -732,12 +662,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
                 setattr(self, attr, None)
 
     def _focus_back_to_master(self) -> None:
-        """Move keyboard focus off this Toplevel before it is destroyed.
-
-        CustomTkinter / Tk can queue ``focus_set`` on the widget that last had
-        focus; if that Toplevel is already gone, Windows raises
-        ``TclError: bad window path name`` from an ``after`` idle handler.
-        """
         try:
             m = self._master
             if m is not None and m.winfo_exists():
@@ -756,7 +680,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
             self._outside_bind_id = None
 
     def _on_outside_click(self, event) -> None:
-        """Close the popup when a click lands on any widget outside it."""
         if self._dismissed:
             return
         w = event.widget
@@ -769,9 +692,6 @@ class _ThemeQuickDropdown(tk.Toplevel):
         self._close()
 
     def _pick(self, name: str) -> None:
-        # Tear down the popup (focus + pending after callbacks) *before* applying
-        # the global theme so CustomTkinter/Tk never targets this Toplevel
-        # during ``set_appearance_mode`` / idle redraw (Windows: bad window path).
         self._close()
         try:
             self._on_pick(name)

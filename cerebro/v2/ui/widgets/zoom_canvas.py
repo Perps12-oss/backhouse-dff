@@ -203,8 +203,9 @@ class ZoomCanvas(CTkCanvas):
                 tags="image",
             )
 
+        except MemoryError:
+            logger.warning("Out of memory rendering image — skipping frame")
         except tk.TclError:
-            # Widget destroyed or canvas torn down mid-render
             pass
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             logger.error(f"Failed to render image: {e}")

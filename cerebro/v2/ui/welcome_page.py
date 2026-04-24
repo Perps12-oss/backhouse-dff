@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import tkinter as tk
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, TYPE_CHECKING
 
+from cerebro.v2.ui.space_dashboard import SpaceDashboard
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
+
+if TYPE_CHECKING:
+    from cerebro.v2.state import StateStore
 
 _NAVY     = "#0B1929"
 _NAVY_MID = "#1E3A5F"
@@ -93,6 +97,23 @@ def _load_stats():
         return 0, 0, 0, []
 
 
+def _load_deletion_rows() -> list:
+    """Return deletion history as a list of dicts for SpaceDashboard.load()."""
+    try:
+        from cerebro.v2.core.deletion_history_db import get_default_history_manager
+        entries = get_default_history_manager().get_recent_history(limit=2000)
+        return [
+            {
+                "size":          getattr(e, "file_size", 0),
+                "deletion_date": getattr(e, "deletion_date", ""),
+                "mode":          getattr(e, "scan_mode", ""),
+            }
+            for e in entries
+        ]
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Logo canvas
 # ---------------------------------------------------------------------------
@@ -143,6 +164,7 @@ class WelcomePage(tk.Frame):
         master,
         on_start_scan:   Optional[Callable[[], None]]   = None,
         on_open_session: Optional[Callable[[Any], None]] = None,
+        store: Optional["StateStore"] = None,
         **kwargs,
     ) -> None:
         kwargs.setdefault("bg", _NAVY)
@@ -153,6 +175,16 @@ class WelcomePage(tk.Frame):
         self._build()
         self._t = ThemeApplicator.get().build_tokens()
         ThemeApplicator.get().register(self._apply_theme)
+        if store is not None:
+            store.subscribe(self._on_store)
+
+    def _on_store(self, s: Any, old: Any, action: Any) -> None:
+        try:
+            from cerebro.v2.state.actions import DeletionHistoryDataLoaded
+            if isinstance(action, DeletionHistoryDataLoaded):
+                self.refresh()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
 
@@ -233,6 +265,14 @@ class WelcomePage(tk.Frame):
         # Stats row
         self._build_stats(body, scans, dupes, recovered,
                           bg=bg, fg=fg, danger=danger, success=success)
+
+        # 24 px gap
+        tk.Frame(body, bg=bg, height=24).pack()
+
+        # Space reclaimed dashboard
+        dash = SpaceDashboard(body, bg=bg)
+        dash.pack(fill="x", padx=0, pady=0)
+        dash.load(_load_deletion_rows())
 
         # ── Recent bar — pinned to bottom of the page ─────────────────
         self._build_recent_bar(recent, bg=bg)

@@ -22,8 +22,10 @@ def app_state_to_doc(state: AppState) -> Dict[str, Any]:
     ui = dict(state.ui) if state.ui else {}
     return {
         "mode": _mode_value(state.mode),
+        "theme": state.theme,
         "groups_count": len(state.groups),
         "selected_group_id": state.selected_group_id,
+        "selected_files_count": len(state.selected_files),
         "filters": dict(state.filters),
         "scan_progress": dict(state.scan_progress),
         "ui": ui,
@@ -31,6 +33,7 @@ def app_state_to_doc(state: AppState) -> Dict[str, Any]:
         "active_tab": state.active_tab,
         "review_unlocked": state.review_unlocked,
         "dry_run": state.dry_run,
+        "advanced_mode": state.advanced_mode,
         "history_scan_rows_count": len(state.history_scan_rows),
         "history_sort_column": state.history_sort_column,
         "history_sort_asc": state.history_sort_asc,
@@ -43,6 +46,9 @@ def app_state_to_doc(state: AppState) -> Dict[str, Any]:
         "results_text_filter": state.results_text_filter,
         "review_file_filter": state.review_file_filter,
         "history_deletion_rows_count": len(state.history_deletion_rows),
+        "scan_can_pause": state.scan_can_pause,
+        "scan_can_resume": state.scan_can_resume,
+        "scan_is_cancelled": state.scan_is_cancelled,
     }
 
 

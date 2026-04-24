@@ -378,8 +378,8 @@ class ImageDedupEngine(BaseEngine):
                                     continue
                             image_files.append(path)
 
-            except PermissionError as e:
-                logger.warning(f"Permission denied: {e}")
+            except (OSError, PermissionError, TimeoutError) as e:
+                logger.warning("Cannot access folder %s: %s", folder, e)
 
         return image_files
 

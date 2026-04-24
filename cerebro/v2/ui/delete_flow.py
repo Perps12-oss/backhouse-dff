@@ -1,41 +1,17 @@
 """
-delete_flow — the shared 4-step delete ceremony used by both Results and
-Review pages.
+delete_flow — FINAL PLAN v2.0 §6.
 
-Originally lived as a private method on ``ResultsPage``. Extracted here
-during the Phase-6 course-correction (Results → Review split) so Review's
-Smart-Select path can reuse the exact same ceremony without cross-importing
-ResultsPage internals.
+Delete ceremony: shared by Duplicates page for batch deletion.
 
 Public API:
-    run_delete_ceremony(
-        parent,           # any Tk widget on the page invoking the flow
-        items,            # List[DeleteItem] — path string + byte size
-        scan_mode,        # "files" | "photos" | "videos" | "music" — for
-                          # the media-noun labels in the dialogs
-        on_remove_paths,  # Callable[[Set[str]], None] — page prunes its
-                          # own state for the successfully deleted paths
-        on_navigate_home, # Callable[[], None] or None — Step-5 celebration
-        on_rescan,        # Callable[[], None] or None — Step-4 "Rescan"
-        source_tag,       # free-form source label for DeletionEngine
-                          # metadata / deletion-history DB
-    ) -> DeleteCeremonyResult
+    DeleteSummaryBar   — always-visible: Selected X files, Will free Y
+    DeleteConfirmModal  — modal: file count, space freed, breakdown
+    DeleteItem / DeleteCeremonyResult / run_delete_ceremony — ceremony engine
 
-The function blocks on a nested event loop while the progress dialog runs
-(same nested event-loop pattern as the original single-window delete flow). It's safe to call from a Tk
-event handler. It must NOT be called from a worker thread.
-
-What this does NOT do:
-  - mutate the page's internal row lists or group lists (that's the
-    caller's job via ``on_remove_paths``)
-  - fire <<CheckChanged>> — ditto
-  - handle the empty-input case — caller should early-return before
-    reaching here
-
-See also:
-  - cerebro.v2.ui.delete_ceremony_widgets — modal classes and helpers
-    (lazy-imported when ``run_delete_ceremony`` runs).
+The function blocks on a nested event loop while the progress dialog runs.
+Safe to call from a Tk event handler. Must NOT be called from a worker thread.
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,31 +20,47 @@ import tkinter as tk
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
+
+from cerebro.v2.ui.theme_applicator import ThemeApplicator, theme_token
 
 _log = logging.getLogger(__name__)
 
+_DANGER   = "#E74C3C"
+_SUCCESS  = "#27AE60"
+_BLUE     = "#2980B9"
+_WHITE    = "#FFFFFF"
+_PANEL_BG = "#F0F0F0"
+_TEXT     = "#111111"
+_TEXT_SEC = "#666666"
+
+
+def _fmt_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 ** 2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 ** 3:
+        return f"{n / 1024 ** 2:.1f} MB"
+    return f"{n / 1024 ** 3:.1f} GB"
+
+
+# ---------------------------------------------------------------------------
+# Delete Flow State Objects
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class DeleteItem:
-    """One file slated for deletion.
-
-    ``path_str`` is kept as a raw string (not a ``Path``) because it also
-    serves as the identity key the caller uses for its internal row list —
-    calling ``Path.resolve()`` on Windows can shift slash style or drive
-    letter case and then the prune step drops the wrong row.
-    """
+    """One file slated for deletion."""
     path_str: str
     size:     int
 
 
 @dataclass
 class DeleteCeremonyResult:
-    """Return value of ``run_delete_ceremony``. Populated regardless of
-    which branch the user took (cancel / rescan / celebrate / partial
-    failure) so the caller can decide its own follow-up."""
+    """Return value of ``run_delete_ceremony``."""
     cancelled:         bool           = False
-    cancelled_at_step: Optional[int]  = None   # 1 or 2 if cancelled
+    cancelled_at_step: Optional[int]  = None
     success_count:     int            = 0
     recovered_bytes:   int            = 0
     deleted_paths:     List[str]      = field(default_factory=list)
@@ -76,6 +68,286 @@ class DeleteCeremonyResult:
     chose_rescan:      bool           = False
     dry_run:           bool           = False
 
+
+# ---------------------------------------------------------------------------
+# Delete Summary Bar (FINAL PLAN §6.1 — always visible)
+# ---------------------------------------------------------------------------
+
+class DeleteSummaryBar(tk.Frame):
+    """Always-visible summary bar: Selected: X files, Will free: Y."""
+
+    HEIGHT = 36
+
+    def __init__(
+        self,
+        master,
+        on_delete: Optional[Callable[[], None]] = None,
+        on_undo: Optional[Callable[[], None]] = None,
+        advanced: bool = False,
+        **kwargs,
+    ) -> None:
+        self._t = ThemeApplicator.get().build_tokens()
+        kwargs.setdefault("bg", self._t.get("bg2", _PANEL_BG))
+        super().__init__(master, **kwargs)
+        self._on_delete = on_delete
+        self._on_undo = on_undo
+        self._advanced = advanced
+        self._selected_count = 0
+        self._selected_size = 0
+        self._dry_run = False
+        self._undo_visible = False
+        self._undo_count = 0
+        self._build()
+        ThemeApplicator.get().register(self._apply_theme)
+
+    def _build(self) -> None:
+        t = self._t
+        bg = theme_token(t, "bg2", _PANEL_BG)
+        fg = theme_token(t, "fg", _TEXT)
+        fg2 = theme_token(t, "fg2", _TEXT_SEC)
+
+        inner = tk.Frame(self, bg=bg)
+        inner.pack(fill="x", padx=12, pady=6)
+
+        self._summary_label = tk.Label(
+            inner, text="Selected: 0 files",
+            bg=bg, fg=fg, font=("Segoe UI", 10, "bold"),
+        )
+        self._summary_label.pack(side="left")
+
+        self._size_label = tk.Label(
+            inner, text="Will free: 0 B",
+            bg=bg, fg=fg2, font=("Segoe UI", 10),
+        )
+        self._size_label.pack(side="left", padx=(12, 0))
+
+        self._dry_run_var = tk.BooleanVar(value=False)
+        self._dry_run_cb = tk.Checkbutton(
+            inner, text="Preview only",
+            variable=self._dry_run_var,
+            bg=bg, fg=fg2, selectcolor=bg,
+            activebackground=bg, activeforeground=fg,
+            font=("Segoe UI", 9),
+            command=self._on_dry_run_toggle,
+        )
+        self._dry_run_cb.pack(side="left", padx=(16, 0))
+
+        self._delete_btn = tk.Button(
+            inner, text="Delete",
+            bg=_DANGER, fg=_WHITE,
+            font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2",
+            padx=20, pady=4,
+            state="disabled",
+            command=self._on_delete_click,
+        )
+        self._delete_btn.pack(side="right")
+
+        self._mode_var = tk.StringVar(value="recycle")
+        if self._advanced:
+            self._build_advanced_modes(inner, bg, fg2)
+
+        self._undo_frame = tk.Frame(self, bg=bg)
+
+    def _build_advanced_modes(self, parent: tk.Frame, bg: str, fg: str) -> None:
+        self._mode_frame = tk.Frame(parent, bg=bg)
+        self._mode_frame.pack(side="right", padx=(0, 8))
+
+        tk.Radiobutton(
+            self._mode_frame, text="Recycle bin", variable=self._mode_var,
+            value="recycle", bg=bg, fg=fg, selectcolor=bg,
+            activebackground=bg, activeforeground=fg,
+            font=("Segoe UI", 9),
+        ).pack(side="left")
+
+        tk.Radiobutton(
+            self._mode_frame, text="Permanent", variable=self._mode_var,
+            value="permanent", bg=bg, fg=fg, selectcolor=bg,
+            activebackground=bg, activeforeground=fg,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(4, 0))
+
+        tk.Radiobutton(
+            self._mode_frame, text="Link replacement", variable=self._mode_var,
+            value="link", bg=bg, fg=fg, selectcolor=bg,
+            activebackground=bg, activeforeground=fg,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(4, 0))
+
+    def update_summary(self, count: int, size: int) -> None:
+        """Update the summary (FINAL PLAN §6.1)."""
+        self._selected_count = count
+        self._selected_size = size
+        self._summary_label.configure(text=f"Selected: {count} files")
+        self._size_label.configure(text=f"Will free: {_fmt_size(size)}")
+        self._delete_btn.configure(
+            state="normal" if count > 0 else "disabled",
+        )
+
+    def show_undo(self, count: int) -> None:
+        """Show undo toast (FINAL PLAN §6.6 — time-limited)."""
+        self._undo_count = count
+        self._undo_visible = True
+        bg = theme_token(self._t, "bg2", _PANEL_BG)
+
+        self._undo_frame.configure(bg=bg)
+        self._undo_frame.pack(fill="x", padx=12, pady=(0, 4))
+
+        tk.Label(
+            self._undo_frame,
+            text=f"{count} files moved to recycle bin",
+            bg=bg, fg=_SUCCESS, font=("Segoe UI", 10),
+        ).pack(side="left")
+
+        undo_btn = tk.Button(
+            self._undo_frame, text="Undo",
+            bg=_BLUE, fg=_WHITE,
+            font=("Segoe UI", 9, "bold"),
+            relief="flat", cursor="hand2",
+            padx=12, pady=2,
+            command=self._on_undo_click,
+        )
+        undo_btn.pack(side="right")
+
+    def hide_undo(self) -> None:
+        self._undo_visible = False
+        self._undo_frame.pack_forget()
+
+    def set_advanced(self, value: bool) -> None:
+        self._advanced = value
+
+    def get_dry_run(self) -> bool:
+        return self._dry_run
+
+    def get_mode(self) -> str:
+        return self._mode_var.get()
+
+    def _on_dry_run_toggle(self) -> None:
+        self._dry_run = self._dry_run_var.get()
+
+    def _on_delete_click(self) -> None:
+        if self._on_delete:
+            self._on_delete()
+
+    def _on_undo_click(self) -> None:
+        self.hide_undo()
+        if self._on_undo:
+            self._on_undo()
+
+    def _apply_theme(self, t: dict) -> None:
+        self._t = t
+
+
+# ---------------------------------------------------------------------------
+# Delete Confirmation Modal (FINAL PLAN §6.3)
+# ---------------------------------------------------------------------------
+
+class DeleteConfirmModal(tk.Toplevel):
+    """Confirmation modal — must include: file count, space freed, breakdown."""
+
+    WIDTH = 420
+    HEIGHT = 320
+
+    def __init__(
+        self,
+        master,
+        file_count: int,
+        space_freed: int,
+        breakdown: Optional[Dict[str, int]] = None,
+        on_confirm: Optional[Callable[[], None]] = None,
+        on_cancel: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(master, **kwargs)
+        self._on_confirm = on_confirm
+        self._on_cancel = on_cancel
+        self.title("Confirm Deletion")
+        self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        self._build(file_count, space_freed, breakdown or {})
+
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - self.WIDTH) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - self.HEIGHT) // 2
+        self.geometry(f"+{x}+{y}")
+        self.bind("<Escape>", lambda _e: self._cancel())
+
+    def _build(self, file_count: int, space_freed: int,
+               breakdown: Dict[str, int]) -> None:
+        t = ThemeApplicator.get().build_tokens()
+        bg = theme_token(t, "bg2", "#FFFFFF")
+        fg = theme_token(t, "fg", _TEXT)
+        fg2 = theme_token(t, "fg2", _TEXT_SEC)
+
+        self.configure(bg=bg)
+
+        tk.Label(
+            self, text="Confirm Deletion",
+            bg=bg, fg=fg, font=("Segoe UI", 14, "bold"),
+        ).pack(pady=(20, 12))
+
+        tk.Label(
+            self, text=f"{file_count} files will be deleted",
+            bg=bg, fg=fg, font=("Segoe UI", 12),
+        ).pack()
+
+        tk.Label(
+            self, text=f"Space freed: {_fmt_size(space_freed)}",
+            bg=bg, fg=_SUCCESS, font=("Segoe UI", 12, "bold"),
+        ).pack(pady=(8, 16))
+
+        if breakdown:
+            breakdown_frame = tk.Frame(self, bg=bg)
+            breakdown_frame.pack(fill="x", padx=40)
+            tk.Label(
+                breakdown_frame, text="Breakdown:",
+                bg=bg, fg=fg2, font=("Segoe UI", 10, "bold"),
+            ).pack(anchor="w")
+            for ext, count in sorted(breakdown.items(), key=lambda x: -x[1]):
+                tk.Label(
+                    breakdown_frame,
+                    text=f"  {ext}: {count} files",
+                    bg=bg, fg=fg2, font=("Segoe UI", 9),
+                ).pack(anchor="w")
+
+        btn_frame = tk.Frame(self, bg=bg)
+        btn_frame.pack(side="bottom", fill="x", padx=20, pady=16)
+
+        tk.Button(
+            btn_frame, text="Cancel",
+            bg=bg, fg=fg, font=("Segoe UI", 10),
+            relief="flat", cursor="hand2",
+            padx=20, pady=6,
+            command=self._cancel,
+        ).pack(side="right", padx=(8, 0))
+
+        tk.Button(
+            btn_frame, text="Delete",
+            bg=_DANGER, fg=_WHITE,
+            font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2",
+            padx=20, pady=6,
+            command=self._confirm,
+        ).pack(side="right")
+
+    def _confirm(self) -> None:
+        self.destroy()
+        if self._on_confirm:
+            self._on_confirm()
+
+    def _cancel(self) -> None:
+        self.destroy()
+        if self._on_cancel:
+            self._on_cancel()
+
+
+# ---------------------------------------------------------------------------
+# Full Delete Ceremony (preserved from existing implementation)
+# ---------------------------------------------------------------------------
 
 def run_delete_ceremony(
     parent:           tk.Widget,
@@ -87,17 +359,16 @@ def run_delete_ceremony(
     source_tag:       str = "delete_flow",
     dry_run:          bool = False,
 ) -> DeleteCeremonyResult:
-    """Run the 4-step ceremony and return what happened.
+    """Run the delete ceremony and return what happened.
 
-    Flow (unchanged from the original Results-page delete implementation):
+    Flow:
         Step 1 — "Are you sure?"                  Cancel / Confirm
         Step 2 — breakdown + Recycle Bin notice   Cancel / Allow
         Step 3 — progress dialog + worker thread  (non-cancellable)
         Step 4 — summary                          Rescan / OK
-        Step 5 — celebration overlay → on_navigate_home()
+        Step 5 — celebration overlay -> on_navigate_home()
 
-    After step 3 succeeds (i.e. any file deleted), the floating Undo
-    toast is shown bottom-right of the parent's toplevel.
+    After step 3 succeeds, the floating Undo toast is shown bottom-right.
     """
     result = DeleteCeremonyResult()
 
@@ -112,13 +383,13 @@ def run_delete_ceremony(
         )
         from cerebro.v2.core.deletion_history_db import log_deletion_event
     except ImportError:
-        _log.exception("Delete ceremony unavailable — delete_ceremony_widgets import failed")
+        _log.exception("Delete ceremony unavailable")
         return result
 
     try:
         from cerebro.utils.formatting import format_bytes
     except ImportError:
-        format_bytes = None    # type: ignore[assignment]
+        format_bytes = None
 
     count = len(items)
     noun  = _delete_media_label(scan_mode)
@@ -141,11 +412,10 @@ def run_delete_ceremony(
         f"Preview {count} {noun}?" if dry_run else f"Delete {count} {noun}?"
     )
 
-    # -- Step 1 -------------------------------------------------------
     d1 = _DeleteDialog(
         parent,
         title=f"{dry_prefix}Delete Confirmation",
-        icon="⚠",
+        icon="\u26A0",
         headline=d_head_1,
         body=d_body_1,
         btn_cancel="Cancel",
@@ -157,10 +427,6 @@ def run_delete_ceremony(
         result.cancelled_at_step = 1
         return result
 
-    # -- Step 2 -------------------------------------------------------
-    # Build the breakdown strings the legacy flow uses.
-    # `_delete_breakdown` needs a row-like object; the tuples here cover
-    # the fields it reads (extension / size).
     breakdown_rows = [
         {
             "extension": Path(it.path_str).suffix.lower(),
@@ -179,7 +445,7 @@ def run_delete_ceremony(
     d2 = _DeleteDialog(
         parent,
         title=f"{dry_prefix}Move to Recycle Bin",
-        icon="♻",
+        icon="\u267B",
         headline=("Recycle Bin preview" if dry_run else "Moving to Recycle Bin"),
         body=(
             (
@@ -215,7 +481,6 @@ def run_delete_ceremony(
         )
         return result
 
-    # -- Step 3 -------------------------------------------------------
     prog = _DeleteProgressDialog(parent, total=count)
 
     def _worker() -> None:
@@ -224,9 +489,9 @@ def run_delete_ceremony(
                 DeletionEngine, DeletionPolicy, DeletionRequest,
             )
         except ImportError:
-            DeletionEngine  = None   # type: ignore[assignment]
-            DeletionPolicy  = None   # type: ignore[assignment]
-            DeletionRequest = None   # type: ignore[assignment]
+            DeletionEngine  = None
+            DeletionPolicy  = None
+            DeletionRequest = None
 
         engine  = DeletionEngine() if DeletionEngine else None
         request = (
@@ -239,7 +504,7 @@ def run_delete_ceremony(
         try:
             import send2trash
         except ImportError:
-            send2trash = None    # type: ignore[assignment]
+            send2trash = None
 
         for i, it in enumerate(items):
             row_key = it.path_str
@@ -285,13 +550,12 @@ def run_delete_ceremony(
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"delete-ceremony-{source_tag}").start()
-    prog.wait()   # nested event loop — exits when worker calls prog.close()
+    prog.wait()
 
-    # -- Post-worker: prune caller state + Undo toast ----------------
     if result.deleted_paths:
         try:
             on_remove_paths(set(result.deleted_paths))
-        except Exception:   # pylint: disable=broad-except
+        except Exception:
             _log.exception("on_remove_paths callback raised")
 
         try:
@@ -303,16 +567,15 @@ def run_delete_ceremony(
                 size_str=size_str,
                 deleted_paths=list(result.deleted_paths),
             )
-        except Exception:   # pylint: disable=broad-except
-            _log.debug("Undo toast unavailable — skipping", exc_info=True)
+        except Exception:
+            _log.debug("Undo toast unavailable", exc_info=True)
 
-    # -- Partial failure → warning, skip summary/celebration ---------
     if result.failed:
         head = "\n".join(
-            f"  • {Path(f).name}: {e}" for f, e in result.failed[:5]
+            f"  \u2022 {Path(f).name}: {e}" for f, e in result.failed[:5]
         )
         more = (
-            f"\n  … and {len(result.failed) - 5} more"
+            f"\n  \u2026 and {len(result.failed) - 5} more"
             if len(result.failed) > 5 else ""
         )
         messagebox.showwarning(
@@ -323,7 +586,6 @@ def run_delete_ceremony(
         )
         return result
 
-    # -- Step 4 — summary --------------------------------------------
     d4 = _DeleteSummaryDialog(
         parent, noun=noun,
         count=result.success_count,
@@ -335,16 +597,15 @@ def run_delete_ceremony(
         if on_rescan:
             try:
                 on_rescan()
-            except Exception:   # pylint: disable=broad-except
+            except Exception:
                 _log.exception("on_rescan callback raised")
         return result
 
-    # -- Step 5 — celebration overlay --------------------------------
     def _done() -> None:
         if on_navigate_home:
             try:
                 on_navigate_home()
-            except Exception:   # pylint: disable=broad-except
+            except Exception:
                 _log.exception("on_navigate_home callback raised")
 
     _DeleteCelebration(parent, noun=noun, on_done=_done)
