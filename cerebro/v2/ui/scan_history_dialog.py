@@ -82,10 +82,13 @@ def record_scan(
     files_found: int,
     bytes_reclaimable: int,
     duration_seconds: float,
+    timestamp: float | None = None,
 ) -> None:
     """
     Append a completed scan record to the history file.
     Call this from the scan completion path (e.g. AppShell / ScanPage) after every successful scan.
+    If ``timestamp`` is set, it is stored as the row time and should match
+    the snapshot written by :func:`cerebro.v2.persistence.save_scan_results_snapshot`.
     """
     get_scan_history_db().record_scan(
         mode=mode,
@@ -94,6 +97,7 @@ def record_scan(
         files_found=files_found,
         bytes_reclaimable=bytes_reclaimable,
         duration_seconds=duration_seconds,
+        timestamp=timestamp,
     )
 
 

@@ -38,6 +38,7 @@ from cerebro.v2.ui.design_tokens import (
     TEXT_PRIMARY, TEXT_SECONDARY,
 )
 from cerebro.v2.ui.theme_applicator import ThemeApplicator, theme_token
+from cerebro.v2.ui.widgets.data_grid import DataGrid, DataGridColumn
 
 
 # ---------------------------------------------------------------------------
@@ -189,19 +190,6 @@ class _SubTabBar(tk.Frame):
 class _ScanHistoryPanel(tk.Frame):
     """Scan history: sort / filter / pagination driven by :class:`AppState` (Blueprint §3)."""
 
-    _COLS = ("date", "mode", "folders", "groups", "files", "reclaimable", "duration")
-    _HEADINGS = {
-        "date":        ("Date / Time",  160),
-        "mode":        ("Mode",          90),
-        "folders":     ("Folders",       80),
-        "groups":      ("Groups",        70),
-        "files":       ("Files",         70),
-        "reclaimable": ("Reclaimable",  110),
-        "duration":    ("Duration",      80),
-    }
-
-    _STYLE_NAME = "History.Treeview"
-
     def __init__(
         self,
         parent: tk.Widget,
@@ -270,36 +258,27 @@ class _ScanHistoryPanel(tk.Frame):
         self._tree_frame = tk.Frame(self, bg=NAVY)
         self._tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
 
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure(
-            self._STYLE_NAME,
-            background=CARD_BG, foreground=TEXT_PRIMARY,
-            fieldbackground=CARD_BG, rowheight=26,
-            font=FONT_BODY,
+        self._data_grid = DataGrid(
+            self._tree_frame,
+            [
+                DataGridColumn("date", "Date / Time", 160, "w"),
+                DataGridColumn("mode", "Mode", 90, "center"),
+                DataGridColumn("folders", "Folders", 80, "center"),
+                DataGridColumn("groups", "Groups", 70, "center"),
+                DataGridColumn("files", "Files", 70, "center"),
+                DataGridColumn("reclaimable", "Reclaimable", 110, "e"),
+                DataGridColumn("duration", "Duration", 80, "center"),
+            ],
+            tree=False,
+            style_name="Cerebro.HistoryDataGrid",
+            on_sort_column=self._on_sort_column
+            if self._coordinator
+            else None,
+            on_row_open=self._on_row_open,
+            select_mode="browse",
+            row_height=26,
         )
-        style.configure(
-            f"{self._STYLE_NAME}.Heading",
-            background=NAVY_MID, foreground=TEXT_PRIMARY,
-            font=FONT_SMALL, relief="flat",
-        )
-        style.map(self._STYLE_NAME, background=[("selected", ROW_SEL)])
-
-        self._tree = ttk.Treeview(
-            self._tree_frame, columns=self._COLS, show="headings",
-            selectmode="browse", style=self._STYLE_NAME,
-        )
-        for col, (text, width) in self._HEADINGS.items():
-            sort_cmd = (lambda c=col: self._on_sort_column(c)) if self._coordinator else None
-            self._tree.heading(col, text=text, command=sort_cmd)
-            anchor = "w" if col == "date" else "center"
-            self._tree.column(col, width=width, anchor=anchor)
-
-        sb = ttk.Scrollbar(self._tree_frame, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self._tree.pack(fill="both", expand=True)
-        self._tree.bind("<Double-1>", self._on_row_double_click)
+        self._data_grid.pack(fill="both", expand=True)
 
         # Pagination (only when state-driven; legacy mode shows list without pager)
         self._pg_frame = None
@@ -389,8 +368,8 @@ class _ScanHistoryPanel(tk.Frame):
             self._coordinator.history_set_page(cpage)
             return
         self._iid_to_row = {}
-        self._tree.delete(*self._tree.get_children())
-        for rowd in page_rows:
+        self._data_grid.clear()
+        for idx, rowd in enumerate(page_rows):
             ts = float(rowd.get("ts") or 0)
             date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts else "—"
             mode = str(rowd.get("mode", "")).replace("_", " ").title()
@@ -399,9 +378,11 @@ class _ScanHistoryPanel(tk.Frame):
             files = str(rowd.get("files", 0))
             rec = _fmt_bytes(int(rowd.get("bytes", 0)))
             dur = _fmt_dur(float(rowd.get("duration", 0.0)))
-            iid = self._tree.insert(
-                "", "end",
-                values=(date, mode, folders, groups, files, rec, dur),
+            iid = f"hs{int(cpage)}_{idx}"
+            self._data_grid.insert_row(
+                iid,
+                (date, mode, folders, groups, files, rec, dur),
+                data={},
             )
             self._iid_to_row[iid] = rowd
         if self._pg_lbl is not None:
@@ -444,26 +425,12 @@ class _ScanHistoryPanel(tk.Frame):
                 except (tk.TclError, TypeError, ValueError):
                     pass
 
-        style = ttk.Style()
-        style.configure(
-            self._STYLE_NAME,
-            background=colors["card"],
-            foreground=colors["fg"],
-            fieldbackground=colors["card"],
-            rowheight=26,
-            font=FONT_BODY,
-        )
-        style.configure(
-            f"{self._STYLE_NAME}.Heading",
-            background=colors["bar"],
-            foreground=colors["fg"],
-            font=FONT_SMALL,
-            relief="flat",
-        )
-        style.map(
-            self._STYLE_NAME,
-            background=[("selected", colors["row_sel"])],
-            foreground=[("selected", colors["row_sel_fg"])],
+        self._data_grid.apply_theme(
+            bg=colors["card"],
+            fg=colors["fg"],
+            heading_bg=colors["bar"],
+            heading_fg=colors["fg"],
+            select_bg=colors["row_sel"],
         )
         tfb = self._pg_frame
         if tfb is not None:
@@ -516,33 +483,35 @@ class _ScanHistoryPanel(tk.Frame):
         from cerebro.v2.state.history_view import scan_entry_to_row
 
         rows = [scan_entry_to_row(e) for e in entries]
-        self._tree.delete(*self._tree.get_children())
-        for rowd in rows:
+        self._data_grid.clear()
+        self._iid_to_row = {}
+        for idx, rowd in enumerate(rows):
             ts = float(rowd.get("ts") or 0)
             date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts else "—"
             mode = str(rowd.get("mode", "")).replace("_", " ").title()
-            self._tree.insert(
-                "", "end",
-                values=(
-                    date, mode,
+            iid = f"leg_{idx}"
+            self._data_grid.insert_row(
+                iid,
+                (
+                    date,
+                    mode,
                     str(rowd.get("folder_count", 0)),
                     str(rowd.get("groups", 0)),
                     str(rowd.get("files", 0)),
                     _fmt_bytes(int(rowd.get("bytes", 0))),
                     _fmt_dur(float(rowd.get("duration", 0.0))),
                 ),
+                data={},
             )
+            self._iid_to_row[iid] = rowd
         self._count_lbl.configure(
             text=f"  {len(rows)} scan{'s' if len(rows) != 1 else ''} recorded",
         )
 
-    def _on_row_double_click(self, event) -> None:
+    def _on_row_open(self, iid: str, _data: object) -> None:
         if not self._on_session_click:
             return
-        sel = self._tree.selection()
-        if not sel:
-            return
-        rowd = self._iid_to_row.get(sel[0])
+        rowd = self._iid_to_row.get(iid)
         if rowd is not None:
             self._on_session_click(row_to_entry_proxy(rowd))
 
@@ -566,17 +535,6 @@ class _ScanHistoryPanel(tk.Frame):
 
 class _DeletionHistoryPanel(tk.Frame):
     """Treeview showing deletion history entries, loaded from SQLite."""
-
-    _COLS = ("date", "filename", "path", "size", "mode")
-    _HEADINGS = {
-        "date":     ("Date",          160),
-        "filename": ("File",          160),
-        "path":     ("Original Path", 340),
-        "size":     ("Size",           90),
-        "mode":     ("Mode",           90),
-    }
-
-    _STYLE_NAME = "Deletion.Treeview"
 
     def __init__(self, parent: tk.Widget, store: Any = None, coordinator: Any = None) -> None:
         super().__init__(parent, bg=NAVY)
@@ -608,33 +566,22 @@ class _DeletionHistoryPanel(tk.Frame):
         self._tree_frame = tk.Frame(self, bg=NAVY)
         self._tree_frame.pack(fill="both", expand=True, padx=PAD_X, pady=(PAD_Y, 0))
 
-        style = ttk.Style()
-        style.configure(
-            self._STYLE_NAME,
-            background=CARD_BG, foreground=TEXT_PRIMARY,
-            fieldbackground=CARD_BG, rowheight=26,
-            font=FONT_BODY,
+        self._data_grid = DataGrid(
+            self._tree_frame,
+            [
+                DataGridColumn("date", "Date", 160, "w"),
+                DataGridColumn("filename", "File", 160, "w"),
+                DataGridColumn("path", "Original Path", 340, "w"),
+                DataGridColumn("size", "Size", 90, "e"),
+                DataGridColumn("mode", "Mode", 90, "center"),
+            ],
+            tree=False,
+            style_name="Cerebro.DeletionDataGrid",
+            on_sort_column=None,
+            select_mode="browse",
+            row_height=26,
         )
-        style.configure(
-            f"{self._STYLE_NAME}.Heading",
-            background=NAVY_MID, foreground=TEXT_PRIMARY,
-            font=FONT_SMALL, relief="flat",
-        )
-        style.map(self._STYLE_NAME, background=[("selected", ROW_SEL)])
-
-        self._tree = ttk.Treeview(
-            self._tree_frame, columns=list(self._COLS), show="headings",
-            selectmode="browse", style=self._STYLE_NAME,
-        )
-        for col, (text, width) in self._HEADINGS.items():
-            self._tree.heading(col, text=text)
-            anchor = "e" if col == "size" else "w" if col in ("date", "filename", "path") else "center"
-            self._tree.column(col, width=width, anchor=anchor)
-
-        sb = ttk.Scrollbar(self._tree_frame, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self._tree.pack(fill="both", expand=True)
+        self._data_grid.pack(fill="both", expand=True)
 
         self._count_lbl = tk.Label(
             self, text="", bg=NAVY_MID, fg=TEXT_MUTED, font=FONT_SMALL,
@@ -651,27 +598,12 @@ class _DeletionHistoryPanel(tk.Frame):
         if self._tree_frame is not None:
             self._tree_frame.configure(bg=colors["bg"])
         self._count_lbl.configure(bg=colors["bar"], fg=colors["fg_muted"])
-
-        style = ttk.Style()
-        style.configure(
-            self._STYLE_NAME,
-            background=colors["card"],
-            foreground=colors["fg"],
-            fieldbackground=colors["card"],
-            rowheight=26,
-            font=FONT_BODY,
-        )
-        style.configure(
-            f"{self._STYLE_NAME}.Heading",
-            background=colors["bar"],
-            foreground=colors["fg"],
-            font=FONT_SMALL,
-            relief="flat",
-        )
-        style.map(
-            self._STYLE_NAME,
-            background=[("selected", colors["row_sel"])],
-            foreground=[("selected", colors["row_sel_fg"])],
+        self._data_grid.apply_theme(
+            bg=colors["card"],
+            fg=colors["fg"],
+            heading_bg=colors["bar"],
+            heading_fg=colors["fg"],
+            select_bg=colors["row_sel"],
         )
 
     def load(self) -> None:
@@ -694,8 +626,8 @@ class _DeletionHistoryPanel(tk.Frame):
         self._fill_tree_from_dicts(s.history_deletion_rows)
 
     def _fill_tree_from_dicts(self, data: list) -> None:
-        self._tree.delete(*self._tree.get_children())
-        for d in data:
+        self._data_grid.clear()
+        for di, d in enumerate(data):
             try:
                 path = d.get("path", "")
                 filename = d.get("filename", Path(str(path)).name)
@@ -708,9 +640,11 @@ class _DeletionHistoryPanel(tk.Frame):
                 except (ValueError, TypeError):
                     date_txt = str(del_date)
                 size_txt = _fmt_bytes(size)
-                self._tree.insert(
-                    "", "end",
-                    values=(date_txt, str(filename), str(path), size_txt, str(mode)),
+                iid = f"del{di}"
+                self._data_grid.insert_row(
+                    iid,
+                    (date_txt, str(filename), str(path), size_txt, str(mode)),
+                    data={},
                 )
             except (ValueError, TypeError, KeyError, OSError, AttributeError):
                 continue
@@ -722,8 +656,8 @@ class _DeletionHistoryPanel(tk.Frame):
     def _populate(self, rows) -> None:
         if self._coordinator is not None:
             return
-        self._tree.delete(*self._tree.get_children())
-        for row in rows:
+        self._data_grid.clear()
+        for ri, row in enumerate(rows):
             try:
                 _id, filename, path, size, deletion_date, mode = row
                 try:
@@ -732,7 +666,12 @@ class _DeletionHistoryPanel(tk.Frame):
                 except (ValueError, TypeError):
                     date_txt = str(deletion_date)
                 size_txt = _fmt_bytes(int(size))
-                self._tree.insert("", "end", values=(date_txt, filename, path, size_txt, str(mode)))
+                iid = f"dlr{ri}"
+                self._data_grid.insert_row(
+                    iid,
+                    (date_txt, filename, path, size_txt, str(mode)),
+                    data={},
+                )
             except (ValueError, TypeError):
                 continue
         count = len(rows)

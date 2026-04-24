@@ -11,19 +11,22 @@ from cerebro.v2.state import (
     HistorySubTabChanged,
     ResultsFilesRemoved,
     ReviewViewFilterChanged,
+    ResultsGroupGridSortChanged,
     ResultsViewFilterChanged,
-    ResultsViewSortChanged,
+    ResultsViewTextFilterChanged,
     ReviewNavigate,
     ScanCompleted,
     ScanEnded,
     ScanProgressSnapshot,
     ScanStarted,
     SetActiveTab,
+    SetDryRun,
     StateStore,
     create_initial_state,
     prune_paths_from_groups,
     reduce,
 )
+from cerebro.v2.state.serialize import app_state_to_doc, app_state_to_json
 
 
 def _one_file_group(gid: int = 1) -> DuplicateGroup:
@@ -43,9 +46,28 @@ def test_reduce_scan_completed_sets_mode_and_tab() -> None:
     assert s1.selected_group_id is None
     assert s1.review_unlocked is True
     assert s1.results_file_filter == "all"
-    assert s1.results_file_sort_column == "Name"
-    assert s1.results_file_sort_asc is True
+    assert s1.results_group_sort_column == "reclaimable"
+    assert s1.results_group_sort_asc is False
     assert s1.review_file_filter == "all"
+    assert s1.results_text_filter == ""
+
+
+def test_set_dry_run_and_text_filter() -> None:
+    s0 = create_initial_state()
+    s1 = reduce(s0, SetDryRun(True))
+    assert s1.dry_run is True
+    s2 = reduce(s1, SetDryRun(False))
+    assert s2.dry_run is False
+    s3 = reduce(s2, ResultsViewTextFilterChanged("  foo  "))
+    assert s3.results_text_filter == "  foo  "
+
+
+def test_serialize_doc() -> None:
+    s0 = create_initial_state()
+    d = app_state_to_doc(s0)
+    assert d["dry_run"] is False
+    assert "active_tab" in d
+    assert app_state_to_json(s0).startswith("{")
 
 
 def test_prune_drops_group_when_one_file_left() -> None:
@@ -86,18 +108,18 @@ def test_results_files_removed_empty_paths_noop() -> None:
     assert len(s2.groups) == 1
 
 
-def test_results_view_sort_and_filter() -> None:
+def test_results_group_sort_and_filter() -> None:
     s0 = create_initial_state()
     s0 = reduce(s0, ScanCompleted([_one_file_group()], "files"))
-    s1 = reduce(s0, ResultsViewSortChanged("Size", False))
-    assert s1.results_file_sort_column == "Size"
-    assert s1.results_file_sort_asc is False
+    s1 = reduce(s0, ResultsGroupGridSortChanged("files", False))
+    assert s1.results_group_sort_column == "files"
+    assert s1.results_group_sort_asc is False
     s2 = reduce(s1, ResultsViewFilterChanged("pictures"))
     assert s2.results_file_filter == "pictures"
     s3 = reduce(s2, ResultsViewFilterChanged("invalid"))
     assert s3.results_file_filter == "all"
-    s4 = reduce(s3, ResultsViewSortChanged("Nope", True))
-    assert s4.results_file_sort_column == "Name"
+    s4 = reduce(s3, ResultsGroupGridSortChanged("bogus", True))
+    assert s4.results_group_sort_column == "reclaimable"
 
 
 def test_deletion_history_data_loaded() -> None:

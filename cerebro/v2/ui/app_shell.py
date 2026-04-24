@@ -35,6 +35,7 @@ from cerebro.v2.ui.results_page    import ResultsPage
 from cerebro.v2.ui.review_page      import ReviewPage
 from cerebro.v2.ui.history_page     import HistoryPage
 from cerebro.v2.ui.diagnostics_page import DiagnosticsPage
+from cerebro.v2.ui.a11y import apply_focus_ring, first_focusable_descendant
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.engines.orchestrator   import ScanOrchestrator
 from cerebro.v2.coordinator         import CerebroCoordinator
@@ -110,6 +111,30 @@ class AppShell(CTk):
         # quick dropdown, etc.) can trigger a global re-dispatch without
         # threading a reference all the way through.
         ThemeApplicator.get().set_root(self)
+        toks0 = ThemeApplicator.get().build_tokens()
+        skip_bg = toks0.get("bg", _PAGE_BG_FALLBACK)
+        self._skip_bar = tk.Frame(self, bg=skip_bg, height=30)
+        self._skip_bar.pack(fill="x")
+        self._skip_bar.pack_propagate(False)
+        self._skip_btn = tk.Button(
+            self._skip_bar,
+            text="Skip to main content",
+            command=self._focus_main_content,
+            bg=skip_bg,
+            fg=toks0.get("fg2", "#555555"),
+            activebackground=skip_bg,
+            activeforeground=toks0.get("fg", "#111111"),
+            relief="flat",
+            font=("Segoe UI", 9, "underline"),
+            cursor="hand2",
+            padx=8,
+            pady=3,
+        )
+        self._skip_btn.pack(side="left", padx=6, pady=2)
+        apply_focus_ring(
+            self._skip_btn,
+            focus_color=toks0.get("focus_ring", toks0.get("accent", "#2563EB")),
+        )
 
         self._title_bar = TitleBar(
             self,
@@ -184,6 +209,7 @@ class AppShell(CTk):
             orchestrator=self._orchestrator,
             on_scan_complete=self._coordinator.scan_completed,
             coordinator=self._coordinator,
+            store=self._store,
         )
 
         self._current_page: str = "welcome"
@@ -222,6 +248,20 @@ class AppShell(CTk):
         """Paint the root window and page container with the active theme."""
         bg = t.get("bg", _PAGE_BG_FALLBACK)
         try:
+            self._skip_bar.configure(bg=bg)
+            self._skip_btn.configure(
+                bg=bg,
+                fg=t.get("fg2", "#555555"),
+                activebackground=bg,
+                activeforeground=t.get("fg", "#111111"),
+            )
+        except (tk.TclError, AttributeError):
+            pass
+        apply_focus_ring(
+            self._skip_btn,
+            focus_color=t.get("focus_ring", t.get("accent", "#2563EB")),
+        )
+        try:
             self.configure(fg_color=bg)
         except (tk.TclError, AttributeError):
             try:
@@ -235,6 +275,22 @@ class AppShell(CTk):
                 self._page_container.configure(bg=bg)
             except tk.TclError:
                 pass
+
+    def _focus_main_content(self) -> None:
+        """Bypass repeated chrome (2.4.1); focus the active page or a focusable in it."""
+        s = self._store.get_state()
+        page = self._pages.get(s.active_tab)
+        if page is not None:
+            t = first_focusable_descendant(page)
+            if t is not None:
+                try:
+                    t.focus_set()
+                except (tk.TclError, AttributeError):
+                    self._tab_bar.focus_active_tab()
+            else:
+                self._tab_bar.focus_active_tab()
+        else:
+            self._tab_bar.focus_active_tab()
 
     # ------------------------------------------------------------------
     # Tab switching (store is the only navigation source; Blueprint §0.1)
@@ -306,49 +362,105 @@ class AppShell(CTk):
         ThemeApplicator.get().apply(theme_name, self)
 
     def _on_open_session(self, session) -> None:
-        """Load a past session into the Results page and switch to it (Phase 4+)."""
+        """Restore saved duplicate groups from ``~/.cerebro/scan_snapshots/`` and open Results."""
+        from tkinter import messagebox
+
+        from cerebro.v2.persistence import (
+            load_last_scan_snapshot,
+            load_scan_results_for_session_timestamp,
+        )
+
+        if session is None:
+            messagebox.showinfo(
+                "No session",
+                "There is no recent scan to open.",
+                parent=self,
+            )
+            return
+        try:
+            ts = float(getattr(session, "timestamp", 0) or 0.0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        by_ts = load_scan_results_for_session_timestamp(ts)
+        if by_ts is not None:
+            groups, mode = by_ts
+        else:
+            last = load_last_scan_snapshot()
+            if last is None:
+                messagebox.showinfo(
+                    "No saved results",
+                    "Run a scan at least once to save results on this computer, then try again.",
+                    parent=self,
+                )
+                return
+            groups, mode, snap_ts = last[0], last[1], last[2]
+            if ts and abs(snap_ts - ts) > 2.0:
+                messagebox.showinfo(
+                    "Results not on disk for this session",
+                    "Only the most recent completed scan is kept in full. "
+                    "For older runs, only summary stats remain in history.",
+                    parent=self,
+                )
+                return
+        if not groups:
+            messagebox.showinfo(
+                "No results",
+                "Saved session had no duplicate groups to show.",
+                parent=self,
+            )
+            return
+        self._coordinator.scan_completed(list(groups), mode)
         self.switch_tab("results")
 
     def _on_app_state_changed(self, s: AppState, _old: AppState, action: Action) -> None:
-        """Apply store transitions: data side effects, then one chrome sync to ``s``."""
+        """Store subscriber: apply state-derived views, then a single shell sync to ``s``."""
         if isinstance(action, ScanCompleted):
-            results = s.groups
-            mode = s.scan_mode
-            self._results_page.load_results(results, mode=mode)
-            try:
-                self._review_page.load_results(results, mode=mode)
-            except Exception:  # pylint: disable=broad-except
-                _log.exception("ReviewPage.load_results failed")
-            dup_count = sum(max(0, len(g.files) - 1) for g in results)
-            self.set_results_badge(dup_count)
-            self.enable_review_tab()
-            try:
-                self._pages["welcome"].refresh()
-            except (AttributeError, tk.TclError):
-                pass
+            self._apply_scan_completed_to_pages(s)
         elif isinstance(action, ReviewNavigate):
-            glist = list(action.groups) if action.groups is not None else s.groups
-            gid = s.selected_group_id
-            if gid is not None:
-                self._review_page.load_group(glist, gid, mode=s.scan_mode)
+            self._apply_review_navigate(s, action)
         elif isinstance(action, ResultsFilesRemoved):
-            results = s.groups
-            mode = s.scan_mode
-            self._results_page.load_results(results, mode=mode)
-            try:
-                if s.active_tab == "review":
-                    self._review_page.apply_pruned_groups(results, mode=mode)
-                else:
-                    self._review_page.load_results(results, mode=mode)
-            except Exception:  # pylint: disable=broad-except
-                _log.exception("ReviewPage refresh after ResultsFilesRemoved failed")
-            dup_count = sum(max(0, len(g.files) - 1) for g in results)
-            self.set_results_badge(dup_count)
-            if dup_count == 0:
-                self.disable_review_tab()
+            self._apply_results_files_removed_to_pages(s)
 
-        # Idempotent: ``set_active_key`` / ``_apply_visible_page`` no-op if already in sync
+        # One chrome step: tab strip + visible page follow ``s.active_tab``
         self._sync_chrome_to_state(s)
+
+    def _apply_scan_completed_to_pages(self, s: AppState) -> None:
+        results = s.groups
+        mode = s.scan_mode
+        self._results_page.load_results(results, mode=mode)
+        try:
+            self._review_page.load_results(results, mode=mode)
+        except Exception:  # pylint: disable=broad-except
+            _log.exception("ReviewPage.load_results failed")
+        dup_count = sum(max(0, len(g.files) - 1) for g in results)
+        self.set_results_badge(dup_count)
+        self.enable_review_tab()
+        try:
+            self._pages["welcome"].refresh()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _apply_review_navigate(self, s: AppState, action: ReviewNavigate) -> None:
+        glist = list(action.groups) if action.groups is not None else s.groups
+        gid = s.selected_group_id
+        if gid is not None:
+            self._review_page.load_group(glist, gid, mode=s.scan_mode)
+
+    def _apply_results_files_removed_to_pages(self, s: AppState) -> None:
+        results = s.groups
+        mode = s.scan_mode
+        self._results_page.load_results(results, mode=mode)
+        try:
+            if s.active_tab == "review":
+                self._review_page.apply_pruned_groups(results, mode=mode)
+            else:
+                self._review_page.load_results(results, mode=mode)
+        except Exception:  # pylint: disable=broad-except
+            _log.exception("ReviewPage refresh after ResultsFilesRemoved failed")
+        dup_count = sum(max(0, len(g.files) - 1) for g in results)
+        self.set_results_badge(dup_count)
+        if dup_count == 0:
+            self.disable_review_tab()
 
     def _on_open_group(self, group_id: int, groups: list) -> None:
         """Double-click in Results: navigate via coordinator + store."""

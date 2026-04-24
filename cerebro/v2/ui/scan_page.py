@@ -35,6 +35,9 @@ except ImportError:
 
 from cerebro.engines.base_engine import ScanProgress, ScanState
 from cerebro.v2.core.engine_deps import EngineState, probe_mode
+from cerebro.v2.state import StateStore
+from cerebro.v2.state.actions import ScanProgressSnapshot, ScanStarted
+from cerebro.v2.state.app_state import AppState
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
 from cerebro.v2.ui.widgets.scan_in_progress_view import ScanInProgressView
 
@@ -925,6 +928,7 @@ class ScanPage(tk.Frame):
         orchestrator: Any,
         on_scan_complete: Optional[Callable[[list, str], None]] = None,
         coordinator: Any = None,
+        store: Optional[StateStore] = None,
         **kwargs,
     ) -> None:
         initial = ThemeApplicator.get().build_tokens()
@@ -933,6 +937,7 @@ class ScanPage(tk.Frame):
         self._orchestrator     = orchestrator
         self._on_scan_complete = on_scan_complete
         self._coordinator      = coordinator
+        self._store = store
         self._scanning         = False
         self._scan_start_time  = 0.0
         self._current_mode     = "files"
@@ -940,6 +945,29 @@ class ScanPage(tk.Frame):
         self._build()
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
+        if self._store is not None:
+            self._store.subscribe(self._on_store)
+
+    def _on_store(self, s: AppState, _old: AppState, action: object) -> None:
+        if not self._scanning:
+            return
+        if isinstance(action, (ScanProgressSnapshot, ScanStarted)):
+            self._apply_progress_from_state(s)
+
+    def _apply_progress_from_state(self, s: AppState) -> None:
+        d = s.scan_progress
+        if not d:
+            return
+        esp = float(d.get("elapsed_seconds", 0) or 0)
+        if esp <= 0.0 and self._scan_start_time:
+            esp = max(0.0, time.time() - self._scan_start_time)
+        self._progress_view.update_progress(
+            stage=str(d.get("stage") or ""),
+            files_scanned=int(d.get("files_scanned", 0) or 0),
+            files_total=int(d.get("files_total", 0) or 0),
+            elapsed_seconds=esp,
+            current_file=str(d.get("current_file") or ""),
+        )
 
     # ------------------------------------------------------------------
     # Build
@@ -1184,14 +1212,15 @@ class ScanPage(tk.Frame):
     def _handle_progress(self, progress: ScanProgress) -> None:
         if self._coordinator is not None:
             self._coordinator.report_scan_progress(progress)
-        elapsed = time.time() - self._scan_start_time
-        self._progress_view.update_progress(
-            stage=progress.stage or "",
-            files_scanned=progress.files_scanned,
-            files_total=progress.files_total,
-            elapsed_seconds=elapsed,
-            current_file=progress.current_file or "",
-        )
+        if self._store is None:
+            elapsed = time.time() - self._scan_start_time
+            self._progress_view.update_progress(
+                stage=progress.stage or "",
+                files_scanned=progress.files_scanned,
+                files_total=progress.files_total,
+                elapsed_seconds=elapsed,
+                current_file=progress.current_file or "",
+            )
         if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
             self.after(0, lambda s=progress.state: self._finish_scan(s))
 
@@ -1214,6 +1243,7 @@ class ScanPage(tk.Frame):
             # in 39a332c and the AppShell/ScanPage path was left with no
             # history recording at all. Broad catch + logger.exception so any
             # future failure surfaces once instead of being swallowed.
+            session_ts = time.time()
             try:
                 from cerebro.v2.ui.scan_history_dialog import record_scan
 
@@ -1225,9 +1255,18 @@ class ScanPage(tk.Frame):
                     files_found=sum(len(g.files) for g in results),
                     bytes_reclaimable=sum(g.reclaimable for g in results),
                     duration_seconds=max(0.0, time.time() - self._scan_start_time),
+                    timestamp=session_ts,
                 )
             except Exception:
                 _log.exception("Failed to record scan history entry")
+            try:
+                from cerebro.v2.persistence import save_scan_results_snapshot
+
+                save_scan_results_snapshot(
+                    list(results), self._current_mode, session_ts
+                )
+            except Exception:  # pylint: disable=broad-except
+                _log.debug("save_scan_results_snapshot failed", exc_info=True)
 
             if self._on_scan_complete:
                 self._on_scan_complete(results, self._current_mode)

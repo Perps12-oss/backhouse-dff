@@ -59,12 +59,15 @@ class AppState:
     history_filter: str = ""
     history_page: int = 0
     history_page_size: int = 30
-    # Results (duplicate file list) view — type filter + column sort
+    # Duplicates (Results) — file-type filter + text search
     results_file_filter: str = "all"
-    results_file_sort_column: str = "Name"
-    results_file_sort_asc: bool = True
+    # Group grid sort (Sprint 2/3) — reclaims|files|group_id|path
+    results_group_sort_column: str = "reclaimable"
+    results_group_sort_asc: bool = False
     # Review page — file-type filter (same buckets as Results)
     review_file_filter: str = "all"
+    # Results (Duplicates) name/path substring search (Blueprint §7 grid)
+    results_text_filter: str = ""
     # Deletion History sub-tab (mirrors ``HistoryDataLoaded`` for scan)
     history_deletion_rows: List[Dict[str, Any]] = field(default_factory=list)
 

@@ -1,24 +1,27 @@
 """
-ResultsPage — post-scan results with canvas-based virtual file grid.
+ResultsPage — post-scan Duplicates view (grouped grid + preview, Sprint 2–3).
 
-Stats bar · Action toolbar · Filter list · VirtualFileGrid
+Stats bar · Action toolbar · Filter list · :class:`DuplicatesView` (DataGrid)
 """
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, ttk
-from typing import Callable, Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Set, TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     from cerebro.v2.coordinator import CerebroCoordinator
 
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.actions import ResultsViewFilterChanged, ResultsViewSortChanged
+from cerebro.v2.state.actions import (
+    ResultsViewFilterChanged,
+    ResultsViewTextFilterChanged,
+    SetDryRun,
+)
 from cerebro.v2.state.app_state import AppState
 
 _log = logging.getLogger(__name__)
@@ -34,7 +37,11 @@ except ImportError:
     CTkButton   = tk.Button     # type: ignore[misc,assignment]
 
 from cerebro.engines.base_engine import DuplicateGroup
+from cerebro.v2.ui.delete_flow import DeleteItem, run_delete_ceremony
+from cerebro.v2.ui.duplicates_view import DuplicatesView
+from cerebro.v2.ui.file_type_filters import _EXT_ALL_KNOWN, _FILTER_EXTS, classify_file
 from cerebro.v2.ui.theme_applicator import ThemeApplicator
+from cerebro.v2.state.groups_prune import prune_paths_from_groups
 
 # ---------------------------------------------------------------------------
 # Tokens
@@ -51,46 +58,6 @@ _RED      = "#E74C3C"
 _GREEN    = "#27AE60"
 _GRAY     = "#666666"
 _DIMGRAY  = "#AAAAAA"
-_HDR_BG   = "#E8E8E8"
-
-# File-type extension sets for the filter list
-_EXT_MUSIC  = {".mp3",".flac",".ogg",".wav",".aac",".m4a",".wma",".opus",".aiff",".ape"}
-_EXT_PIC    = {".jpg",".jpeg",".png",".gif",".bmp",".webp",".heic",".tiff",".tif",
-               ".cr2",".cr3",".nef",".arw",".dng"}
-_EXT_VID    = {".mp4",".avi",".mkv",".mov",".wmv",".flv",".webm",".m4v",".mpg",".mpeg"}
-_EXT_DOC    = {".pdf",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".txt",".odt",".rtf"}
-_EXT_ARCH   = {".zip",".rar",".7z",".tar",".gz",".bz2",".xz",".iso"}
-
-_FILTER_EXTS: Dict[str, Optional[Set[str]]] = {
-    "all": None,
-    "music": _EXT_MUSIC,
-    "pictures": _EXT_PIC,
-    "videos": _EXT_VID,
-    "documents": _EXT_DOC,
-    "archives": _EXT_ARCH,
-}
-
-_EXT_ALL_KNOWN: Set[str] = (
-    _EXT_MUSIC | _EXT_PIC | _EXT_VID | _EXT_DOC | _EXT_ARCH
-)
-
-
-def classify_file(ext: str) -> str:
-    """Return the Results-filter bucket for a file extension.
-
-    Buckets: ``pictures``, ``music``, ``videos``, ``documents``, ``archives``,
-    ``other``. Input is the extension including the leading dot (e.g.
-    ``'.jpg'``); comparison is case-insensitive.
-    """
-    e = (ext or "").lower()
-    if e in _EXT_PIC:   return "pictures"
-    if e in _EXT_MUSIC: return "music"
-    if e in _EXT_VID:   return "videos"
-    if e in _EXT_DOC:   return "documents"
-    if e in _EXT_ARCH:  return "archives"
-    return "other"
-
-
 def _fmt_size(n: int) -> str:
     if n < 1024:       return f"{n} B"
     if n < 1024**2:    return f"{n/1024:.1f} KB"
@@ -496,80 +463,6 @@ class VirtualFileGrid(tk.Canvas):
 
 
 # ===========================================================================
-# Column header
-# ===========================================================================
-
-class _ColHeader(tk.Canvas):
-    H = 28
-
-    def __init__(
-        self,
-        parent,
-        on_sort: Callable[[str], None],
-        *,
-        state_driven: bool = False,
-        **kw,
-    ) -> None:
-        t = ThemeApplicator.get().build_tokens()
-        kw.setdefault("bg", t.get("bg2", _HDR_BG))
-        kw.setdefault("height", self.H)
-        kw.setdefault("highlightthickness", 0)
-        super().__init__(parent, **kw)
-        self._on_sort   = on_sort
-        self._sort_col  = "Name"
-        self._sort_asc  = True
-        self._state_driven = state_driven
-        self._t         = t
-        self.bind("<Configure>", lambda _e: self._render())
-        self.bind("<Button-1>",  self._on_click)
-
-    def apply_theme(self, t: dict) -> None:
-        self._t = t
-        self.configure(bg=t.get("bg2", _HDR_BG))
-        self._render()
-
-    def _render(self) -> None:
-        self.delete("all")
-        w = self.winfo_width() or 800
-        cols = _col_x_widths(w)
-        fg     = self._t.get("fg2",    "#555555")
-        border = self._t.get("border", _BORDER)
-        for col_name, cx, cw in cols:
-            if cw <= 0:
-                continue
-            label = col_name
-            if col_name == self._sort_col and col_name not in ("☐",):
-                label += " ▲" if self._sort_asc else " ▼"
-            self.create_text(cx + 4, self.H // 2, text=label,
-                             fill=fg, anchor="w",
-                             font=("Segoe UI", 9, "bold"))
-            # column divider
-            self.create_line(cx + cw - 1, 4, cx + cw - 1, self.H - 4,
-                             fill=border)
-
-    def _on_click(self, event) -> None:
-        w = self.winfo_width() or 800
-        cols = _col_x_widths(w)
-        for col_name, cx, cw in cols:
-            if col_name in ("☐",):
-                continue
-            if cx <= event.x < cx + cw:
-                if self._state_driven:
-                    self._on_sort(col_name)
-                else:
-                    self._sort_col = col_name
-                    self._sort_asc = not self._sort_asc if col_name == self._sort_col else True
-                    self._render()
-                    self._on_sort(col_name)
-                break
-
-    def set_sort(self, col: str, asc: bool) -> None:
-        self._sort_col = col
-        self._sort_asc = asc
-        self._render()
-
-
-# ===========================================================================
 # Stats bar
 # ===========================================================================
 
@@ -698,21 +591,16 @@ class _StatsBar(tk.Frame):
 # ===========================================================================
 
 class _ActionToolbar(tk.Frame):
-    """Results action strip — Delete / Move / Copy / Export.
+    """Results action strip — Smart Select, Delete, Move, Copy, Export, dry-run."""
 
-    The Phase-6 "Auto Mark ▼" dropdown and "List / Grid" segmented toggle
-    were removed in the Results→Review split: Auto-Mark (now "Smart
-    Select") belongs on the Review page where the user has already seen
-    thumbnails + file sizes and can make an informed bulk decision; the
-    grid view and side-by-side comparison likewise live on Review.
-    Results keeps only the per-row checkbox → DELETE path, for users
-    who want to hand-curate a subset of the table.
-    """
     H = 40
 
     def __init__(self, master,
                  on_delete: Callable,
                  on_move:   Callable,
+                 dry_run_var: Optional[tk.BooleanVar] = None,
+                 on_dry_run: Optional[Callable] = None,
+                 on_smart_menu: Optional[Callable[[tk.Misc], None]] = None,
                  **kw) -> None:
         t = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", t.get("bg", _WHITE))
@@ -721,6 +609,10 @@ class _ActionToolbar(tk.Frame):
         self.pack_propagate(False)
         self._on_delete    = on_delete
         self._on_move      = on_move
+        self._dry_run_var  = dry_run_var
+        self._on_dry_run   = on_dry_run
+        self._on_smart_menu = on_smart_menu
+        self._smart_btn: Optional[tk.Button] = None
         self._has_sel      = False
         self._t            = t
         self._buttons: List[Dict[str, object]] = []
@@ -736,18 +628,35 @@ class _ActionToolbar(tk.Frame):
         self._inner.pack(fill="both", expand=True, padx=8)
 
         self._del_btn  = self._mk_btn("DELETE",      self._on_delete, role="danger")
+        if self._on_smart_menu is not None:
+            self._smart_btn = tk.Button(
+                self._inner,
+                text="Smart Select \u25BC",
+                command=lambda: self._on_smart_menu(self._smart_btn),  # type: ignore[misc]
+                bg="#8E44AD", fg="#FFFFFF",
+                activebackground="#A255C5", activeforeground="#FFFFFF",
+                font=("Segoe UI", 9, "bold"), relief="flat",
+                cursor="hand2", padx=12, pady=4,
+                borderwidth=0, highlightthickness=0,
+            )
+            self._smart_btn.pack(side="left", padx=(8, 3))
         self._mk_btn("MOVE",            self._on_move)
         self._mk_btn("COPY",            self._noop)
         self._mk_btn("Export results",  self._noop)
 
-        # Hint anchor on the right reminding users where the smart-
-        # select lives now. Lightweight — plain label, no button.
-        tk.Label(
-            self._inner,
-            text="Smart Select lives on the Review tab \u2192",
-            bg=bg, fg=self._t.get("fg_muted", _DIMGRAY),
-            font=("Segoe UI", 9, "italic"),
-        ).pack(side="right", padx=(0, 4))
+        if self._dry_run_var is not None and self._on_dry_run is not None:
+            self._dry_chk = tk.Checkbutton(
+                self._inner,
+                text="Dry run",
+                variable=self._dry_run_var,
+                command=self._on_dry_run,
+                bg=bg,
+                fg=self._t.get("fg2", _GRAY),
+                activebackground=bg,
+                font=("Segoe UI", 9),
+                cursor="hand2",
+            )
+            self._dry_chk.pack(side="right", padx=(6, 6))
 
     def _mk_btn(self, text: str, cmd, *, role: str = "default") -> tk.Button:
         t   = self._t
@@ -797,10 +706,22 @@ class _ActionToolbar(tk.Frame):
                 activebackground=hover, activeforeground=btn_fg,
                 highlightbackground=border,
             )
+        if self._smart_btn is not None:
+            self._smart_btn.configure(
+                bg="#8E44AD", fg="#FFFFFF",
+                activebackground="#A255C5", activeforeground="#FFFFFF",
+            )
         try:
             for child in self._inner.winfo_children():
                 if isinstance(child, tk.Label):
                     child.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
+                if isinstance(child, tk.Checkbutton):
+                    child.configure(
+                        bg=bg,
+                        fg=t.get("fg2", _GRAY),
+                        activebackground=bg,
+                        selectcolor=t.get("bg3", _SURFACE),
+                    )
         except (tk.TclError, AttributeError):
             pass
         self.set_has_selection(self._has_sel)
@@ -972,62 +893,102 @@ class _FilterListBar(tk.Frame):
                 font=("Segoe UI", 10, "bold") if on else ("Segoe UI", 10),
             )
 
+# ===========================================================================
+# Smart Select rules (same semantics as former Review page)
+# ===========================================================================
+
+SMART_SELECT_RULES: List[Tuple[str, str]] = [
+    ("Mark all except the oldest in each group", "select_except_oldest"),
+    ("Mark all except the newest in each group", "select_except_newest"),
+    ("Mark all except the first listed", "select_except_first"),
+    ("Mark all except the last listed", "select_except_last"),
+    ("Mark all except the largest in each group", "select_except_largest"),
+]
+
 
 # ===========================================================================
 # ResultsPage
 # ===========================================================================
 
 class ResultsPage(tk.Frame):
-    """Results page — scan overview, filter/sort table, batch delete.
+    """Post-scan Duplicates: grouped grid, preview, filter-aware Smart Select.
 
-    Scope was narrowed after the Phase-6 Results→Review split: preview,
-    comparison, and Smart Select moved to the Review page. Results is
-    now purely the analytical view: a filterable / sortable table of
-    every file in every duplicate group, with manual per-row check-to-
-    delete via the Phase-5 ``VirtualFileGrid``.
-
-    Call ``load_results(groups)`` after a scan completes.
+    One row per duplicate group (expand for files). Sort and filter are driven
+    from :class:`AppState` via :class:`DuplicatesView` and the coordinator.
     """
 
-    def __init__(self, master,
-                 on_open_group: Optional[Callable[[int, List[DuplicateGroup]], None]] = None,
-                 on_navigate_home: Optional[Callable[[], None]] = None,
-                 on_rescan: Optional[Callable[[], None]] = None,
-                 store: Optional[StateStore] = None,
-                 coordinator: Optional["CerebroCoordinator"] = None,
-                 **kw) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_open_group: Optional[
+            Callable[[int, List[DuplicateGroup]], None]
+        ] = None,
+        on_navigate_home: Optional[Callable[[], None]] = None,
+        on_rescan: Optional[Callable[[], None]] = None,
+        store: Optional[StateStore] = None,
+        coordinator: Optional["CerebroCoordinator"] = None,
+        **kw,
+    ) -> None:
         initial = ThemeApplicator.get().build_tokens()
         kw.setdefault("bg", initial.get("bg", _WHITE))
         super().__init__(master, **kw)
         self._on_open_group = on_open_group
-        # Delete-flow navigation hooks owned by AppShell: after the celebration
-        # overlay and when the user picks "Rescan" in the summary dialog.
         self._on_navigate_home = on_navigate_home
-        self._on_rescan        = on_rescan
+        self._on_rescan = on_rescan
         self._store = store
         self._coordinator = coordinator
         self._use_state_for_view = store is not None and coordinator is not None
-        self._groups:   List[DuplicateGroup] = []
-        self._all_rows: List[Dict]           = []  # flat, unfiltered
-        self._filter    = "all"
-        self._scan_mode: str = "files"  # set by load_results; feeds the
-                                        # delete ceremony's media-noun labels
+        self._groups: List[DuplicateGroup] = []
+        self._filter = "all"
+        self._local_text_filter: str = ""
+        self._search_after: Optional[str] = None
+        self._dry_run_var = tk.BooleanVar(
+            value=(store.get_state().dry_run if store is not None else False)
+        )
+        self._scan_mode: str = "files"
         self._t: dict = initial
+        self._dupes: Optional[DuplicatesView] = None
         self._build()
         self._apply_theme(initial)
         ThemeApplicator.get().register(self._apply_theme)
         if self._store is not None:
             self._store.subscribe(self._on_store)
 
-    # ------------------------------------------------------------------
     def _build(self) -> None:
         self._stats_bar = _StatsBar(self)
         self._stats_bar.pack(fill="x")
 
+        self._search_row = tk.Frame(self, bg=self._t.get("bg", _WHITE))
+        self._search_row.pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(
+            self._search_row,
+            text="Search",
+            bg=self._t.get("bg", _WHITE),
+            fg=self._t.get("fg2", _GRAY),
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(0, 6))
+        self._search_entry = tk.Entry(
+            self._search_row,
+            width=48,
+            font=("Segoe UI", 10),
+        )
+        self._search_entry.pack(side="left", fill="x", expand=True)
+        self._search_entry.bind("<KeyRelease>", self._on_search_key)
+        if self._use_state_for_view and self._store is not None:
+            self._search_entry.insert(0, self._store.get_state().results_text_filter)
+
+        smart = (
+            self._show_smart_select_menu
+            if self._use_state_for_view
+            else None
+        )
         self._toolbar = _ActionToolbar(
             self,
-            on_delete=self._delete_checked,
-            on_move=self._move_checked,
+            on_delete=self._delete_selected_files,
+            on_move=self._move_selected_files,
+            dry_run_var=self._dry_run_var if self._use_state_for_view else None,
+            on_dry_run=self._on_dry_run_toggled if self._use_state_for_view else None,
+            on_smart_menu=smart,
         )
         self._toolbar.pack(fill="x")
 
@@ -1038,132 +999,169 @@ class ResultsPage(tk.Frame):
         )
         self._filter_bar.pack(fill="x")
 
-        self._col_hdr = _ColHeader(
-            self, on_sort=self._on_sort, state_driven=self._use_state_for_view
-        )
-        self._col_hdr.pack(fill="x")
-
         self._body = tk.Frame(self, bg=self._t.get("bg", _WHITE))
         self._body.pack(fill="both", expand=True)
 
-        self._grid = VirtualFileGrid(
-            self._body,
-            on_open_group=self._open_group_by_id,
-        )
-        self._vsb = ttk.Scrollbar(
-            self._body, orient="vertical",
-            command=self._grid.yview,
-        )
-        self._grid.configure(yscrollcommand=self._vsb.set)
-        self._vsb.pack(side="right", fill="y")
-        self._grid.pack(fill="both", expand=True)
-        self._grid.bind("<<CheckChanged>>", self._on_check_changed)
+        if (
+            self._use_state_for_view
+            and self._store is not None
+            and self._coordinator is not None
+        ):
+
+            def _emit_open(gid: int, grps: List[DuplicateGroup]) -> None:
+                if self._on_open_group is not None:
+                    self._on_open_group(gid, grps)
+
+            self._dupes = DuplicatesView(
+                self._body,
+                store=self._store,
+                coordinator=self._coordinator,
+                on_open_group=_emit_open,
+                on_remove_paths=self._remove_paths,
+                on_navigate_home=self._on_navigate_home,
+                on_rescan=self._on_rescan,
+                get_scan_mode=lambda: self._scan_mode,
+                on_file_selection_changed=self._on_dupes_file_selection,
+            )
+            self._dupes.pack(fill="both", expand=True)
+        else:
+            tk.Label(
+                self._body,
+                text="Results grid requires app state (store + coordinator).",
+                bg=self._t.get("bg", _WHITE),
+                fg=self._t.get("fg_muted", _DIMGRAY),
+                font=("Segoe UI", 10),
+            ).pack(expand=True)
 
         self._empty_lbl = tk.Label(
             self._body,
             text="No scan results yet.\nRun a scan from the Scan tab.",
             bg=self._t.get("bg", _WHITE),
             fg=self._t.get("fg_muted", _DIMGRAY),
-            font=("Segoe UI", 11), justify="center",
+            font=("Segoe UI", 11),
+            justify="center",
         )
-        self._empty_lbl.place(relx=0.5, rely=0.4, anchor="center")
 
-    # ------------------------------------------------------------------
-    # Theme
+    def _on_dry_run_toggled(self) -> None:
+        if self._use_state_for_view and self._coordinator is not None:
+            self._coordinator.set_dry_run(bool(self._dry_run_var.get()))
 
-    def _on_store(self, s: AppState, _old: AppState, action: object) -> None:
-        if not self._use_state_for_view or not self._all_rows:
+    def _on_search_key(self, _event: object = None) -> None:
+        if self._use_state_for_view and self._coordinator is not None:
+            if self._search_after is not None:
+                self.after_cancel(self._search_after)
+            self._search_after = self.after(200, self._flush_search_to_state)
+        else:
+            self._local_text_filter = self._search_entry.get()
+            if self._dupes is not None:
+                self._dupes.refresh_from_state()
+
+    def _flush_search_to_state(self) -> None:
+        self._search_after = None
+        if self._coordinator is not None:
+            self._coordinator.results_set_text_filter(self._search_entry.get())
+
+    def _on_store(self, s: AppState, old: AppState, action: object) -> None:
+        if not self._use_state_for_view:
             return
-        if isinstance(action, (ResultsViewFilterChanged, ResultsViewSortChanged)):
-            self._apply_from_state(s)
+        if isinstance(action, SetDryRun) or (
+            old is not None and s.dry_run != old.dry_run
+        ):
+            self._dry_run_var.set(s.dry_run)
+        if isinstance(action, ResultsViewTextFilterChanged):
+            tx = s.results_text_filter
+            if self._search_entry.get() != tx:
+                self._search_entry.delete(0, tk.END)
+                self._search_entry.insert(0, tx)
+        if isinstance(action, ResultsViewFilterChanged):
+            self._filter = s.results_file_filter
+            self._filter_bar._set_active(s.results_file_filter)
 
     def _on_filter_key(self, key: str) -> None:
         if self._use_state_for_view and self._coordinator is not None:
             self._coordinator.results_set_filter(key)
         else:
-            self._apply_filter(key)
-
-    def _apply_from_state(self, s: AppState) -> None:
-        if not self._use_state_for_view:
-            return
-        self._filter = s.results_file_filter
-        self._filter_bar._set_active(s.results_file_filter)
-        self._col_hdr.set_sort(
-            s.results_file_sort_column, s.results_file_sort_asc
-        )
-        rows = self._rows_for_filter_key(s.results_file_filter)
-        key_fn = _row_sort_key(s.results_file_sort_column)
-        rows = list(rows)
-        rows.sort(key=key_fn, reverse=not s.results_file_sort_asc)
-        self._grid.load(rows)
-        self._grid.set_sort_state(
-            s.results_file_sort_column, s.results_file_sort_asc
-        )
-
-    def _reapply_file_list_view(self) -> None:
-        if self._use_state_for_view and self._store is not None:
-            self._apply_from_state(self._store.get_state())
-        else:
-            self._apply_filter(self._filter)
-
-    def _rows_for_filter_key(self, key: str) -> List[Dict]:
-        if key == "other":
-            return [
-                r for r in self._all_rows
-                if (r.get("extension", "") or "").lower() not in _EXT_ALL_KNOWN
-            ]
-        exts = _FILTER_EXTS.get(key)
-        if exts is None:
-            return list(self._all_rows)
-        return [
-            r for r in self._all_rows
-            if (r.get("extension", "") or "").lower() in exts
-        ]
+            self._filter = key
+            self._filter_bar._set_active(key)
+            if self._dupes is not None:
+                self._dupes.refresh_from_state()
 
     def _apply_theme(self, t: dict) -> None:
         self._t = t
         bg = t.get("bg", _WHITE)
         self.configure(bg=bg)
         try:
+            self._search_row.configure(bg=bg)
+            for c in self._search_row.winfo_children():
+                if isinstance(c, (tk.Label, tk.Entry)):
+                    c.configure(
+                        bg=bg,
+                        fg=t.get("fg2", _GRAY)
+                        if isinstance(c, tk.Label)
+                        else t.get("fg", "#111"),
+                    )
+        except (tk.TclError, AttributeError):
+            pass
+        try:
             self._body.configure(bg=bg)
-        except Exception:
+        except (tk.TclError, AttributeError):
             pass
         try:
             self._empty_lbl.configure(bg=bg, fg=t.get("fg_muted", _DIMGRAY))
-        except Exception:
+        except (tk.TclError, AttributeError):
             pass
-        self._grid.apply_theme(t)
+        if self._dupes is not None:
+            self._dupes.apply_theme(t)
         for child in (
-            getattr(self, "_stats_bar",  None),
-            getattr(self, "_toolbar",    None),
+            getattr(self, "_stats_bar", None),
+            getattr(self, "_toolbar", None),
             getattr(self, "_filter_bar", None),
-            getattr(self, "_col_hdr",    None),
         ):
             if child is None:
                 continue
             try:
                 child.apply_theme(t)
-            except Exception:
+            except (tk.TclError, AttributeError):
                 pass
 
-    # ------------------------------------------------------------------
-    # Public API
+    def _on_dupes_file_selection(self, n_files: int) -> None:
+        self._toolbar.set_has_selection(n_files > 0)
+
+    def _show_smart_select_menu(self, anchor: tk.Misc) -> None:
+        if not self._groups or self._dupes is None:
+            return
+        menu = tk.Menu(self, tearoff=0)
+        for label, rule in SMART_SELECT_RULES:
+            menu.add_command(
+                label=label,
+                command=lambda r=rule: self._dupes.run_smart_select(r),  # type: ignore[union-attr]
+            )
+        try:
+            x = anchor.winfo_rootx()
+            y = anchor.winfo_rooty() + anchor.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def load_results(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
-        self._groups = groups
+        self._groups = list(groups)
         self._scan_mode = mode or "files"
-        self._empty_lbl.place_forget()
-        self._all_rows = self._build_rows(groups)
+        if not groups:
+            self._empty_lbl.place(relx=0.5, rely=0.4, anchor="center")
+            self._empty_lbl.lift()
+        else:
+            self._empty_lbl.place_forget()
         self._refresh_type_counts()
-        self._reapply_file_list_view()
+        if self._dupes is not None:
+            self._dupes.set_groups(self._groups)
+        if self._use_state_for_view and self._store is not None:
+            s = self._store.get_state()
+            self._filter = s.results_file_filter
+            self._filter_bar._set_active(s.results_file_filter)
 
         total_files = sum(len(g.files) for g in groups)
-        dupes       = sum(max(0, len(g.files) - 1) for g in groups)
+        dupes = sum(max(0, len(g.files) - 1) for g in groups)
         recoverable = sum(g.reclaimable for g in groups)
-
-        # Phase-6 part-3 metrics, added when Results became the overview-
-        # only page. Computed once per load (scans rarely produce 200K+
-        # groups and the walk is O(rows), so inline is fine).
         largest_dup = 0
         biggest_group = 0
         for g in groups:
@@ -1174,27 +1172,29 @@ class ResultsPage(tk.Frame):
                 size = int(getattr(f, "size", 0) or 0)
                 if size > largest_dup:
                     largest_dup = size
-
         self._stats_bar.update(
-            total_files, dupes, recoverable,
+            total_files,
+            dupes,
+            recoverable,
             largest_dup=largest_dup,
             biggest_group=biggest_group,
         )
 
     def _refresh_type_counts(self) -> None:
-        """Recompute per-bucket file counts and push to the filter bar.
-
-        If the currently-active filter has dropped to zero (e.g. after a delete
-        removed the last Pictures file), fall back to ``all`` so the user is
-        never stranded on a muted, non-clickable tab.
-        """
         counts: Dict[str, int] = {
-            "all": len(self._all_rows),
-            "pictures": 0, "music": 0, "videos": 0,
-            "documents": 0, "archives": 0, "other": 0,
+            "all": 0,
+            "pictures": 0,
+            "music": 0,
+            "videos": 0,
+            "documents": 0,
+            "archives": 0,
+            "other": 0,
         }
-        for r in self._all_rows:
-            counts[classify_file(r.get("extension", ""))] += 1
+        for g in self._groups:
+            for f in g.files:
+                counts["all"] += 1
+                ext = getattr(f, "extension", None) or Path(f.path).suffix
+                counts[classify_file(ext)] += 1
         self._filter_bar.set_counts(counts)
         if self._filter != "all" and counts.get(self._filter, 0) == 0:
             if self._use_state_for_view and self._coordinator is not None:
@@ -1203,78 +1203,21 @@ class ResultsPage(tk.Frame):
                 self._filter = "all"
                 self._filter_bar._set_active("all")
 
-    def _build_rows(self, groups: List[DuplicateGroup]) -> List[Dict]:
-        rows = []
-        for shade, g in enumerate(groups):
-            for fi, f in enumerate(g.files):
-                rows.append({
-                    "group_id":    g.group_id,
-                    "file_idx":    fi,
-                    "name":        Path(f.path).name,
-                    "size":        f.size,
-                    "size_str":    _fmt_size(f.size),
-                    "date":        _fmt_date(f.modified),
-                    "folder":      str(Path(f.path).parent),
-                    "path":        str(f.path),
-                    "extension":   getattr(f, "extension", Path(f.path).suffix.lower()),
-                    "_group_shade": shade % 2 == 1,
-                })
-        return rows
-
-    # ------------------------------------------------------------------
-    # Filtering
-
-    def _apply_filter(self, key: str) -> None:
-        self._filter = key
-        rows = self._rows_for_filter_key(key)
-        self._grid.load(rows)
-
-    # ------------------------------------------------------------------
-    # Sorting
-
-    def _on_sort(self, col: str) -> None:
-        if (
-            self._use_state_for_view
-            and self._coordinator is not None
-            and self._store is not None
-        ):
-            s = self._store.get_state()
-            if s.results_file_sort_column == col:
-                new_asc = not s.results_file_sort_asc
-            else:
-                new_asc = True
-            self._coordinator.results_set_sort(col, new_asc)
-        else:
-            self._grid.sort_by(col)
-
-    # ------------------------------------------------------------------
-    # Selection / check
-
-    def _on_check_changed(self, _event=None) -> None:
-        has = self._grid.get_checked_count() > 0
-        self._toolbar.set_has_selection(has)
-
-    # ------------------------------------------------------------------
-    # Actions
-
-    def _delete_checked(self) -> None:
-        """Run the 4-step delete ceremony on the currently-checked rows.
-
-        All the actual flow lives in ``cerebro.v2.ui.delete_flow`` so the
-        Review page's Smart-Select path runs the exact same ceremony.
-        """
-        checked = self._grid.get_checked_rows()
-        if not checked:
+    def _delete_selected_files(self) -> None:
+        if self._dupes is None:
             return
-        from cerebro.v2.ui.delete_flow import run_delete_ceremony, DeleteItem
+        paths = self._dupes.get_selected_file_paths()
+        if not paths:
+            return
         items = [
-            DeleteItem(
-                path_str=str(r.get("path", "")),
-                size=int(r.get("size", 0) or 0),
-            )
-            for r in checked
+            DeleteItem(path_str=p, size=_size_on_disk(p)) for p in paths
         ]
         self._toolbar.set_has_selection(False)
+        dry = (
+            self._store.get_state().dry_run
+            if self._use_state_for_view and self._store
+            else False
+        )
         run_delete_ceremony(
             parent=self,
             items=items,
@@ -1283,55 +1226,57 @@ class ResultsPage(tk.Frame):
             on_navigate_home=self._on_navigate_home,
             on_rescan=self._on_rescan,
             source_tag="results_page",
+            dry_run=dry,
         )
 
     def _remove_paths(self, paths: Set[str]) -> None:
+        pset = {str(Path(p)) for p in paths}
         if self._use_state_for_view and self._coordinator is not None:
-            self._grid._checked.clear()
-            self._coordinator.results_files_removed(paths)
+            self._coordinator.results_files_removed(pset)
             return
-        self._all_rows = [r for r in self._all_rows if r["path"] not in paths]
-        self._grid._checked.clear()
-        # Recount first; may auto-revert active filter to "all" if the current
-        # bucket just dropped to zero, so the user isn't stranded on a muted
-        # tab. Re-apply the (possibly updated) active filter to repopulate the
-        # grid from the pruned _all_rows.
+        self._groups = prune_paths_from_groups(self._groups, list(pset))
+        if self._dupes is not None:
+            self._dupes.set_groups(self._groups)
         self._refresh_type_counts()
-        self._reapply_file_list_view()
-        self._grid._fire_check_change()
+        if self._dupes is not None:
+            self._dupes.refresh_from_state()
 
-    def _move_checked(self) -> None:
+    def _move_selected_files(self) -> None:
+        if self._dupes is None:
+            return
         dest = filedialog.askdirectory(title="Move files to…")
         if not dest:
             return
-        checked = self._grid.get_checked_rows()
-        if not checked:
+        paths = self._dupes.get_selected_file_paths()
+        if not paths:
             return
         dest_path = Path(dest)
+        rows = [{"path": p} for p in paths]
         threading.Thread(
             target=self._move_worker,
-            args=(list(checked), dest_path),
+            args=(rows, dest_path),
             daemon=True,
         ).start()
 
     def _move_worker(self, rows: List[Dict], dest: Path) -> None:
         import shutil
-        moved = set()
+
+        moved: Set[str] = set()
         for row in rows:
             src = Path(row["path"])
             try:
                 shutil.move(str(src), str(dest / src.name))
-                moved.add(row["path"])
-            except Exception:
+                moved.add(str(src))
+            except OSError:
                 pass
         self.after(0, lambda: self._remove_paths(moved))
 
-    # ------------------------------------------------------------------
-    # Open group in Review
-
-    def _open_group_by_id(self, group_id: int) -> None:
-        if self._on_open_group:
-            self._on_open_group(group_id, self._groups)
-
     def get_groups(self) -> List[DuplicateGroup]:
         return self._groups
+
+
+def _size_on_disk(path_str: str) -> int:
+    try:
+        return int(Path(path_str).stat().st_size)
+    except OSError:
+        return 0

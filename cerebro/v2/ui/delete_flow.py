@@ -74,6 +74,7 @@ class DeleteCeremonyResult:
     deleted_paths:     List[str]      = field(default_factory=list)
     failed:            List[tuple]    = field(default_factory=list)
     chose_rescan:      bool           = False
+    dry_run:           bool           = False
 
 
 def run_delete_ceremony(
@@ -84,6 +85,7 @@ def run_delete_ceremony(
     on_navigate_home: Optional[Callable[[], None]] = None,
     on_rescan:        Optional[Callable[[], None]] = None,
     source_tag:       str = "delete_flow",
+    dry_run:          bool = False,
 ) -> DeleteCeremonyResult:
     """Run the 4-step ceremony and return what happened.
 
@@ -120,22 +122,35 @@ def run_delete_ceremony(
 
     count = len(items)
     noun  = _delete_media_label(scan_mode)
-
-    # -- Step 1 -------------------------------------------------------
-    d1 = _DeleteDialog(
-        parent,
-        title="Delete Confirmation",
-        icon="⚠",
-        headline=f"Delete {count} {noun}?",
-        body=(
+    dry_prefix = "Dry run — " if dry_run else ""
+    d_body_1 = (
+        (
+            f"This is a preview only — no files will be changed.\n\n"
+            f"The next steps show what would happen to {count} {noun} in a real "
+            "run (Recycle Bin on Windows / Trash elsewhere)."
+        )
+        if dry_run
+        else (
             f"You're about to delete {count} {noun}. This action will move "
             "the files to your system's Recycle Bin.\n\n"
             "Once you move them, you can restore from the Recycle Bin if "
             "you change your mind."
-        ),
+        )
+    )
+    d_head_1 = (
+        f"Preview {count} {noun}?" if dry_run else f"Delete {count} {noun}?"
+    )
+
+    # -- Step 1 -------------------------------------------------------
+    d1 = _DeleteDialog(
+        parent,
+        title=f"{dry_prefix}Delete Confirmation",
+        icon="⚠",
+        headline=d_head_1,
+        body=d_body_1,
         btn_cancel="Cancel",
         btn_confirm="Confirm",
-        confirm_dangerous=True,
+        confirm_dangerous=not dry_run,
     )
     if not d1.result:
         result.cancelled = True
@@ -163,20 +178,41 @@ def run_delete_ceremony(
 
     d2 = _DeleteDialog(
         parent,
-        title="Move to Recycle Bin",
+        title=f"{dry_prefix}Move to Recycle Bin",
         icon="♻",
-        headline="Moving to Recycle Bin",
+        headline=("Recycle Bin preview" if dry_run else "Moving to Recycle Bin"),
         body=(
-            f"{breakdown} will be moved to the Recycle Bin.\n\n"
-            f"Estimated space freed: {reclaimable_str}"
+            (
+                f"{breakdown} would be moved to the Recycle Bin.\n\n"
+                f"Estimated space that would be freed: {reclaimable_str}\n\n"
+                "No files are modified in a dry run."
+            )
+            if dry_run
+            else (
+                f"{breakdown} will be moved to the Recycle Bin.\n\n"
+                f"Estimated space freed: {reclaimable_str}"
+            )
         ),
         btn_cancel="Cancel",
-        btn_confirm="Allow",
+        btn_confirm="Continue" if dry_run else "Allow",
         confirm_dangerous=False,
     )
     if not d2.result:
         result.cancelled = True
         result.cancelled_at_step = 2
+        return result
+
+    if dry_run:
+        result.dry_run = True
+        result.success_count = count
+        result.recovered_bytes = int(reclaimable)
+        messagebox.showinfo(
+            "Dry run complete",
+            f"No files were changed.\n\n"
+            f"{count} {noun} would be moved to the Recycle Bin.\n"
+            f"About {reclaimable_str} would be freed.",
+            parent=parent,
+        )
         return result
 
     # -- Step 3 -------------------------------------------------------

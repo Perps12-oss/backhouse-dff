@@ -13,8 +13,10 @@ from cerebro.v2.state.actions import (
     ReviewNavigate,
     ReviewViewFilterChanged,
     ResultsViewFilterChanged,
+    ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
-    ResultsViewSortChanged,
+    ResultsGroupGridSortChanged,
+    SetDryRun,
     ScanCompleted,
     ScanEnded,
     ScanProgressSnapshot,
@@ -37,8 +39,8 @@ RESULTS_FILE_VALID_FILTERS: frozenset[str] = frozenset(
         "other",
     )
 )
-RESULTS_FILE_VALID_SORT_COLUMNS: frozenset[str] = frozenset(
-    ("Name", "Size", "Date", "Folder")
+RESULTS_GROUP_VALID_SORT: frozenset[str] = frozenset(
+    ("reclaimable", "files", "group_id", "path")
 )
 HISTORY_PAGE_VALID_SUBTABS: frozenset[str] = frozenset(("scan", "deletion"))
 
@@ -111,8 +113,9 @@ def reduce(state: AppState, action: Action) -> AppState:
             review_unlocked=True,
             scan_progress={},
             results_file_filter="all",
-            results_file_sort_column="Name",
-            results_file_sort_asc=True,
+            results_group_sort_column="reclaimable",
+            results_group_sort_asc=False,
+            results_text_filter="",
             review_file_filter="all",
         )
 
@@ -157,14 +160,14 @@ def reduce(state: AppState, action: Action) -> AppState:
             history_page=max(0, int(action.page_index)),
         )
 
-    if isinstance(action, ResultsViewSortChanged):
+    if isinstance(action, ResultsGroupGridSortChanged):
         col = action.column
-        if col not in RESULTS_FILE_VALID_SORT_COLUMNS:
-            col = "Name"
+        if col not in RESULTS_GROUP_VALID_SORT:
+            col = "reclaimable"
         return replace(
             state,
-            results_file_sort_column=col,
-            results_file_sort_asc=bool(action.sort_asc),
+            results_group_sort_column=col,
+            results_group_sort_asc=bool(action.sort_asc),
         )
 
     if isinstance(action, ResultsViewFilterChanged):
@@ -175,6 +178,15 @@ def reduce(state: AppState, action: Action) -> AppState:
             state,
             results_file_filter=fk,
         )
+
+    if isinstance(action, ResultsViewTextFilterChanged):
+        raw = str(action.text) if action.text is not None else ""
+        if len(raw) > 2000:
+            raw = raw[:2000]
+        return replace(state, results_text_filter=raw)
+
+    if isinstance(action, SetDryRun):
+        return replace(state, dry_run=bool(action.value))
 
     if isinstance(action, ResultsFilesRemoved):
         if not action.paths:

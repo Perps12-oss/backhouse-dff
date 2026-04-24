@@ -141,6 +141,8 @@ class ThemeApplicator:
             "title_bar_bg":    _tc("shell.titleBarBackground"),
             "accent":          _tc("shell.accentPrimary"),
             "accent2":         _tc("shell.accentSecondary"),
+            # Keyboard focus ring (2.4.7) — use primary accent; must contrast with tab bg
+            "focus_ring":      _tc("shell.accentPrimary"),
             "danger":          _tc("shell.accentDanger"),
             "success":         _tc("shell.accentSuccess"),
             "nav_bar":         _tc("shell.navyBar"),

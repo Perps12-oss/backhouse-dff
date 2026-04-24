@@ -33,6 +33,7 @@ from cerebro.v2.core.engine_deps import (
     probe_all,
 )
 from cerebro.v2.core.engine_errors_db import get_engine_errors_db
+from cerebro.v2.shell_open import open_system_recycle_bin
 from cerebro.v2.ui.design_tokens import (
     BORDER, CARD_BG, FONT_BODY, FONT_HEADER, FONT_MONO, FONT_SMALL,
     FONT_TITLE, GREEN, NAVY, NAVY_MID, PAD_X, PAD_Y, RED, TEXT_MUTED,
@@ -304,6 +305,36 @@ class DiagnosticsPage(tk.Frame):
         self._app_grid         = self._make_section("App Information")
         self._engine_container = self._make_section("Engine Status")
         self._db_grid          = self._make_section("Database Information")
+        self._recovery_card    = self._make_section("Recovery (Recycle Bin)")
+        _recovery_help = (
+            "Files you delete in CEREBRO are sent to the system Recycle Bin (Windows) "
+            "or Trash (macOS) when available — restore from there. This does not use a "
+            "custom rescue folder in the app."
+        )
+        tk.Label(
+            self._recovery_card,
+            text=_recovery_help,
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            font=FONT_SMALL,
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", padx=10, pady=(10, 6))
+        self._recycle_open_btn = tk.Button(
+            self._recovery_card,
+            text="Open system Recycle Bin / Trash",
+            command=lambda: open_system_recycle_bin(),
+            bg=NAVY_MID,
+            fg=TEXT_PRIMARY,
+            activebackground=BORDER,
+            activeforeground=TEXT_PRIMARY,
+            relief="flat",
+            font=FONT_BODY,
+            cursor="hand2",
+            padx=14,
+            pady=6,
+        )
+        self._recycle_open_btn.pack(anchor="w", padx=10, pady=(0, 14))
 
         self._welcome_stats_card = self._make_section("Welcome statistics")
         self._welcome_stats_help = tk.Label(
@@ -400,6 +431,19 @@ class DiagnosticsPage(tk.Frame):
                 activebackground=colors["border"],
                 activeforeground=colors["fg"],
             )
+        except tk.TclError:
+            pass
+        try:
+            for child in self._recovery_card.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.configure(bg=colors["card"], fg=colors["fg2"])
+                elif isinstance(child, tk.Button):
+                    child.configure(
+                        bg=colors["bar"],
+                        fg=colors["fg"],
+                        activebackground=colors["border"],
+                        activeforeground=colors["fg"],
+                    )
         except tk.TclError:
             pass
 

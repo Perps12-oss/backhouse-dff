@@ -19,17 +19,10 @@ and 200k duplicates" — it was rebuilt around two modes:
              Explorer" buttons surface the file locations.
 
 Actions:
-  * Smart Select ▼  — dropdown with the 5 auto-mark rules (moved here
-                      from the old Results toolbar). Applies the rule
-                      across *all* groups, then pipes the computed
-                      file set into ``delete_flow.run_delete_ceremony``.
-  * ← Back to Results — returns to the table view.
+  * ← Back to Results — returns to the Duplicates (grid) view.
 
 Deliberate non-features (per user feedback):
-  * No per-tile delete checkbox. Manual per-group marking creates a
-    surface area for accidental loss when Smart Select is later used
-    — it silently overwrites the manual marks. Results owns the
-    manual-curation path; Review owns the bulk path.
+  * No per-tile delete checkbox on this page.
   * No "Keep / Delete this one" single-file buttons. The user said
     they never want the destructive action one click away from a
     preview; the ceremony is the only delete path.
@@ -76,7 +69,6 @@ from cerebro.v2.ui.theme_applicator import ThemeApplicator
 if TYPE_CHECKING:
     from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.widgets.virtual_thumb_grid import VirtualThumbGrid
-from cerebro.v2.ui.delete_flow import run_delete_ceremony, DeleteItem
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +129,6 @@ class ReviewPage(tk.Frame):
       - Top-nav click without a prior scan → empty-state overlay.
     """
 
-    SMART_SELECT_RULES = [
-        ("Mark all except the oldest in each group",    "select_except_oldest"),
-        ("Mark all except the newest in each group",    "select_except_newest"),
-        ("Mark all except the first listed",            "select_except_first"),
-        ("Mark all except the last listed",             "select_except_last"),
-        ("Mark all except the largest in each group",   "select_except_largest"),
-    ]
-
     def __init__(
         self,
         master,
@@ -198,8 +182,7 @@ class ReviewPage(tk.Frame):
         bg     = self._t.get("bg",     _WHITE)
         border = self._t.get("border", _BORDER)
 
-        # Top chrome: always visible. Hosts Back, Smart Select, and a
-        # compact group summary that updates per mode.
+        # Top chrome: always visible (Back + summary).
         self._top = tk.Frame(self, bg=bg, height=48)
         self._top.pack(fill="x", side="top")
         self._top.pack_propagate(False)
@@ -230,17 +213,6 @@ class ReviewPage(tk.Frame):
             font=("Segoe UI", 10),
         )
         self._summary_lbl.pack(side="left")
-
-        self._smart_btn = tk.Button(
-            self._top, text="Smart Select \u25BC",
-            command=self._show_smart_select,
-            bg="#8E44AD", fg=_WHITE,
-            activebackground="#A255C5", activeforeground=_WHITE,
-            font=("Segoe UI", 9, "bold"), relief="flat",
-            cursor="hand2", padx=14, pady=5,
-            borderwidth=0, highlightthickness=0,
-        )
-        self._smart_btn.pack(side="right", padx=10, pady=8)
 
         # File-type filter (same buckets as Results) — packed only when a scan
         # is loaded; hidden in empty/compare so chrome stays minimal.
@@ -557,8 +529,10 @@ class ReviewPage(tk.Frame):
             self._hide_filter_wrap()
             self._enter_mode("empty")
 
-    def _on_store(self, s: AppState, _old: AppState, action: object) -> None:
-        if not self._use_state_for_view or not self._all_rows:
+    def _on_store(self, s: AppState, old: AppState, action: object) -> None:
+        if not self._use_state_for_view:
+            return
+        if not self._all_rows:
             return
         if isinstance(action, ReviewViewFilterChanged):
             self._apply_review_filter_from_state(s)
@@ -873,71 +847,6 @@ class ReviewPage(tk.Frame):
                 f"({len(self._rows):,}/{len(self._all_rows):,} files)"
             )
         self._summary_lbl.configure(text=base)
-
-    # ------------------------------------------------------------------
-    # Smart Select ▼
-    # ------------------------------------------------------------------
-    def _show_smart_select(self) -> None:
-        if not self._groups:
-            return
-        menu = tk.Menu(self, tearoff=0)
-        for label, rule in self.SMART_SELECT_RULES:
-            menu.add_command(
-                label=label,
-                command=lambda r=rule: self._apply_smart_select(r),
-            )
-        try:
-            x = self._smart_btn.winfo_rootx()
-            y = self._smart_btn.winfo_rooty() + self._smart_btn.winfo_height()
-            menu.tk_popup(x, y)
-        finally:
-            menu.grab_release()
-
-    def _apply_smart_select(self, rule: str) -> None:
-        """Apply a global mark rule across all loaded groups and pipe
-        the resulting file set into the delete ceremony."""
-        if not self._groups:
-            return
-
-        items: List[DeleteItem] = []
-        for g in self._groups:
-            files = list(g.files)
-            if len(files) < 2:
-                continue
-
-            if rule == "select_except_oldest":
-                keep = min(files, key=lambda f: getattr(f, "modified", 0) or 0)
-            elif rule == "select_except_newest":
-                keep = max(files, key=lambda f: getattr(f, "modified", 0) or 0)
-            elif rule == "select_except_first":
-                keep = files[0]
-            elif rule == "select_except_last":
-                keep = files[-1]
-            elif rule == "select_except_largest":
-                keep = max(files, key=lambda f: int(getattr(f, "size", 0) or 0))
-            else:
-                keep = files[0]
-
-            for f in files:
-                if f is keep:
-                    continue
-                items.append(DeleteItem(
-                    path_str=str(f.path),
-                    size=int(getattr(f, "size", 0) or 0),
-                ))
-
-        if not items:
-            return
-
-        run_delete_ceremony(
-            parent=self,
-            items=items,
-            scan_mode=self._scan_mode,
-            on_remove_paths=self._remove_paths,
-            on_navigate_home=self._on_navigate_home,
-            on_rescan=self._on_rescan,
-            source_tag="review_page.smart_select",
-        )
 
     # ------------------------------------------------------------------
     # Post-delete state pruning — called by the ceremony helper

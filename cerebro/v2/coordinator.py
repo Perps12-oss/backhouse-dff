@@ -23,8 +23,10 @@ from cerebro.v2.state import (
     ReviewNavigate,
     ReviewViewFilterChanged,
     ResultsViewFilterChanged,
+    ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
-    ResultsViewSortChanged,
+    ResultsGroupGridSortChanged,
+    SetDryRun,
     ScanCompleted,
     ScanEnded,
     ScanProgressSnapshot,
@@ -121,11 +123,19 @@ class CerebroCoordinator:
     def review_set_filter(self, filter_key: str) -> None:
         self._store.dispatch(ReviewViewFilterChanged(filter_key))
 
-    def results_set_sort(self, column: str, sort_asc: bool) -> None:
-        self._store.dispatch(ResultsViewSortChanged(column, sort_asc))
+    def results_set_group_sort(self, column: str, sort_asc: bool) -> None:
+        self._store.dispatch(ResultsGroupGridSortChanged(column, sort_asc))
 
     def results_set_filter(self, filter_key: str) -> None:
         self._store.dispatch(ResultsViewFilterChanged(filter_key))
+
+    def results_set_text_filter(self, text: str) -> None:
+        """Substring filter for the Results file list (name or path)."""
+        self._store.dispatch(ResultsViewTextFilterChanged(text))
+
+    def set_dry_run(self, value: bool) -> None:
+        """When True, delete ceremonies show preview only (no file changes)."""
+        self._store.dispatch(SetDryRun(bool(value)))
 
     def results_files_removed(self, paths: Iterable[str]) -> None:
         self._store.dispatch(ResultsFilesRemoved(tuple(str(p) for p in paths)))

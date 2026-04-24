@@ -40,8 +40,8 @@ class HistoryGridPageChanged:
 
 
 @dataclass(frozen=True)
-class ResultsViewSortChanged:
-    """File list column: Name | Size | Date | Folder (matches :class:`VirtualFileGrid`)."""
+class ResultsGroupGridSortChanged:
+    """Duplicates page group rows: ``reclaimable`` | ``files`` | ``group_id`` | ``path``."""
 
     column: str
     sort_asc: bool
@@ -52,6 +52,20 @@ class ResultsViewFilterChanged:
     """``all`` | ``pictures`` | ``music`` | ``videos`` | ``documents`` | ``archives`` | ``other``"""
 
     filter_key: str
+
+
+@dataclass(frozen=True)
+class ResultsViewTextFilterChanged:
+    """Name/path substring filter for the Results (Duplicates) file list."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class SetDryRun:
+    """``True`` = delete ceremony previews only (no filesystem changes)."""
+
+    value: bool
 
 
 @dataclass(frozen=True)
@@ -137,8 +151,10 @@ Action = Union[
     HistoryGridSortChanged,
     HistoryGridFilterChanged,
     HistoryGridPageChanged,
-    ResultsViewSortChanged,
+    ResultsGroupGridSortChanged,
     ResultsViewFilterChanged,
+    ResultsViewTextFilterChanged,
+    SetDryRun,
     ResultsFilesRemoved,
     DeletionHistoryDataLoaded,
     HistorySubTabChanged,
