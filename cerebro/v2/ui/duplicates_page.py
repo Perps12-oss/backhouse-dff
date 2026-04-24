@@ -81,6 +81,18 @@ class DuplicatesPage(tk.Frame):
         self._build()
         self._t = ThemeApplicator.get().build_tokens()
         ThemeApplicator.get().register(self._apply_theme)
+        if store is not None:
+            store.subscribe(self._on_store)
+
+    def _on_store(self, s: Any, old: Any, action: Any) -> None:
+        try:
+            from cerebro.v2.state.actions import ScanStarted
+            if isinstance(action, ScanStarted):
+                self._groups = []
+                self._selected = set()
+                self.after(0, self._refresh_view)
+        except Exception:
+            pass
 
     def _apply_theme(self, t: dict) -> None:
         self._t = t

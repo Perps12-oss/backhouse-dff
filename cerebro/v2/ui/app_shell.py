@@ -158,6 +158,7 @@ class AppShell(CTk):
             self._page_container,
             on_start_scan=self._start_scan_from_dashboard,
             on_open_session=self._on_open_session,
+            on_cancel_scan=self._cancel_scan_from_dashboard,
             store=self._store,
             coordinator=self._coordinator,
         )
@@ -166,7 +167,7 @@ class AppShell(CTk):
             self._page_container,
             on_open_group=self._on_open_group,
             on_navigate_home=lambda: self.switch_tab("dashboard"),
-            on_rescan=self._start_scan_from_dashboard,
+            on_rescan=self._rescan_from_duplicates,
             store=self._store,
             coordinator=self._coordinator,
         )
@@ -323,24 +324,52 @@ class AppShell(CTk):
     # Scan flow
     # ------------------------------------------------------------------
 
-    def _start_scan_from_dashboard(self) -> None:
-        """Start a scan from the Dashboard page — runs inline."""
-        self._coordinator.scan_started("files")
-        self._run_scan_inline()
+    def _start_scan_from_dashboard(self, folders: list = (), mode: str = "files") -> None:
+        if not folders:
+            return
+        self._coordinator.scan_started(mode)
+        self._run_scan_inline(list(folders), mode)
 
-    def _run_scan_inline(self) -> None:
-        """Execute scan in background, updating state on progress/completion."""
+    def _cancel_scan_from_dashboard(self) -> None:
+        try:
+            self._orchestrator.cancel()
+        except Exception:
+            pass
+
+    def _rescan_from_duplicates(self) -> None:
+        self.switch_tab("dashboard")
+        dash = self._pages.get("dashboard")
+        if dash is not None and hasattr(dash, "enter_config"):
+            self.after(50, dash.enter_config)
+
+    def _run_scan_inline(self, folders: list, mode: str) -> None:
         import threading
-        from cerebro.engines.base_engine import ScanProgress, ScanState
+        from pathlib import Path
 
         orchestrator = self._orchestrator
+        orchestrator.set_mode(mode)
+
+        def _progress_cb(p) -> None:
+            self.after(0, lambda: self._coordinator.report_scan_progress(p))
 
         def _worker() -> None:
             try:
-                results = orchestrator.run_scan_sync()
-                if results is not None:
-                    groups = results
-                    self.after(0, lambda: self._coordinator.scan_completed(groups, "files"))
+                orchestrator.start_scan(
+                    [Path(f) for f in folders], [], {}, _progress_cb
+                )
+                # start_scan is async; poll until the engine finishes
+                import time
+                from cerebro.engines.base_engine import ScanState
+                while True:
+                    prog = orchestrator.get_progress()
+                    if prog.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
+                        break
+                    time.sleep(0.1)
+                prog = orchestrator.get_progress()
+                if prog.state == ScanState.COMPLETED:
+                    groups = orchestrator.get_results()
+                    self.after(0, lambda: self._coordinator.scan_completed(groups, mode))
+                    self.after(0, lambda: self.switch_tab("duplicates"))
                 else:
                     self.after(0, lambda: self._coordinator.scan_ended("cancelled"))
             except Exception as e:
