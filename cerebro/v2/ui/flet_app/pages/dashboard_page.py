@@ -18,9 +18,11 @@ _log = logging.getLogger(__name__)
 class DashboardPage(ft.Column):
     """Home page with scan configuration and quick-start."""
 
-    def __init__(self, bridge: "StateBridge"):
+    def __init__(self, bridge: "StateBridge", folder_picker: ft.FilePicker):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
+        self._folder_picker = folder_picker
+        self._folders: list = []
         self._t = theme_for_mode("light")
         self._selected_mode = "files"
         self._build()
@@ -155,20 +157,18 @@ class DashboardPage(ft.Column):
             btn.update()
 
     def _browse_folders(self, e: ft.ControlEvent) -> None:
-        self._page.open(
-            ft.FilePicker(
-                on_result=self._on_folder_pick,
-            )
-        )
+        self._bridge.flet_page.run_task(self._browse_folders_async)
 
-    def _on_folder_pick(self, e: ft.FilePickerResultEvent) -> None:
-        if e.path:
-            from pathlib import Path
-            self._add_folder(Path(e.path))
+    async def _browse_folders_async(self) -> None:
+        from pathlib import Path
+
+        path = await self._folder_picker.get_directory_path(
+            dialog_title="Select folder to scan",
+        )
+        if path:
+            self._add_folder(Path(path))
 
     def _add_folder(self, path) -> None:
-        if not hasattr(self, "_folders"):
-            self._folders: list = []
         if path in self._folders:
             return
         self._folders.append(path)
@@ -181,7 +181,7 @@ class DashboardPage(ft.Column):
                 label=ft.Text(str(f), size=t.typography.size_sm),
                 on_delete=lambda e, p=f: self._remove_folder(p),
             )
-            for f in getattr(self, "_folders", [])
+            for f in self._folders
         ]
         self._folder_row.update()
 
@@ -191,7 +191,7 @@ class DashboardPage(ft.Column):
         self._refresh_folder_chips()
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
-        folders = getattr(self, "_folders", [])
+        folders = self._folders
         if not folders:
             self._status.value = "Please select at least one folder first."
             self._status.update()
@@ -256,3 +256,14 @@ class DashboardPage(ft.Column):
         self._status.value = "Cancelling scan..."
         self._status.update()
         self._stop_btn.update()
+
+    def apply_theme(self, mode: str) -> None:
+        saved_folders = list(self._folders)
+        saved_mode = self._selected_mode
+        self._t = theme_for_mode(mode)
+        self._build()
+        self._folders = saved_folders
+        self._selected_mode = saved_mode
+        self._refresh_folder_chips()
+        self._select_mode(saved_mode)
+        self.update()

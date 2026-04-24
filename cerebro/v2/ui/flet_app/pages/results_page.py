@@ -202,11 +202,11 @@ class ResultsPage(ft.Column):
         policy_label = "permanently delete" if policy == DeletionPolicy.PERMANENT else "move to trash"
 
         def _confirm(e) -> None:
-            self._page.close(dialog)
+            self._bridge.flet_page.close(dialog)
             self._execute_delete(policy)
 
         def _cancel(e) -> None:
-            self._page.close(dialog)
+            self._bridge.flet_page.close(dialog)
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -227,7 +227,7 @@ class ResultsPage(ft.Column):
                 ),
             ],
         )
-        self._page.open(dialog)
+        self._bridge.flet_page.open(dialog)
 
     def _execute_delete(self, policy: DeletionPolicy) -> None:
         from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
@@ -373,6 +373,7 @@ class ResultsPage(ft.Column):
     def _open_group(self, group: DuplicateGroup) -> None:
         from cerebro.v2.ui.flet_app.layout import AppLayout
         self._bridge.coordinator.review_open_group(group.group_id, self._groups)
-        layout = self._page.controls[0] if self._page.controls else None
+        fp = self._bridge.flet_page
+        layout = fp.controls[0] if fp.controls else None
         if isinstance(layout, AppLayout):
             layout.navigate_to("review")

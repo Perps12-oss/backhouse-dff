@@ -39,11 +39,13 @@ class SettingsPage(ft.Column):
             [
                 ft.ElevatedButton(
                     "Light",
+                    data="light",
                     on_click=lambda e: self._set_theme("light"),
                     style=ft.ButtonStyle(bgcolor=t.colors.primary, color=t.colors.bg),
                 ),
                 ft.ElevatedButton(
                     "Dark",
+                    data="dark",
                     on_click=lambda e: self._set_theme("dark"),
                     style=ft.ButtonStyle(bgcolor=t.colors.bg3, color=t.colors.fg2),
                 ),
@@ -77,10 +79,11 @@ class SettingsPage(ft.Column):
         self._bridge.set_theme(mode)
         self._t = theme_for_mode(mode)
         for btn in self._theme_buttons.controls:
-            is_light = btn.text == "Light"
+            key = getattr(btn, "data", None) or ""
+            active = (key == "light" and mode == "light") or (key == "dark" and mode == "dark")
             btn.style = ft.ButtonStyle(
-                bgcolor=self._t.colors.primary if (is_light and mode == "light") or (not is_light and mode == "dark") else self._t.colors.bg3,
-                color=self._t.colors.bg if (is_light and mode == "light") or (not is_light and mode == "dark") else self._t.colors.fg2,
+                bgcolor=self._t.colors.primary if active else self._t.colors.bg3,
+                color=self._t.colors.bg if active else self._t.colors.fg2,
             )
             btn.update()
 

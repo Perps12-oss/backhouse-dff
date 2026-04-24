@@ -8,7 +8,7 @@ to read current state without direct store access.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, List, Optional, TYPE_CHECKING
 
 import flet as ft
 
@@ -44,6 +44,12 @@ class StateBridge:
         self._backend = backend
         self._unsubscribe: Optional[Callable[[], None]] = None
         self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
+        self._on_theme_change: Optional[Callable[[str], None]] = None
+
+    @property
+    def flet_page(self) -> ft.Page:
+        """Root Flet page — use this when a tab control may be off-screen (not mounted)."""
+        return self._page
 
     @property
     def store(self) -> StateStore:
@@ -74,6 +80,10 @@ class StateBridge:
         """Register a callback fired on every state change (new, old, action)."""
         self._on_state_change = cb
 
+    def set_on_theme_change(self, cb: Callable[[str], None]) -> None:
+        """Register a callback fired when the user switches light/dark mode."""
+        self._on_theme_change = cb
+
     def _on_store_change(self, new: AppState, old: AppState, action: object) -> None:
         """Store listener: triggers UI refresh via page.update()."""
         if self._on_state_change:
@@ -96,6 +106,11 @@ class StateBridge:
             ft.ThemeMode.DARK if mode == "dark" else ft.ThemeMode.LIGHT
         )
         self._page.update()
+        if self._on_theme_change:
+            try:
+                self._on_theme_change(mode)
+            except Exception:
+                _log.exception("Theme change callback failed")
 
     def dispatch_scan_complete(
         self, groups: List[DuplicateGroup], mode: str

@@ -242,7 +242,7 @@ class ReviewPage(ft.Column):
     def _enter_mode(self, mode: str) -> None:
         self._mode = mode
         if mode != "compare":
-            self._page.on_keyboard_event = None
+            self._bridge.flet_page.on_keyboard_event = None
         self._content.controls.clear()
 
         if mode == "empty":
@@ -464,7 +464,7 @@ class ReviewPage(ft.Column):
     # -- Keyboard navigation --------------------------------------------------
 
     def _bind_keys(self) -> None:
-        self._page.on_keyboard_event = self._on_key
+        self._bridge.flet_page.on_keyboard_event = self._on_key
 
     def _on_key(self, e: ft.KeyboardEvent) -> None:
         if self._mode != "compare":

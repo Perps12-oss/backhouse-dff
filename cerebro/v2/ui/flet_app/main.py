@@ -63,7 +63,11 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
 
-    dashboard_page = DashboardPage(bridge)
+    # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
+    folder_picker = ft.FilePicker()
+    page.services.append(folder_picker)
+
+    dashboard_page = DashboardPage(bridge, folder_picker)
     results_page = ResultsPage(bridge)
     review_page = ReviewPage(bridge)
     history_page = HistoryPage(bridge)
