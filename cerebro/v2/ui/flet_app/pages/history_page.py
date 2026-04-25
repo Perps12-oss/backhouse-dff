@@ -1,4 +1,4 @@
-"""History page — scan history display (stub for future implementation)."""
+"""History page — scan and deletion history with glass tabs and data table."""
 
 from __future__ import annotations
 
@@ -16,116 +16,264 @@ _log = logging.getLogger(__name__)
 
 
 class HistoryPage(ft.Column):
-    """Scan history log — placeholder."""
+    """Scan and deletion history with tabbed interface."""
 
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
         self._t = theme_for_mode("light")
-        self._build()
+        self._scan_rows: list = []
+        self._deletion_rows: list = []
+        self._active_tab = "scan"
+        
+        # UI References
+        self._header: ft.Container
+        self._mode_switch: ft.SegmentedButton
+        self._clear_btn: ft.OutlinedButton
+        self._action_bar: ft.Row
+        self._table: ft.DataTable
+        self._empty_label: ft.Text
+        self._empty_container: ft.Container
+        self._data_container: ft.Column # Wrapper for table/empty
+        
+        self._build_ui()
 
-    def _build(self) -> None:
+    def _is_mounted(self) -> bool:
+        try:
+            return self.page is not None
+        except RuntimeError:
+            return False
+
+    # ------------------------------------------------------------------
+    # Glass helper
+    # ------------------------------------------------------------------
+    def _get_glass_style(self, opacity: float = 0.06) -> dict:
+        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
+        bg = ft.Colors.with_opacity(opacity, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        border_color = ft.Colors.with_opacity(0.12, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        return dict(
+            bgcolor=bg,
+            border=ft.border.all(1, border_color),
+            border_radius=ft.border_radius.all(12),
+            blur=ft.Blur(8, 8),
+        )
+
+    # ------------------------------------------------------------------
+    # Build (Runs Once)
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
         t = self._t
 
-        self._rows_list = ft.ListView(
+        # Header
+        self._header = ft.Container(
+            content=ft.Text("History", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
+            padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.lg),
+        )
+
+        # Scan vs deletion (Flet 0.25+ uses TabBar+TabBarView inside Tabs; SegmentedButton fits one shared table)
+        self._mode_switch = ft.SegmentedButton(
+            segments=[
+                ft.Segment(value="scan", label="Scan History"),
+                ft.Segment(value="deletion", label="Deletion History"),
+            ],
+            selected=["scan"],
+            show_selected_icon=False,
+            on_change=self._on_mode_changed,
+        )
+
+        # Clear button
+        self._clear_btn = ft.OutlinedButton(
+            "Clear History",
+            icon=ft.icons.Icons.DELETE_SWEEP,
+            on_click=self._on_clear_clicked,
+            style=ft.ButtonStyle(color=t.colors.danger),
+        )
+        self._action_bar = ft.Row([self._clear_btn], alignment=ft.MainAxisAlignment.END)
+
+        # Data table
+        self._table = ft.DataTable(
+            columns=[],
+            border=ft.border.all(1, t.colors.border),
+            border_radius=8,
             expand=True,
-            spacing=t.spacing.xs,
-            padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
+            horizontal_lines=ft.border.BorderSide(1, t.colors.border3),
+            column_spacing=10,
         )
 
         self._empty_label = ft.Text(
-            "No scans yet — run a scan from the Home page.",
-            size=t.typography.size_base,
-            color=t.colors.fg_muted,
-            text_align=ft.TextAlign.CENTER,
+            "No history yet.", size=t.typography.size_base, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER
         )
-
-        self._empty_state = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Icon(ft.icons.Icons.HISTORY, size=64, color=t.colors.fg_muted),
-                    self._empty_label,
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=t.spacing.md,
-            ),
+        self._empty_container = ft.Container(
+            content=ft.Column([ft.Icon(ft.icons.Icons.HISTORY, size=64, color=t.colors.fg_muted), self._empty_label],
+                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=t.spacing.md),
             expand=True,
             alignment=ft.Alignment(0.5, 0.5),
+            **self._get_glass_style(0.04),
         )
+        
+        # Container to hold the switching views
+        self._data_container = ft.Column(
+            [self._table, self._empty_container], 
+            expand=True
+        )
+        # Set initial visibility
+        self._table.visible = False
+        self._empty_container.visible = True
 
+        # Assemble
         self.controls = [
-            ft.Container(
-                content=ft.Text(
-                    "Scan History",
-                    size=t.typography.size_xl,
-                    weight=ft.FontWeight.BOLD,
-                    color=t.colors.fg,
-                ),
-                padding=ft.padding.only(
-                    left=t.spacing.xl, right=t.spacing.xl,
-                    top=t.spacing.xl, bottom=t.spacing.md,
-                ),
-            ),
-            self._empty_state,
+            self._header,
+            ft.Container(content=self._mode_switch, padding=ft.padding.only(left=t.spacing.lg)),
+            ft.Container(content=self._action_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.sm)),
+            self._data_container,
         ]
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     def load_history(self, rows: list) -> None:
-        """Refresh the history list from AppState.history_scan_rows."""
+        """Called externally to load scan history rows."""
+        self._scan_rows = rows or []
+        if self._active_tab == "scan":
+            self._refresh_view()
+
+    def load_deletion_history(self, rows: list) -> None:
+        """Called externally to load deletion history rows."""
+        self._deletion_rows = rows or []
+        if self._active_tab == "deletion":
+            self._refresh_view()
+
+    def on_show(self) -> None:
+        self.load_history(self._bridge.get_scan_history_table_rows())
+        self.load_deletion_history(self._bridge.get_deletion_history_table_rows())
+
+    # ------------------------------------------------------------------
+    # Tab logic
+    # ------------------------------------------------------------------
+    def _on_mode_changed(self, e: ft.ControlEvent) -> None:
+        data = getattr(e, "data", None)
+        if isinstance(data, list) and data:
+            self._active_tab = str(data[0])
+        else:
+            sel = getattr(e.control, "selected", None) or ["scan"]
+            self._active_tab = str(sel[0]) if sel else "scan"
+        if self._active_tab not in ("scan", "deletion"):
+            self._active_tab = "scan"
+        self._refresh_view()
+
+    def _current_rows(self) -> list:
+        return self._scan_rows if self._active_tab == "scan" else self._deletion_rows
+
+    def _refresh_view(self) -> None:
+        rows = self._current_rows()
+        has_data = bool(rows)
+        
+        # Update Table Columns based on tab
+        self._update_table_columns()
+        
+        # Update Table Rows
+        self._table.rows = [self._build_row(r) for r in rows]
+
+        # Toggle Visibility
+        self._table.visible = has_data
+        self._empty_container.visible = not has_data
+        self._clear_btn.visible = has_data
+
+        # Update UI
+        if self._is_mounted():
+            self._table.update()
+            self._empty_container.update()
+            self._clear_btn.update()
+
+    def _update_table_columns(self) -> None:
+        """Update table headers based on the active tab context."""
         t = self._t
-        if not rows:
-            if self._empty_state not in self.controls:
-                self.controls = [self.controls[0], self._empty_state]
-            try:
-                self.update()
-            except Exception:
-                pass
-            return
+        if self._active_tab == "scan":
+            self._table.columns = [
+                ft.DataColumn(ft.Text("Date/Time")),
+                ft.DataColumn(ft.Text("Mode")),
+                ft.DataColumn(ft.Text("Folders")),
+                ft.DataColumn(ft.Text("Groups")),
+                ft.DataColumn(ft.Text("Files")),
+                ft.DataColumn(ft.Text("Reclaimable")),
+                ft.DataColumn(ft.Text("Duration")),
+            ]
+        else:
+            # Example different schema for deletion history
+            self._table.columns = [
+                ft.DataColumn(ft.Text("Date/Time")),
+                ft.DataColumn(ft.Text("Policy")),
+                ft.DataColumn(ft.Text("Files Deleted")),
+                ft.DataColumn(ft.Text("Space Freed")),
+                ft.DataColumn(ft.Text("Status")),
+            ]
 
-        if self._empty_state in self.controls:
-            self.controls = [self.controls[0], self._rows_list]
-
-        def _row_card(row: dict) -> ft.Container:
-            date_str = str(row.get("date", ""))
-            folder = str(row.get("folder", ""))
-            groups = row.get("groups_found", 0)
-            files = row.get("files_scanned", 0)
-            size = row.get("bytes_reclaimable", 0)
-            mode = str(row.get("mode", "files"))
-            return ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(ft.icons.Icons.CHECK_CIRCLE_OUTLINE, color=t.colors.success, size=18),
-                        ft.Column(
-                            [
-                                ft.Text(folder or "—", size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg, overflow=ft.TextOverflow.ELLIPSIS),
-                                ft.Text(
-                                    f"{files:,} files scanned  ·  {groups:,} groups  ·  {_fmt(size)} reclaimable  ·  {mode}",
-                                    size=t.typography.size_xs,
-                                    color=t.colors.fg2,
-                                ),
-                            ],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        ft.Text(date_str, size=t.typography.size_xs, color=t.colors.fg_muted),
-                    ],
-                    spacing=t.spacing.sm,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=t.spacing.md,
-                border=ft.border.all(1, t.colors.border),
-                border_radius=t.border_radius,
-                bgcolor=t.colors.bg,
+    def _build_row(self, row: dict) -> ft.DataRow:
+        t = self._t
+        
+        if self._active_tab == "scan":
+            return ft.DataRow(
+                cells=[
+                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("mode", "")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("folder", "")), size=t.typography.size_sm, overflow=ft.TextOverflow.ELLIPSIS)),
+                    ft.DataCell(ft.Text(str(row.get("groups_found", 0)), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("files_scanned", 0)), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(_fmt(row.get("bytes_reclaimable", 0)), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("duration", "")), size=t.typography.size_sm)),
+                ]
+            )
+        else:
+            # Deletion History Row Structure
+            return ft.DataRow(
+                cells=[
+                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("policy", "Unknown")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("count", 0)), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(_fmt(row.get("bytes", 0)), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("status", "")), size=t.typography.size_sm)),
+                ]
             )
 
-        self._rows_list.controls = [_row_card(r) for r in rows]
-        try:
-            self._rows_list.update()
-            self.update()
-        except Exception:
-            pass
+    # ------------------------------------------------------------------
+    # Clear history
+    # ------------------------------------------------------------------
+    def _on_clear_clicked(self, e) -> None:
+        def _confirm_clear(e):
+            self._bridge.dismiss_top_dialog()
+            self._bridge.clear_history(self._active_tab)  # assume bridge method
+            if self._active_tab == "scan":
+                self._scan_rows.clear()
+            else:
+                self._deletion_rows.clear()
+            self._refresh_view()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Clear History"),
+            content=ft.Text(f"Are you sure you want to clear all {self._active_tab} history?"),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self._bridge.dismiss_top_dialog()),
+                ft.ElevatedButton("Clear", on_click=_confirm_clear,
+                                  style=ft.ButtonStyle(bgcolor=self._t.colors.danger, color=self._t.colors.bg)),
+            ],
+        )
+        self._bridge.show_modal_dialog(dialog)
 
     def apply_theme(self, mode: str) -> None:
+        """Updates theme properties without destroying UI controls."""
         self._t = theme_for_mode(mode)
-        self._build()
-        self.update()
+        
+        # Update Glass Styles
+        self._empty_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._empty_container.border = self._get_glass_style(0.04).get('border')
+
+        # Update Table Borders
+        self._table.border = ft.border.all(1, self._t.colors.border)
+        self._table.horizontal_lines = ft.border.BorderSide(1, self._t.colors.border3)
+
+        # Re-render rows to apply new text colors
+        self._refresh_view()
+
+        if self._is_mounted():
+            self.update()

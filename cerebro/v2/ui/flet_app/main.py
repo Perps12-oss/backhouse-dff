@@ -6,14 +6,13 @@ the Flet application with the navigation-rail layout.
 
 from __future__ import annotations
 
-import datetime
 import logging
-from typing import Dict, List
+from typing import Callable, Dict
 
 import flet as ft
 
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted
+from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted, SetActiveTab
 from cerebro.v2.state.app_state import AppState, create_initial_state
 from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.flet_app.layout import AppLayout
@@ -54,7 +53,7 @@ def _main(page: ft.Page) -> None:
 
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
-    backend = BackendService()
+    backend = BackendService(page)
     bridge = StateBridge(page, store, coordinator, backend)
 
     # Singleton pages so scan results / state survive tab switches.
@@ -74,7 +73,7 @@ def _main(page: ft.Page) -> None:
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
 
-    builders: Dict[str, ...] = {
+    builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
         "duplicates": lambda: results_page,
         "review": lambda: review_page,
@@ -92,8 +91,6 @@ def _main(page: ft.Page) -> None:
     page.on_route_change = _on_route_change
     page.route = default_route()
 
-    _scan_history: List[Dict] = []
-
     def _sync_groups_from_state(s: AppState) -> None:
         groups = list(s.groups)
         mode = s.scan_mode or "files"
@@ -109,23 +106,23 @@ def _main(page: ft.Page) -> None:
 
     def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
         tab = new_state.active_tab
-        if tab and tab in builders and tab != layout.current_key:
+        # Only tab-changing actions should drive the shell; other dispatches still
+        # carry active_tab (e.g. duplicates) and would otherwise yank the user back
+        # from Review/Settings while the rail already matched the new selection.
+        take_nav = (
+            tab
+            and tab in builders
+            and tab != layout.current_key
+            and isinstance(action, (SetActiveTab, ScanCompleted))
+        )
+        if take_nav:
             layout.navigate_to(tab)
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
             _sync_groups_from_state(new_state)
         if isinstance(action, ScanCompleted):
-            groups = list(new_state.groups)
-            total_files = sum(len(g.files) for g in groups)
-            total_bytes = sum(g.reclaimable for g in groups)
-            _scan_history.append({
-                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "folder": "",
-                "groups_found": len(groups),
-                "files_scanned": total_files,
-                "bytes_reclaimable": total_bytes,
-                "mode": new_state.scan_mode or "files",
-            })
-            history_page.load_history(list(_scan_history))
+            history_page.load_history(bridge.get_scan_history_table_rows())
+        if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
+            history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
 
     bridge.set_on_state_change(_on_state_change)
     bridge.subscribe()
@@ -138,5 +135,11 @@ def _main(page: ft.Page) -> None:
                 _log.exception("apply_theme failed on %s", type(p).__name__)
 
     bridge.set_on_theme_change(_on_theme_change)
+
+    history_page.load_history(bridge.get_scan_history_table_rows())
+    history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
+
+    appearance = bridge.get_settings().get("appearance") or {}
+    bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "arctic")))
 
     _log.info("Cerebro Flet UI initialized")

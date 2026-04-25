@@ -56,6 +56,8 @@ def _mode_for_main_tab(key: str) -> AppMode:
         return AppMode.IDLE
     if key == "duplicates":
         return AppMode.RESULTS
+    if key == "review":
+        return AppMode.REVIEW
     return AppMode.IDLE
 
 

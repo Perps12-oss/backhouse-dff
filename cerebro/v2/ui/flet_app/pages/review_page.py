@@ -1,8 +1,10 @@
-"""Review page — visual grid + side-by-side compare for duplicate groups."""
+"""Review page — visual grid + side-by-side compare for duplicate groups with glass morphism."""
 
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -30,6 +32,13 @@ _FILTER_TABS = [
     ("other", "Other"),
 ]
 
+_SMART_RULES = [
+    ("keep_largest", "Keep Largest"),
+    ("keep_smallest", "Keep Smallest"),
+    ("keep_newest", "Keep Newest"),
+    ("keep_oldest", "Keep Oldest"),
+]
+
 
 class ReviewPage(ft.Column):
     """Grid and compare view for visual triage of duplicate groups."""
@@ -45,38 +54,115 @@ class ReviewPage(ft.Column):
         self._compare_gid: Optional[int] = None
         self._compare_a: Optional[DuplicateFile] = None
         self._compare_b: Optional[DuplicateFile] = None
-        self._build()
+        self._smart_rule = "keep_largest"
+        
+        # UI References
+        self._title_lbl: ft.Text
+        self._summary_lbl: ft.Text
+        self._top_bar: ft.Container
+        self._smart_dropdown: ft.Dropdown
+        self._smart_apply: ft.ElevatedButton
+        self._smart_row: ft.Row
+        self._cmp_title: ft.Text
+        self._cmp_smart_dropdown: ft.Dropdown
+        self._cmp_smart_apply: ft.ElevatedButton
+        self._delete_btn: ft.ElevatedButton
+        self._keep_btn: ft.OutlinedButton
+        self._cmp_bar: ft.Container
+        self._filter_bar: ft.Row
+        self._content: ft.Column
+        self._empty_state: ft.Container
+        self._grid: ft.GridView
+        self._compare_panel_a: ft.Container
+        self._compare_panel_b: ft.Container
+        self._compare_view: ft.Row
 
-    def _build(self) -> None:
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    # Glass & Style Helpers
+    # ------------------------------------------------------------------
+    def _get_glass_style(self, opacity: float = 0.06) -> dict:
+        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
+        bg = ft.Colors.with_opacity(opacity, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        border_color = ft.Colors.with_opacity(0.12, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        return dict(
+            bgcolor=bg,
+            border=ft.border.all(1, border_color),
+            border_radius=ft.border_radius.all(12),
+            blur=ft.Blur(8, 8),
+        )
+
+    def _get_filter_btn_style(self, is_active: bool) -> ft.ButtonStyle:
+        return ft.ButtonStyle(
+            bgcolor=self._t.colors.primary if is_active else self._t.colors.bg3,
+            color=self._t.colors.bg if is_active else self._t.colors.fg2,
+            shape=ft.RoundedRectangleBorder(radius=8),
+        )
+
+    # ------------------------------------------------------------------
+    # Build (Runs Once)
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
         t = self._t
-
         # Top bar
-        self._title_lbl = ft.Text(
-            "Review",
-            size=t.typography.size_lg,
-            weight=ft.FontWeight.BOLD,
-            color=t.colors.fg,
+        self._title_lbl = ft.Text("Review", size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.fg)
+        self._summary_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
+        self._top_bar = ft.Container(
+            content=ft.Row(
+                [
+                    ft.TextButton("← Back to Results", on_click=self._go_back,
+                                  style=ft.ButtonStyle(color=t.colors.primary)),
+                    self._title_lbl,
+                    self._summary_lbl,
+                ],
+                alignment=ft.MainAxisAlignment.START,
+            ),
+            padding=t.spacing.lg,
+            **self._get_glass_style(0.04),
         )
-        self._summary_lbl = ft.Text(
-            "",
-            size=t.typography.size_sm,
-            color=t.colors.fg2,
+
+        # Smart select for grid mode
+        self._smart_dropdown = ft.Dropdown(
+            options=[ft.dropdown.Option(key=val, text=label) for val, label in _SMART_RULES],
+            value=self._smart_rule,
+            width=160,
+            label="Smart Select",
+            border_radius=8,
         )
-        self._top_bar = ft.Row(
-            [
-                ft.TextButton(
-                    "← Back to Results",
-                    on_click=self._go_back,
-                    style=ft.ButtonStyle(color=t.colors.primary),
-                ),
-                self._title_lbl,
-                self._summary_lbl,
-            ],
-            alignment=ft.MainAxisAlignment.START,
+        self._smart_apply = ft.ElevatedButton(
+            "Apply",
+            on_click=self._apply_smart_select_review,
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
+                color=t.colors.fg,
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
+        )
+        self._smart_row = ft.Row(
+            [self._smart_dropdown, self._smart_apply],
+            spacing=t.spacing.sm,
+            visible=False,
         )
 
         # Compare navigation bar
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
+        self._cmp_smart_dropdown = ft.Dropdown(
+            options=[ft.dropdown.Option(key=val, text=label) for val, label in _SMART_RULES],
+            value=self._smart_rule,
+            width=150,
+            label="Smart Select",
+            border_radius=8,
+        )
+        self._cmp_smart_apply = ft.ElevatedButton(
+            "Apply",
+            on_click=self._apply_smart_select_compare_current,
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
+                color=t.colors.fg,
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
+        )
         self._delete_btn = ft.ElevatedButton(
             "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
             on_click=lambda e: self._delete_compare_side("b"),
@@ -87,18 +173,24 @@ class ReviewPage(ft.Column):
             on_click=lambda e: self._delete_compare_side("a"),
             style=ft.ButtonStyle(color=t.colors.success),
         )
-        self._cmp_bar = ft.Row(
-            [
-                ft.TextButton("← Grid", on_click=self._to_grid),
-                ft.TextButton("← Prev", on_click=self._prev_group),
-                ft.TextButton("Next →", on_click=self._next_group),
-                self._cmp_title,
-                self._keep_btn,
-                self._delete_btn,
-                ft.TextButton("Open A", on_click=lambda e: self._open_side("a")),
-                ft.TextButton("Open B", on_click=lambda e: self._open_side("b")),
-            ],
+        self._cmp_bar = ft.Container(
+            content=ft.Row(
+                [
+                    ft.TextButton("← Grid", on_click=self._to_grid),
+                    ft.TextButton("← Prev", on_click=self._prev_group),
+                    ft.TextButton("Next →", on_click=self._next_group),
+                    self._cmp_smart_dropdown,
+                    self._cmp_smart_apply,
+                    self._cmp_title,
+                    self._keep_btn,
+                    self._delete_btn,
+                    ft.TextButton("Open A", on_click=lambda e: self._open_side("a")),
+                    ft.TextButton("Open B", on_click=lambda e: self._open_side("b")),
+                ],
+            ),
             visible=False,
+            padding=t.spacing.sm,
+            **self._get_glass_style(0.04),
         )
 
         # Filter bar
@@ -108,10 +200,7 @@ class ReviewPage(ft.Column):
                     label,
                     on_click=lambda e, k=key: self._set_filter(k),
                     data=key,
-                    style=ft.ButtonStyle(
-                        bgcolor=t.colors.primary if key == "all" else t.colors.bg3,
-                        color=t.colors.bg if key == "all" else t.colors.fg2,
-                    ),
+                    style=self._get_filter_btn_style(key == "all"),
                 )
                 for key, label in _FILTER_TABS
             ],
@@ -128,12 +217,8 @@ class ReviewPage(ft.Column):
                 [
                     ft.Icon(ft.icons.Icons.SEARCH, size=64, color=t.colors.fg_muted),
                     ft.Text("No scan results yet", size=t.typography.size_lg, color=t.colors.fg2),
-                    ft.Text(
-                        "Run a scan, then come here for visual triage.",
-                        size=t.typography.size_base,
-                        color=t.colors.fg_muted,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
+                    ft.Text("Run a scan, then come here for visual triage.", size=t.typography.size_base,
+                            color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
                     ft.ElevatedButton(
                         "Go to Results",
                         on_click=lambda e: self._bridge.navigate("duplicates"),
@@ -145,6 +230,7 @@ class ReviewPage(ft.Column):
             ),
             expand=True,
             alignment=ft.Alignment(0.5, 0.5),
+            **self._get_glass_style(0.04),
         )
 
         # Grid view
@@ -159,18 +245,8 @@ class ReviewPage(ft.Column):
         )
 
         # Compare view
-        self._compare_panel_a = ft.Container(
-            expand=True,
-            padding=t.spacing.md,
-            border=ft.border.all(1, t.colors.border),
-            border_radius=t.border_radius,
-        )
-        self._compare_panel_b = ft.Container(
-            expand=True,
-            padding=t.spacing.md,
-            border=ft.border.all(1, t.colors.border),
-            border_radius=t.border_radius,
-        )
+        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._get_glass_style(0.04))
+        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._get_glass_style(0.04))
         self._compare_view = ft.Row(
             [
                 self._compare_panel_a,
@@ -182,19 +258,17 @@ class ReviewPage(ft.Column):
         )
 
         self.controls = [
-            ft.Container(content=self._top_bar, padding=t.spacing.lg),
+            self._top_bar,
+            ft.Container(content=self._smart_row, padding=ft.padding.only(left=t.spacing.lg)),
+            ft.Container(content=self._cmp_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg)),
             ft.Container(content=self._filter_bar, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm)),
             self._content,
         ]
 
-    # -- Public API (matches Tkinter ReviewPage contract) ---------------------
-
-    def load_group(
-        self,
-        groups: List[DuplicateGroup],
-        group_id: int,
-        mode: Optional[str] = None,
-    ) -> None:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def load_group(self, groups: List[DuplicateGroup], group_id: int, mode: Optional[str] = None) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
         if not self._groups:
@@ -239,54 +313,70 @@ class ReviewPage(ft.Column):
         return list(self._groups)
 
     def _is_mounted(self) -> bool:
-        """Return True only when this control is attached to a Flet page."""
         try:
             return self.page is not None
         except RuntimeError:
             return False
 
-    # -- Mode management ------------------------------------------------------
+    @staticmethod
+    def _safe_update(ctrl: ft.Control | None) -> None:
+        """Call ``update()`` only if *ctrl* is attached to a page (avoids freeze on orphan controls)."""
+        if ctrl is None:
+            return
+        try:
+            if ctrl.page is not None:
+                ctrl.update()
+        except RuntimeError:
+            pass
 
+    # ------------------------------------------------------------------
+    # Mode management
+    # ------------------------------------------------------------------
     def _enter_mode(self, mode: str) -> None:
         self._mode = mode
         if mode != "compare":
-            self._bridge.flet_page.on_keyboard_event = None
+            # Unbind keys if not in compare mode to save resources/events
+            if hasattr(self._bridge, 'flet_page') and self._bridge.flet_page:
+                self._bridge.flet_page.on_keyboard_event = None
+        
         self._content.controls.clear()
-
         if mode == "empty":
             self._filter_bar.visible = False
             self._cmp_bar.visible = False
+            self._smart_row.visible = False
             self._content.controls.append(self._empty_state)
         elif mode == "grid":
             self._filter_bar.visible = True
             self._cmp_bar.visible = False
+            self._smart_row.visible = True
             self._refresh_grid()
             self._content.controls.append(self._grid)
         elif mode == "compare":
             self._filter_bar.visible = False
             self._cmp_bar.visible = True
+            self._smart_row.visible = False
             self._content.controls.append(self._compare_view)
-
-        if self._is_mounted():
-            self._content.update()
-            self._filter_bar.update()
-            self._cmp_bar.update()
+            self._bind_keys()
+            
+        self._safe_update(self._content)
+        self._safe_update(self._filter_bar)
+        self._safe_update(self._cmp_bar)
+        self._safe_update(self._smart_row)
 
     def _to_grid(self, e=None) -> None:
         self._enter_mode("grid")
 
-    # -- Grid -----------------------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Grid
+    # ------------------------------------------------------------------
     def _refresh_grid(self) -> None:
-        t = self._t
         self._grid.controls = [
             self._build_tile(f)
             for g in self._groups
             for f in g.files
             if self._passes_filter(f)
         ]
-        if self._is_mounted():
-            self._grid.update()
+        self._safe_update(self._grid)
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -309,81 +399,149 @@ class ReviewPage(ft.Column):
                     fit=ft.BoxFit.CONTAIN,
                     border_radius=8,
                 )
-        return ft.Icon(
-            ft.icons.Icons.INSERT_DRIVE_FILE,
-            size=max(28, edge // 2),
-            color=t.colors.primary,
-        )
+        return ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=max(28, edge // 2), color=t.colors.primary)
 
     def _build_tile(self, f: DuplicateFile) -> ft.Container:
         t = self._t
         p = Path(str(f.path))
         name = p.name
         thumb = self._thumb_widget(p, 72)
+        
+        # Define hover effect locally
+        def _hover(e: ft.ControlEvent) -> None:
+            enter = e.data == "true"
+            tile.bgcolor = t.colors.bg3 if enter else ft.Colors.with_opacity(0.06, t.colors.bg)
+            ReviewPage._safe_update(tile)
+
         tile = ft.Container(
             content=ft.Column(
                 [
                     thumb,
-                    ft.Text(
-                        name,
-                        size=t.typography.size_xs,
-                        color=t.colors.fg2,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        max_lines=1,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
+                    ft.Text(name, size=t.typography.size_xs, color=t.colors.fg2, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1, text_align=ft.TextAlign.CENTER),
                     ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=4,
             ),
             padding=t.spacing.sm,
-            border=ft.border.all(1, t.colors.border),
-            border_radius=t.border_radius,
-            bgcolor=t.colors.bg,
+            **self._get_glass_style(0.06),
             on_click=lambda e, file=f: self._on_tile_clicked(file),
+            on_hover=_hover,
         )
-
-        def _hover(e: ft.ControlEvent) -> None:
-            raw = getattr(e, "data", None)
-            enter = raw is True or str(raw).lower() in ("true", "1", "enter")
-            tile.bgcolor = t.colors.bg3 if enter else t.colors.bg
-            tile.update()
-
-        tile.on_hover = _hover
         return tile
 
     def _on_tile_clicked(self, f: DuplicateFile) -> None:
-        gid = next(
-            (g.group_id for g in self._groups if f in g.files),
-            None,
-        )
+        gid = next((g.group_id for g in self._groups if f in g.files), None)
         if gid is not None:
             self._enter_compare(gid)
 
-    # -- Compare --------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Smart select (grid mode)
+    # ------------------------------------------------------------------
+    def _apply_smart_select_review(self, e=None):
+        """Apply keep rule to all visible groups and delete the rest."""
+        rule = self._smart_dropdown.value or "keep_largest"
+        to_delete = []
+        for g in self._groups:
+            files = [f for f in g.files if self._passes_filter(f)]
+            if len(files) < 2:
+                continue
+            if rule == "keep_largest":
+                keep = max(files, key=lambda f: f.size)
+            elif rule == "keep_smallest":
+                keep = min(files, key=lambda f: f.size)
+            elif rule == "keep_newest":
+                keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            elif rule == "keep_oldest":
+                keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            else:
+                keep = max(files, key=lambda f: f.size)
+            for f in files:
+                if f is not keep:
+                    to_delete.append(str(f.path))
+        if not to_delete:
+            return
+        self._show_smart_delete_dialog(to_delete)
 
+    def _apply_smart_select_compare_current(self, e=None) -> None:
+        """Apply keep rule to files in the current group that match the active type filter."""
+        gid = self._compare_gid
+        if gid is None:
+            return
+        rule = self._cmp_smart_dropdown.value or self._smart_rule or "keep_largest"
+        files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
+        if len(files) < 2:
+            return
+        if rule == "keep_largest":
+            keep = max(files, key=lambda f: f.size)
+        elif rule == "keep_smallest":
+            keep = min(files, key=lambda f: f.size)
+        elif rule == "keep_newest":
+            keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        elif rule == "keep_oldest":
+            keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        else:
+            keep = max(files, key=lambda f: f.size)
+        to_delete = [str(f.path) for f in files if f is not keep]
+        if not to_delete:
+            return
+        self._show_smart_delete_dialog(to_delete)
+
+    def _show_smart_delete_dialog(self, paths: List[str]) -> None:
+        t = self._t
+        def _do_permanent(e):
+            self._bridge.dismiss_top_dialog()
+            self._execute_smart_delete(paths, DeletionPolicy.PERMANENT)
+        def _do_trash(e):
+            self._bridge.dismiss_top_dialog()
+            self._execute_smart_delete(paths, DeletionPolicy.TRASH)
+        def _cancel(e):
+            self._bridge.dismiss_top_dialog()
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Smart Delete"),
+            content=ft.Text(f"This will delete {len(paths):,} files according to the selected rule."),
+            actions=[
+                ft.TextButton("Cancel", on_click=_cancel),
+                ft.OutlinedButton("Delete Permanently", on_click=_do_permanent, style=ft.ButtonStyle(color=t.colors.danger)),
+                ft.ElevatedButton("Move to Trash", on_click=_do_trash, style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg)),
+            ],
+        )
+        self._bridge.show_modal_dialog(dialog)
+
+    def _execute_smart_delete(self, paths: List[str], policy: DeletionPolicy) -> None:
+        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+        service = DeleteService()
+        new_groups, _, _, _ = service.delete_and_prune(paths, self._groups, policy)
+        self._groups = new_groups
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._bridge.coordinator.results_files_removed(paths)
+        if not self._groups:
+            self._enter_mode("empty")
+        else:
+            self._refresh_grid()
+
+    # ------------------------------------------------------------------
+    # Compare
+    # ------------------------------------------------------------------
     def _enter_compare(self, gid: int) -> None:
         files = self._group_files.get(gid) or []
         if not files:
             self._to_grid()
             return
-
+        self._cmp_smart_dropdown.value = self._smart_dropdown.value or self._smart_rule
         self._compare_gid = gid
         self._compare_a = files[0]
         self._compare_b = files[1] if len(files) > 1 else None
+        self._enter_mode("compare")
         self._update_compare_panels()
         self._update_compare_chrome()
-        self._enter_mode("compare")
-        self._bind_keys()
 
     def _update_compare_panels(self) -> None:
-        t = self._t
         self._compare_panel_a.content = self._build_compare_side(self._compare_a, "A")
         self._compare_panel_b.content = self._build_compare_side(self._compare_b, "B")
-        if self._is_mounted():
-            self._compare_panel_a.update()
-            self._compare_panel_b.update()
+        self._safe_update(self._compare_panel_a)
+        self._safe_update(self._compare_panel_b)
 
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
         t = self._t
@@ -403,12 +561,7 @@ class ReviewPage(ft.Column):
                 thumb,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 ft.Text(fmt_size(f.size), size=t.typography.size_sm, color=t.colors.fg2),
-                ft.Text(
-                    str(Path(str(f.path)).parent),
-                    size=t.typography.size_xs,
-                    color=t.colors.fg_muted,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
+                ft.Text(str(Path(str(f.path)).parent), size=t.typography.size_xs, color=t.colors.fg_muted, overflow=ft.TextOverflow.ELLIPSIS),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
@@ -424,9 +577,8 @@ class ReviewPage(ft.Column):
         count = len(self._group_files.get(gid, []))
         name_a = Path(str(getattr(self._compare_a, "path", ""))).name if self._compare_a else "(A)"
         name_b = Path(str(getattr(self._compare_b, "path", ""))).name if self._compare_b else "(no peer)"
-        self._cmp_title.value = f"Group {idx + 1}/{total}  ·  {count} copies  ·  {name_a}  ↔  {name_b}"
-        if self._is_mounted():
-            self._cmp_title.update()
+        self._cmp_title.value = f"Group {idx + 1}/{total} · {count} copies · {name_a} ↔ {name_b}"
+        self._safe_update(self._cmp_title)
 
     def _prev_group(self, e=None) -> None:
         if self._compare_gid is None:
@@ -446,7 +598,6 @@ class ReviewPage(ft.Column):
         f = self._compare_a if side == "a" else self._compare_b
         if not f:
             return
-        import subprocess, sys
         path = Path(str(f.path))
         folder = path.parent if path.is_file() else path
         try:
@@ -456,25 +607,24 @@ class ReviewPage(ft.Column):
                 subprocess.Popen(["open", str(folder)])
             else:
                 subprocess.Popen(["xdg-open", str(folder)])
-        except Exception:
-            pass
+        except Exception as e:
+            _log.error(f"Failed to open file: {e}")
 
-    # -- Filter ---------------------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Filter
+    # ------------------------------------------------------------------
     def _set_filter(self, key: str) -> None:
         self._filter_key = key
         for btn in self._filter_bar.controls:
             is_active = btn.data == key
-            btn.style = ft.ButtonStyle(
-                bgcolor=self._t.colors.primary if is_active else self._t.colors.bg3,
-                color=self._t.colors.bg if is_active else self._t.colors.fg2,
-            )
-            btn.update()
+            btn.style = self._get_filter_btn_style(is_active)
+            self._safe_update(btn)
         if self._mode == "grid":
             self._refresh_grid()
 
-    # -- Keyboard navigation --------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Keyboard
+    # ------------------------------------------------------------------
     def _bind_keys(self) -> None:
         self._bridge.flet_page.on_keyboard_event = self._on_key
 
@@ -491,8 +641,9 @@ class ReviewPage(ft.Column):
         elif k == "k":
             self._delete_compare_side("a")
 
-    # -- Delete from compare --------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Delete from compare
+    # ------------------------------------------------------------------
     def _delete_compare_side(self, side: str) -> None:
         f = self._compare_a if side == "a" else self._compare_b
         if not f:
@@ -516,39 +667,40 @@ class ReviewPage(ft.Column):
                 gid = self._groups[0].group_id
             self._enter_compare(gid)
 
-        def _on_trash(e) -> None:
-            self._bridge.flet_page.close(dialog)
-            _do_delete(DeletionPolicy.TRASH)
+        def _cancel_cmp(e):
+            self._bridge.dismiss_top_dialog()
 
-        def _on_permanent(e) -> None:
-            self._bridge.flet_page.close(dialog)
+        def _do_perm_cmp(e):
+            self._bridge.dismiss_top_dialog()
             _do_delete(DeletionPolicy.PERMANENT)
 
-        def _on_cancel(e) -> None:
-            self._bridge.flet_page.close(dialog)
+        def _do_trash_cmp(e):
+            self._bridge.dismiss_top_dialog()
+            _do_delete(DeletionPolicy.TRASH)
 
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Confirm Deletion"),
             content=ft.Text(f'Delete "{name}"?'),
             actions=[
-                ft.TextButton("Cancel", on_click=_on_cancel),
+                ft.TextButton("Cancel", on_click=_cancel_cmp),
                 ft.OutlinedButton(
                     "Delete Permanently",
-                    on_click=_on_permanent,
+                    on_click=_do_perm_cmp,
                     style=ft.ButtonStyle(color=t.colors.danger),
                 ),
                 ft.ElevatedButton(
                     "Move to Trash",
-                    on_click=_on_trash,
+                    on_click=_do_trash_cmp,
                     style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
                 ),
             ],
         )
-        self._bridge.flet_page.open(dialog)
+        self._bridge.show_modal_dialog(dialog)
 
-    # -- Navigation -----------------------------------------------------------
-
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
     def _go_back(self, e=None) -> None:
         if self._mode == "compare":
             self._to_grid()
@@ -556,24 +708,35 @@ class ReviewPage(ft.Column):
         self._bridge.navigate("duplicates")
 
     def apply_theme(self, mode: str) -> None:
-        saved_groups = list(self._groups)
-        saved_gfiles = dict(self._group_files)
-        saved_mode = self._mode
-        saved_gid = self._compare_gid
-        saved_a = self._compare_a
-        saved_b = self._compare_b
+        """Updates theme properties without destroying UI controls or keyboard bindings."""
         self._t = theme_for_mode(mode)
-        self._build()
-        self._groups = saved_groups
-        self._group_files = saved_gfiles
-        self._compare_gid = saved_gid
-        self._compare_a = saved_a
-        self._compare_b = saved_b
-        if saved_mode == "empty" or not saved_groups:
-            self._enter_mode("empty")
-        elif saved_mode == "compare" and saved_gid is not None:
-            self._enter_compare(saved_gid)
-        else:
-            self._enter_mode("grid")
+        
+        # Update Glass Styles
+        self._top_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._top_bar.border = self._get_glass_style(0.04).get('border')
+        
+        self._cmp_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._cmp_bar.border = self._get_glass_style(0.04).get('border')
+        
+        self._empty_state.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._empty_state.border = self._get_glass_style(0.04).get('border')
+
+        self._compare_panel_a.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._compare_panel_a.border = self._get_glass_style(0.04).get('border')
+        
+        self._compare_panel_b.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._compare_panel_b.border = self._get_glass_style(0.04).get('border')
+
+        # Update Filter Buttons
+        for btn in self._filter_bar.controls:
+            is_active = btn.data == self._filter_key
+            btn.style = self._get_filter_btn_style(is_active)
+
+        # Force refresh of dynamic content (Grid/Compare) to apply new text/icon colors
+        if self._mode == "grid":
+            self._refresh_grid()
+        elif self._mode == "compare":
+            self._update_compare_panels()
+
         if self._is_mounted():
             self.update()

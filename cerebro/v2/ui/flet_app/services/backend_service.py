@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import flet as ft
+
 from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
 from cerebro.engines.orchestrator import ScanOrchestrator
 
@@ -22,11 +24,12 @@ _log = logging.getLogger(__name__)
 class BackendService:
     """Facade over ScanOrchestrator with threaded execution and Flet-safe callbacks."""
 
-    def __init__(self) -> None:
+    def __init__(self, page: Optional[ft.Page] = None) -> None:
         self._orchestrator = ScanOrchestrator()
         self._cancel_event = threading.Event()
         self._scanning = False
         self._scan_lock = threading.Lock()
+        self._page = page
 
         self._on_progress: Optional[Callable[[Dict[str, Any]], None]] = None
         self._on_complete: Optional[Callable[[List[DuplicateGroup], str], None]] = None
@@ -76,13 +79,16 @@ class BackendService:
                     options=options or {},
                     progress_callback=self._handle_progress,
                 )
+                # start_scan only spawns ScanOrchestrator's thread; it returns immediately.
+                # Without waiting, get_results() runs while the scan is still running (empty).
+                self._orchestrator.wait_for_completion(timeout=None)
                 results = self._orchestrator.get_results()
                 if self._on_complete:
-                    self._on_complete(results, mode)
+                    self._deliver_on_ui_thread(self._on_complete, results, mode)
             except Exception as exc:
                 _log.exception("Scan worker failed")
                 if self._on_error:
-                    self._on_error(str(exc))
+                    self._deliver_on_ui_thread(self._on_error, str(exc))
             finally:
                 with self._scan_lock:
                     self._scanning = False
@@ -109,6 +115,13 @@ class BackendService:
         return _probe(mode_key)
 
     # -- Internal -------------------------------------------------------------
+
+    def _deliver_on_ui_thread(self, fn: Callable[..., None], *args: Any) -> None:
+        """Run a callback on the Flet page thread (StateStore + control updates are not thread-safe)."""
+        if self._page is not None:
+            self._page.run_thread(fn, *args)
+        else:
+            fn(*args)
 
     def _handle_progress(self, progress: ScanProgress) -> None:
         if self._cancel_event.is_set():

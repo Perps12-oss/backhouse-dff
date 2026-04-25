@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES, key_for_route
+from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -34,17 +34,10 @@ class AppLayout(ft.Row):
         self._builders = page_builders
         self._current_key: str = "dashboard"
 
-        self._switcher = ft.AnimatedSwitcher(
-            expand=True,
-            content=ft.Container(
-                expand=True,
-                alignment=ft.Alignment(0.5, 0.5),
-                content=ft.Text(""),
-            ),
-            duration=220,
-            reverse_duration=120,
-            transition=ft.AnimatedSwitcherTransition.FADE,
-        )
+        # Plain container (not AnimatedSwitcher): with singleton tab pages, the
+        # switcher often failed to replace visible content while the rail updated.
+        # Clip so wide / overflowing results subtree cannot sit on top of the rail in hit-testing.
+        self._content_host = ft.Container(expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
         nav_destinations = [
             ft.NavigationRailDestination(
@@ -68,7 +61,7 @@ class AppLayout(ft.Row):
         self.controls = [
             self._nav,
             ft.VerticalDivider(width=1),
-            self._switcher,
+            self._content_host,
         ]
 
     def _on_nav_change(self, e: ft.ControlEvent) -> None:
@@ -82,6 +75,8 @@ class AppLayout(ft.Row):
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
+        if key == self._current_key:
+            return
         self._current_key = key
         idx = next((i for i, r in enumerate(ROUTES) if r.key == key), 0)
         self._nav.selected_index = idx
@@ -91,20 +86,40 @@ class AppLayout(ft.Row):
         inner = None
         if builder:
             inner = builder()
-            self._switcher.content = ft.Container(expand=True, content=inner)
+            # Per-tab key forces a distinct subtree so Flet remounts singleton pages.
+            self._content_host.content = ft.Container(
+                expand=True,
+                content=inner,
+                key=f"cerebro-tab-{key}",
+                clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            )
         else:
-            self._switcher.content = ft.Container(
+            self._content_host.content = ft.Container(
                 expand=True,
                 alignment=ft.Alignment(0.5, 0.5),
                 content=ft.Text("Page not found"),
+                key="cerebro-tab-missing",
             )
-        self._switcher.update()
-        if inner is not None and hasattr(inner, "on_show"):
-            inner.on_show()
+        self._content_host.update()
 
         route_info = ROUTE_MAP[key]
         self._page.route = route_info.route
+        # Flush the page tree first so new ``inner`` is attached before lifecycle hooks run.
         self._page.update()
+
+        # Keep StateStore.active_tab in sync with the rail. Otherwise global listeners
+        # (e.g. on ThemeChanged) still see the old tab and call navigate_to(old), which
+        # immediately replaces Settings and looks like "Settings does nothing".
+        try:
+            self._bridge.navigate(key)
+        except Exception:
+            _log.exception("Failed to sync active_tab for route key %s", key)
+
+        if inner is not None and hasattr(inner, "on_show"):
+            try:
+                inner.on_show()
+            except Exception:
+                _log.exception("on_show failed for route key %s", key)
 
     def refresh_current(self) -> None:
         """Rebuild the current page (e.g., after theme or state change)."""

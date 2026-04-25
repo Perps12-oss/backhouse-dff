@@ -1,13 +1,14 @@
-"""Dashboard page — home/landing page with quick-start scan controls."""
+"""Dashboard page — home/landing page with quick-start scan controls, stats, and recent activity."""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, List, Tuple
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -15,19 +16,87 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+def _popular_scan_folder_candidates() -> List[Tuple[str, Path]]:
+    """Display labels and paths under the user profile commonly used for dedup scans."""
+    home = Path.home()
+    return [
+        ("Desktop", home / "Desktop"),
+        ("Documents", home / "Documents"),
+        ("Downloads", home / "Downloads"),
+        ("Pictures", home / "Pictures"),
+        ("Videos", home / "Videos"),
+        ("Music", home / "Music"),
+        ("Desktop (OneDrive)", home / "OneDrive" / "Desktop"),
+        ("Documents (OneDrive)", home / "OneDrive" / "Documents"),
+        ("Downloads (OneDrive)", home / "OneDrive" / "Downloads"),
+    ]
+
+
+def _discover_existing_popular_paths() -> List[Tuple[str, Path]]:
+    """Return candidate folders that exist and are directories, de-duplicated by resolved path."""
+    seen: set[str] = set()
+    out: List[Tuple[str, Path]] = []
+    for label, p in _popular_scan_folder_candidates():
+        try:
+            r = p.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not r.is_dir():
+            continue
+        key = str(r).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((label, r))
+    return out
+
+
 class DashboardPage(ft.Column):
-    """Home page with scan configuration and quick-start."""
+    """Home page with scan configuration, stats, and quick-start."""
 
     def __init__(self, bridge: "StateBridge", folder_picker: ft.FilePicker):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
         self._folder_picker = folder_picker
-        self._folders: list = []
-        self._t = theme_for_mode("light")
+        self._folders: list[Path] = []  # Enforce Path objects
         self._selected_mode = "files"
-        self._build()
+        self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
+        self._recent_rows: list[dict] = []
+        
+        # Initial Theme Load
+        self._t = theme_for_mode("light") 
+        
+        # UI References (to update without rebuilding)
+        self._hero: ft.Container
+        self._stats_row: ft.Row
+        self._mode_row: ft.Row
+        self._folder_chips_row: ft.Row
+        self._folder_container: ft.Container
+        self._quick_add_title: ft.Text
+        self._quick_paths_row: ft.Row
+        self._quick_add_wrap: ft.Column
+        self._actions: ft.Row
+        self._stop_btn: ft.OutlinedButton
+        self._progress: ft.ProgressBar
+        self._progress_label: ft.Text
+        self._status: ft.Text
+        self._recent_title: ft.Text
+        self._recent_list: ft.ListView
+        self._recent_container: ft.Container
 
-    def _build(self) -> None:
+        self._build_ui()
+
+    def _is_mounted(self) -> bool:
+        """True only when this control is attached to a :class:`ft.Page` (safe before ``page.add``)."""
+        try:
+            return self.page is not None
+        except RuntimeError:
+            return False
+
+    # ------------------------------------------------------------------
+    # Construction (Runs Once)
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
         t = self._t
         s = t.spacing
 
@@ -54,35 +123,41 @@ class DashboardPage(ft.Column):
             ),
             padding=t.spacing.xxl,
             alignment=ft.Alignment(0.5, 0.5),
+            **self._get_glass_style(opacity=0.06),
         )
+
+        # Stat cards
+        self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.lg)
+        self._update_stats_ui()
 
         # Scan mode selector
-        self._mode_row = ft.Row(
-            [
-                ft.ElevatedButton(
-                    m["label"],
-                    icon=m["icon"],
-                    on_click=lambda e, k=m["key"]: self._select_mode(k),
-                    data=m["key"],
-                    style=ft.ButtonStyle(
-                        bgcolor=t.colors.primary if m["key"] == self._selected_mode else t.colors.bg3,
-                        color=t.colors.bg if m["key"] == self._selected_mode else t.colors.fg2,
-                    ),
-                )
-                for m in SCAN_MODES
-            ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            wrap=True,
-            spacing=s.sm,
-        )
+        self._mode_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=s.sm)
+        self._update_modes_ui()
 
         # Folder list
-        self._folder_chips: list[ft.Chip] = []
-        self._folder_row = ft.Row(
+        self._folder_chips_row = ft.Row(
             [ft.Text("No folders selected", color=t.colors.fg_muted, size=t.typography.size_base)],
             wrap=True,
             spacing=s.xs,
         )
+        self._folder_container = ft.Container(
+            content=self._folder_chips_row,
+            padding=s.md,
+            **self._get_glass_style(0.04),
+        )
+
+        self._quick_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
+        self._quick_add_title = ft.Text(
+            "Quick add — common folders on this PC",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_500,
+            color=t.colors.fg_muted,
+        )
+        self._quick_add_wrap = ft.Column(
+            [self._quick_add_title, self._quick_paths_row],
+            spacing=s.xs,
+        )
+        self._refresh_quick_add_bar()
 
         # Action buttons
         self._stop_btn = ft.OutlinedButton(
@@ -103,10 +178,12 @@ class DashboardPage(ft.Column):
                     "Start Scan",
                     icon=ft.icons.Icons.PLAY_ARROW,
                     on_click=self._start_scan,
-                    style=ft.ButtonStyle(
-                        bgcolor=t.colors.primary,
-                        color=t.colors.bg,
-                    ),
+                    style=self._get_button_style(),
+                ),
+                ft.OutlinedButton(
+                    "Open Last Session",
+                    icon=ft.icons.Icons.RESTORE,
+                    on_click=self._open_last_session,
                 ),
                 self._stop_btn,
             ],
@@ -114,14 +191,7 @@ class DashboardPage(ft.Column):
             spacing=s.lg,
         )
 
-        # Progress bar (hidden initially)
-        self._progress = ft.ProgressBar(
-            width=400,
-            bar_height=6,
-            visible=False,
-            color=t.colors.primary,
-            bgcolor=t.colors.bg3,
-        )
+        self._progress = ft.ProgressBar(width=400, bar_height=6, visible=False, color=t.colors.primary, bgcolor=t.colors.bg3)
         self._progress_label = ft.Text("", color=t.colors.fg2, size=t.typography.size_sm, visible=False)
 
         # Status text
@@ -132,43 +202,251 @@ class DashboardPage(ft.Column):
             text_align=ft.TextAlign.CENTER,
         )
 
+        # Recent scans
+        self._recent_title = ft.Text("Recent Scans", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg)
+        self._recent_list = ft.ListView(expand=True, spacing=s.sm, padding=0)
+        self._recent_container = ft.Container(
+            content=ft.Column([
+                self._recent_title,
+                self._recent_list,
+            ], spacing=s.sm),
+            padding=s.lg,
+            **self._get_glass_style(0.04),
+        )
+
+        # Assemble
         self.controls = [
             self._hero,
-            ft.Container(content=self._mode_row, padding=ft.padding.only(bottom=s.lg),
-                         alignment=ft.Alignment(0.5, 0.5)),
-            ft.Container(content=self._folder_row, padding=ft.padding.symmetric(horizontal=s.xl)),
-            ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md),
-                         alignment=ft.Alignment(0.5, 0.5)),
-            ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs),
-                         alignment=ft.Alignment(0.5, 0.5)),
+            ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
+            ft.Container(content=self._mode_row, padding=ft.padding.only(bottom=s.lg)),
+            self._folder_container,
+            ft.Container(
+                content=self._quick_add_wrap,
+                padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
+            ),
+            ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
+            ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs), alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._progress_label, alignment=ft.Alignment(0.5, 0.5)),
-            ft.Container(content=self._status, padding=ft.padding.only(top=s.md),
-                         alignment=ft.Alignment(0.5, 0.5)),
+            ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
+            self._recent_container,
         ]
+        
+        # Initial data fetch
+        self._fetch_dashboard_data()
 
-    def _select_mode(self, key: str) -> None:
-        self._selected_mode = key
-        for btn in self._mode_row.controls:
-            is_active = btn.data == key
-            btn.style = ft.ButtonStyle(
-                bgcolor=self._t.colors.primary if is_active else self._t.colors.bg3,
-                color=self._t.colors.bg if is_active else self._t.colors.fg2,
+    # ------------------------------------------------------------------
+    # Theme Helpers
+    # ------------------------------------------------------------------
+    def _get_glass_style(self, opacity: float = 0.08) -> dict:
+        """Calculate glass style based on CURRENT theme."""
+        t = self._t
+        # Safely check bridge theme if available, otherwise default to system
+        is_dark = False
+        if hasattr(self._bridge, 'app_theme'):
+            is_dark = "dark" in self._bridge.app_theme.lower()
+        
+        # In dark mode, glass is white with low opacity. In light mode, it's black.
+        bg_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
+        border_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
+        
+        bg = ft.Colors.with_opacity(opacity, bg_base)
+        border_color = ft.Colors.with_opacity(0.15, border_base)
+        
+        return dict(
+            bgcolor=bg,
+            border=ft.border.all(1, border_color),
+            border_radius=ft.border_radius.all(16),
+            blur=ft.Blur(10, 10),
+            shadow=ft.BoxShadow(
+                blur_radius=20,
+                color=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
+                offset=ft.Offset(0, 4),
+            ),
+        )
+
+    def _get_button_style(self, base_color: str = None) -> ft.ButtonStyle:
+        t = self._t
+        bg = (
+            ft.Colors.with_opacity(0.2, base_color or t.colors.primary)
+            if base_color
+            else ft.Colors.with_opacity(0.15, t.colors.primary)
+        )
+        return ft.ButtonStyle(
+            bgcolor=bg,
+            color=t.colors.fg,
+            overlay_color=ft.Colors.with_opacity(0.3, t.colors.primary),
+            shape=ft.RoundedRectangleBorder(radius=12),
+            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+        )
+
+    # ------------------------------------------------------------------
+    # Data & UI Updates (No Rebuild)
+    # ------------------------------------------------------------------
+    def _fetch_dashboard_data(self):
+        try:
+            stats = self._bridge.get_stats()
+            if stats:
+                self._stats = stats
+            
+            recent = self._bridge.get_recent_scans(limit=5)
+            if recent:
+                self._recent_rows = recent
+                
+        except Exception as e:
+            _log.error("Failed to fetch dashboard data", exc_info=True)
+            # Optionally show user feedback here
+        
+        self._update_stats_ui()
+        self._update_recent_ui()
+
+    def _update_stats_ui(self):
+        t = self._t
+        cards = [
+            ("Scans Run", f"{self._stats.get('scans', 0):,}"),
+            ("Duplicates Found", f"{self._stats.get('dupes', 0):,}"),
+            ("Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
+        ]
+        self._stats_row.controls = [
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(label, size=t.typography.size_sm, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
+                        ft.Text(value, size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=4,
+                ),
+                padding=ft.padding.symmetric(horizontal=24, vertical=16),
+                **self._get_glass_style(0.06),
             )
-            btn.update()
+            for label, value in cards
+        ]
+        if self._is_mounted():
+            self._stats_row.update()
+
+    def _update_modes_ui(self):
+        self._mode_row.controls.clear()
+        for m in SCAN_MODES:
+            is_active = m["key"] == self._selected_mode
+            btn = ft.ElevatedButton(
+                m["label"],
+                icon=m["icon"],
+                data=m["key"],
+                on_click=lambda e, k=m["key"]: self._select_mode(k),
+                style=self._get_button_style(
+                    self._t.colors.primary if is_active else None
+                ),
+            )
+            self._mode_row.controls.append(btn)
+        if self._is_mounted():
+            self._mode_row.update()
+
+    def _update_recent_ui(self):
+        t = self._t
+        if not self._recent_rows:
+            self._recent_list.controls = [
+                ft.Text("No recent scans", size=t.typography.size_sm, color=t.colors.fg_muted)
+            ]
+        else:
+            self._recent_list.controls = [
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.icons.Icons.HISTORY, color=t.colors.primary, size=18),
+                            ft.Column(
+                                [
+                                    ft.Text(row.get("date", ""), size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                                    ft.Text(
+                                        f"{row.get('groups_found', 0)} groups · {fmt_size(row.get('bytes_reclaimable', 0))} · {row.get('mode', 'files')}",
+                                        size=t.typography.size_xs,
+                                        color=t.colors.fg2,
+                                    ),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=t.spacing.sm,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=t.spacing.md,
+                    **self._get_glass_style(0.04),
+                )
+                for row in self._recent_rows
+            ]
+        if self._is_mounted():
+            self._recent_list.update()
+
+    def _open_last_session(self, e=None):
+        try:
+            self._bridge.open_last_session()
+        except Exception as err:
+            _log.error(f"Failed to open last session: {err}")
+
+    # ------------------------------------------------------------------
+    # User Interactions
+    # ------------------------------------------------------------------
+    def _select_mode(self, key: str) -> None:
+        if self._selected_mode == key:
+            return
+        self._selected_mode = key
+        self._update_modes_ui()
+
+    def _refresh_quick_add_bar(self) -> None:
+        """Populate one-tap buttons for standard profile folders that exist on disk."""
+        t = self._t
+        paths = _discover_existing_popular_paths()
+        self._quick_add_title.color = t.colors.fg_muted
+        if not paths:
+            self._quick_add_wrap.visible = False
+            if self._is_mounted():
+                self._quick_add_wrap.update()
+            return
+        self._quick_add_wrap.visible = True
+        self._quick_paths_row.controls = [
+            ft.OutlinedButton(
+                label,
+                icon=ft.icons.Icons.FOLDER_SPECIAL,
+                data=str(p),
+                on_click=self._on_quick_add_folder,
+                style=ft.ButtonStyle(
+                    color=t.colors.fg2,
+                    side=ft.BorderSide(1, t.colors.border3),
+                    shape=ft.RoundedRectangleBorder(radius=10),
+                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                ),
+            )
+            for label, p in paths
+        ]
+        if self._is_mounted():
+            self._quick_paths_row.update()
+            self._quick_add_wrap.update()
+
+    def _on_quick_add_folder(self, e: ft.ControlEvent) -> None:
+        raw = getattr(e.control, "data", None)
+        if not raw:
+            return
+        self._add_folder(Path(str(raw)))
 
     def _browse_folders(self, e: ft.ControlEvent) -> None:
-        self._bridge.flet_page.run_task(self._browse_folders_async)
+        # Use the bridge's page reference to run async task safely
+        if hasattr(self._bridge, 'flet_page') and self._bridge.flet_page:
+            self._bridge.flet_page.run_task(self._browse_folders_async)
+        else:
+            _log.warning("Bridge page not available for folder picker")
 
     async def _browse_folders_async(self) -> None:
-        from pathlib import Path
+        try:
+            result = await self._folder_picker.get_directory_path(
+                dialog_title="Select folder to scan"
+            )
+            # Flet 0.25+ returns the folder path as str | None (not an object with .path).
+            if result:
+                self._add_folder(Path(result))
+        except Exception as e:
+            _log.error(f"Folder picker failed: {e}")
 
-        path = await self._folder_picker.get_directory_path(
-            dialog_title="Select folder to scan",
-        )
-        if path:
-            self._add_folder(Path(path))
-
-    def _add_folder(self, path) -> None:
+    def _add_folder(self, path: Path) -> None:
         if path in self._folders:
             return
         self._folders.append(path)
@@ -176,27 +454,34 @@ class DashboardPage(ft.Column):
 
     def _refresh_folder_chips(self) -> None:
         t = self._t
-        self._folder_row.controls = [
-            ft.Chip(
-                label=ft.Text(str(f), size=t.typography.size_sm),
-                on_delete=lambda e, p=f: self._remove_folder(p),
-            )
-            for f in self._folders
-        ]
-        self._folder_row.update()
+        if not self._folders:
+            self._folder_chips_row.controls = [
+                ft.Text("No folders selected", color=t.colors.fg_muted, size=t.typography.size_base)
+            ]
+        else:
+            self._folder_chips_row.controls = [
+                ft.Chip(
+                    label=ft.Text(str(f), size=t.typography.size_sm),
+                    on_delete=lambda e, p=f: self._remove_folder(p),
+                    shape=ft.RoundedRectangleBorder(radius=8),
+                    bgcolor=ft.Colors.with_opacity(0.1, t.colors.primary),
+                )
+                for f in self._folders
+            ]
+        if self._is_mounted():
+            self._folder_chips_row.update()
 
-    def _remove_folder(self, path) -> None:
+    def _remove_folder(self, path: Path) -> None:
         if path in self._folders:
             self._folders.remove(path)
         self._refresh_folder_chips()
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
-        folders = self._folders
-        if not folders:
+        if not self._folders:
             self._status.value = "Please select at least one folder first."
             self._status.update()
             return
-
+        
         self._stop_btn.visible = True
         self._progress.visible = True
         self._progress_label.visible = True
@@ -206,72 +491,97 @@ class DashboardPage(ft.Column):
         self._progress_label.update()
         self._status.update()
 
-        backend = self._bridge.backend
-        backend.set_on_progress(self._on_scan_progress)
-        backend.set_on_complete(self._on_scan_complete)
-        backend.set_on_error(self._on_scan_error)
-        backend.start_scan(folders, mode=self._selected_mode)
+        self._bridge.begin_scan_session(self._folders, self._selected_mode)
+
+        try:
+            backend = self._bridge.backend
+            backend.set_on_progress(self._on_scan_progress)
+            backend.set_on_complete(self._on_scan_complete)
+            backend.set_on_error(self._on_scan_error)
+            backend.start_scan(self._folders, mode=self._selected_mode)
+        except Exception as err:
+            self._on_scan_error(f"Backend communication error: {err}")
 
     def _on_scan_progress(self, data: dict) -> None:
         stage = data.get("stage", "")
         scanned = data.get("files_scanned", 0)
         total = data.get("files_total", 0)
         elapsed = data.get("elapsed_seconds", 0.0)
-        current = data.get("current_file", "")
-
+        
         self._status.value = f"Scanning... {stage}"
-        self._progress_label.value = f"{scanned:,} files scanned  ·  {elapsed:.1f}s"
+        self._progress_label.value = f"{scanned:,} files scanned · {elapsed:.1f}s"
+        
         if total > 0:
             self._progress.value = scanned / total
-        try:
-            self._status.update()
-            self._progress.update()
-            self._progress_label.update()
-        except Exception:
-            pass
+            
+        # Batch update calls to reduce overhead if needed, 
+        # but Flet handles individual updates reasonably well for text/progress.
+        self._status.update()
+        self._progress_label.update()
+        self._progress.update()
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
-        try:
-            self._status.update()
-            self._progress.update()
-            self._progress_label.update()
-            self._stop_btn.update()
-        except Exception:
-            pass
-
+        
+        self._progress.update()
+        self._progress_label.update()
+        self._stop_btn.update()
+        self._status.update()
+        
         self._bridge.dispatch_scan_complete(results, mode)
 
     def _on_scan_error(self, msg: str) -> None:
+        self._bridge.abort_scan_session()
         self._progress.visible = False
         self._progress_label.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan error: {msg}"
-        try:
-            self._status.update()
-            self._progress.update()
-            self._progress_label.update()
-            self._stop_btn.update()
-        except Exception:
-            pass
+        
+        self._progress.update()
+        self._progress_label.update()
+        self._stop_btn.update()
+        self._status.update()
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
-        self._bridge.backend.cancel_scan()
+        try:
+            self._bridge.backend.cancel_scan()
+        except Exception as err:
+            _log.error(f"Failed to stop scan: {err}")
+
+        self._bridge.abort_scan_session()
         self._stop_btn.visible = False
         self._status.value = "Cancelling scan..."
         self._status.update()
         self._stop_btn.update()
 
+    def on_show(self) -> None:
+        self._fetch_dashboard_data()
+        # Do not call super().update() here unnecessarily if _fetch handled updates
+
     def apply_theme(self, mode: str) -> None:
-        saved_folders = list(self._folders)
-        saved_mode = self._selected_mode
+        """Updates theme properties without destroying UI controls."""
         self._t = theme_for_mode(mode)
-        self._build()
-        self._folders = saved_folders
-        self._selected_mode = saved_mode
-        self._refresh_folder_chips()
-        self._select_mode(saved_mode)
-        self.update()
+        
+        # Update styles and colors on existing controls
+        self._hero.bgcolor = self._get_glass_style(0.06).get('bgcolor')
+        self._hero.border = self._get_glass_style(0.06).get('border')
+        
+        # Re-apply styles to containers
+        self._folder_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._folder_container.border = self._get_glass_style(0.04).get('border')
+        
+        self._recent_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._recent_container.border = self._get_glass_style(0.04).get('border')
+        
+        # Refresh text colors and stats to match new theme
+        self._update_stats_ui()
+        self._update_modes_ui()
+        self._refresh_folder_chips() # Chips have background colors relative to theme
+        self._refresh_quick_add_bar()
+        self._update_recent_ui()
+
+        if self._is_mounted():
+            self.update()

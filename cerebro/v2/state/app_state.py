@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Set
 from cerebro.engines.base_engine import DuplicateGroup
 
 VALID_MAIN_TAB_KEYS: frozenset[str] = frozenset(
-    ("dashboard", "duplicates", "history", "settings")
+    ("dashboard", "duplicates", "review", "history", "settings")
 )
 
 

@@ -113,7 +113,6 @@ class TurboFileEngine(BaseEngine):
         self._results: List[DuplicateGroup] = []
         self._progress: ScanProgress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[ScanProgress], None]] = None
 
     def configure(
@@ -132,10 +131,10 @@ class TurboFileEngine(BaseEngine):
         self._results = []
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
-        self._thread = threading.Thread(
-            target=self._run_scan, daemon=True, name="turbo-scan"
-        )
-        self._thread.start()
+        # Run on the orchestrator scan thread (same as other engines). A nested
+        # thread here used to return immediately so wait_for_completion() joined
+        # before the turbo pipeline finished, leaving get_results() empty.
+        self._run_scan()
 
     def pause(self) -> None:
         raise NotImplementedError("TurboFileEngine does not support pause/resume.")

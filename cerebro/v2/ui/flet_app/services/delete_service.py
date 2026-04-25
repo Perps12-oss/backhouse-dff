@@ -9,6 +9,7 @@ from typing import Callable, List, Optional
 
 from cerebro.core.deletion import DeletionEngine, DeletionPolicy, DeletionRequest
 from cerebro.engines.base_engine import DuplicateGroup
+from cerebro.v2.core.deletion_history_db import log_deletion_event
 from cerebro.v2.state.groups_prune import prune_paths_from_groups
 
 _log = logging.getLogger(__name__)
@@ -30,6 +31,13 @@ class DeleteService:
         if not paths:
             return 0, 0, 0
 
+        sizes_by_path: dict[str, int] = {}
+        for p in paths:
+            try:
+                sizes_by_path[str(p)] = Path(p).stat().st_size
+            except OSError:
+                sizes_by_path[str(p)] = 0
+
         operations = [SimpleNamespace(path=Path(p)) for p in paths]
         plan = SimpleNamespace(
             scan_id="flet_ui",
@@ -46,6 +54,9 @@ class DeleteService:
         result = self._engine.execute_plan(plan, request=request, progress_cb=_progress)
         deleted_n = len(result.deleted)
         failed_n = len(result.failed)
+        mode_tag = policy.value
+        for p in result.deleted:
+            log_deletion_event(str(p), sizes_by_path.get(str(p), 0), mode_tag)
         return deleted_n, failed_n, int(result.bytes_reclaimed or 0)
 
     def delete_and_prune(

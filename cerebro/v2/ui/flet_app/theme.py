@@ -34,6 +34,7 @@ class ColorTokens:
 
     border: str = "#E2E8F0"
     border_strong: str = "#CBD5E1"
+    border3: str = "#F1F5F9"
 
     nav_bg: str = "#0A1929"
     nav_bar: str = "#1E3A5F"
@@ -68,6 +69,7 @@ class DarkColorTokens:
 
     border: str = "#334155"
     border_strong: str = "#475569"
+    border3: str = "#1E293B"
 
     nav_bg: str = "#020617"
     nav_bar: str = "#0F172A"
