@@ -511,23 +511,87 @@ class ResultsPage(ft.Stack):
         self._bridge.coordinator.results_files_removed(paths)
         self._refresh()
         if deleted > 0:
-            if policy == DeletionPolicy.TRASH:
-                self._bridge.show_snackbar(
-                    f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
-                    success=True,
-                    action_label="Undo",
-                    on_action=lambda _e: self._undo_last_trash_delete(),
-                )
-            else:
-                self._bridge.show_snackbar(
-                    f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
-                    success=True,
-                )
+            self._show_success_modal(deleted, bytes_reclaimed, policy)
         if failed > 0:
             self._bridge.show_snackbar(
                 f"{failed:,} files could not be deleted.",
                 error=True,
             )
+
+    def _show_success_modal(self, deleted: int, bytes_reclaimed: int, policy: DeletionPolicy) -> None:
+        t = self._t
+        has_remaining = len(self._groups) > 0
+        policy_label = "moved to Trash" if policy == DeletionPolicy.TRASH else "permanently deleted"
+
+        def _done(e):
+            self._bridge.dismiss_top_dialog()
+
+        def _new_scan(e):
+            self._bridge.dismiss_top_dialog()
+            self._bridge.navigate("dashboard")
+
+        def _undo(e):
+            self._bridge.dismiss_top_dialog()
+            self._undo_last_trash_delete()
+
+        actions: list = [ft.TextButton("Done", on_click=_done)]
+        if policy == DeletionPolicy.TRASH:
+            actions.insert(0, ft.TextButton("Undo", on_click=_undo))
+        if not has_remaining:
+            actions.append(
+                ft.FilledButton(
+                    "Start New Scan",
+                    on_click=_new_scan,
+                    style=ft.ButtonStyle(
+                        bgcolor="#00BFA5",
+                        color="#0A0E14",
+                        shape=ft.RoundedRectangleBorder(radius=8),
+                    ),
+                )
+            )
+
+        modal = ft.AlertDialog(
+            modal=True,
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Container(
+                            content=ft.Icon(ft.icons.Icons.CHECK_CIRCLE, size=64, color="#34D399"),
+                            bgcolor=ft.Colors.with_opacity(0.12, "#34D399"),
+                            border_radius=40,
+                            padding=16,
+                        ),
+                        ft.Text(
+                            "Space Recovered!",
+                            size=t.typography.size_xl,
+                            weight=ft.FontWeight.BOLD,
+                            color=t.colors.fg,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Text(
+                            fmt_size(bytes_reclaimed),
+                            size=t.typography.size_xxxl,
+                            weight=ft.FontWeight.BOLD,
+                            color="#34D399",
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Text(
+                            f"{deleted:,} files {policy_label}",
+                            size=t.typography.size_base,
+                            color=t.colors.fg_muted,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=t.spacing.md,
+                ),
+                padding=t.spacing.xl,
+                width=320,
+            ),
+            actions=actions,
+            actions_alignment=ft.MainAxisAlignment.CENTER,
+        )
+        self._bridge.show_modal_dialog(modal)
 
     def _undo_last_trash_delete(self) -> None:
         from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
