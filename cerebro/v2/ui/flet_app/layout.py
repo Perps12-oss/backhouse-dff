@@ -45,7 +45,7 @@ class AppLayout(ft.Row):
             ft.NavigationRailDestination(
                 icon=r.icon,
                 selected_icon=r.icon,
-                label=r.label,
+                label=ft.Text(r.label, size=11, weight=ft.FontWeight.W_500, color="#D7E6FF"),
             )
             for r in ROUTES
         ]
@@ -84,8 +84,10 @@ class AppLayout(ft.Row):
             min_extended_width=200,
             label_type=ft.NavigationRailLabelType.ALL,
             bgcolor="#080C11",
-            indicator_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
+            indicator_color=ft.Colors.with_opacity(0.28, "#22D3EE"),
             indicator_shape=ft.RoundedRectangleBorder(radius=8),
+            selected_label_text_style=ft.TextStyle(color="#EAF2FF", size=12, weight=ft.FontWeight.W_700),
+            unselected_label_text_style=ft.TextStyle(color="#C2D5F5", size=11, weight=ft.FontWeight.W_500),
             leading=_wordmark,
             trailing=_version_badge,
         )
@@ -130,7 +132,7 @@ class AppLayout(ft.Row):
         else:
             self._content_host.content = ft.Container(
                 expand=True,
-                alignment=ft.Alignment(0.5, 0.5),
+                alignment=ft.Alignment(0, 0),
                 content=ft.Text("Page not found"),
                 key="cerebro-tab-missing",
             )

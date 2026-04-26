@@ -17,24 +17,24 @@ import flet as ft
 class ColorTokens:
     """Immutable color palette."""
 
-    primary: str = "#3B82F6"
-    primary_hover: str = "#2563EB"
+    primary: str = "#2563EB"
+    primary_hover: str = "#1D4ED8"
     danger: str = "#EF4444"
     danger_hover: str = "#DC2626"
     success: str = "#10B981"
     warning: str = "#F59E0B"
 
-    bg: str = "#FFFFFF"
-    bg2: str = "#F8FAFC"
-    bg3: str = "#F1F5F9"
+    bg: str = "#F8FBFF"
+    bg2: str = "#EEF4FF"
+    bg3: str = "#E7EEFA"
 
-    fg: str = "#0F172A"
-    fg2: str = "#475569"
-    fg_muted: str = "#94A3B8"
+    fg: str = "#0B1220"
+    fg2: str = "#24344E"
+    fg_muted: str = "#50627F"
 
-    border: str = "#E2E8F0"
-    border_strong: str = "#CBD5E1"
-    border3: str = "#F1F5F9"
+    border: str = "#CBD8EE"
+    border_strong: str = "#AFC3E5"
+    border3: str = "#DDE8FA"
 
     nav_bg: str = "#0A1929"
     nav_bar: str = "#1E3A5F"
@@ -52,35 +52,35 @@ class ColorTokens:
 class DarkColorTokens:
     """Dark-mode color palette — Cerebro navy/cyan brand."""
 
-    primary: str = "#22D3EE"        # cyan accent (was #60A5FA blue)
-    primary_hover: str = "#06B6D4"  # cyan hover (was #93C5FD)
+    primary: str = "#35E7FF"        # brighter cyan for standout actions
+    primary_hover: str = "#19D7F5"
     danger: str = "#F87171"
     danger_hover: str = "#FCA5A5"
     success: str = "#34D399"
     warning: str = "#FBBF24"
 
-    bg: str = "#0A0E14"             # deep navy (was #0F172A slate)
-    bg2: str = "#0D1117"            # panel bg (was #1E293B)
-    bg3: str = "#161B22"            # card bg (was #334155)
+    bg: str = "#060B14"
+    bg2: str = "#0B1220"
+    bg3: str = "#101A2E"
 
-    fg: str = "#E6EDF3"             # primary text (was #F1F5F9)
-    fg2: str = "#8B949E"            # secondary text (was #CBD5E1)
-    fg_muted: str = "#6E7681"       # muted text (was #64748B)
+    fg: str = "#F3F9FF"             # primary text, high contrast
+    fg2: str = "#C7D8F4"            # secondary text, still readable
+    fg_muted: str = "#8FA7CC"       # muted text with better lift
 
-    border: str = "#30363D"         # panel borders (was #334155)
-    border_strong: str = "#3B434D"  # highlighted borders (was #475569)
-    border3: str = "#21262D"        # subtle borders (was #1E293B)
+    border: str = "#2B3A54"
+    border_strong: str = "#3A4F73"
+    border3: str = "#1C2740"
 
     nav_bg: str = "#080C11"         # sidebar bg (was #020617)
     nav_bar: str = "#0D1117"        # nav bar (was #0F172A)
 
-    row_sel: str = "#1C2333"        # selected row bg (was #1E3A5F)
-    row_sel_fg: str = "#E6EDF3"     # selected row text (was #F1F5F9)
+    row_sel: str = "#1A2A45"
+    row_sel_fg: str = "#F3F9FF"
 
-    glass_bg: str = "#0D1117"       # glass panel (was #1E293B)
-    glass_border: str = "#30363D"   # glass border (was #334155)
+    glass_bg: str = "#0D1628"
+    glass_border: str = "#324765"
 
-    accent: str = "#22D3EE"         # accent alias (was #60A5FA)
+    accent: str = "#35E7FF"
 
 
 @dataclass(frozen=True)
@@ -101,14 +101,14 @@ class Typography:
     """Font configuration."""
 
     family: str = "Segoe UI"
-    size_xs: int = 9
-    size_sm: int = 10
-    size_base: int = 11
-    size_md: int = 12
-    size_lg: int = 14
-    size_xl: int = 16
-    size_xxl: int = 18
-    size_xxxl: int = 24
+    size_xs: int = 10
+    size_sm: int = 11
+    size_base: int = 13
+    size_md: int = 14
+    size_lg: int = 16
+    size_xl: int = 18
+    size_xxl: int = 22
+    size_xxxl: int = 30
 
 
 @dataclass
@@ -212,39 +212,65 @@ def build_flet_theme(mode: str, seed: str | None = None) -> ft.Theme:
     """Build a complete ft.Theme with explicit ColorScheme for correct Material 3 contrast."""
     if mode == "dark":
         c = DarkColorTokens()
+        # Dracula-like readability profile: bright, crisp text hierarchy on dark surfaces.
+        text_primary = "#F6F8FF"
+        text_secondary = "#D8E2FF"
+        text_muted = "#AFC1E6"
         scheme = ft.ColorScheme(
             primary=seed or c.primary,
             on_primary="#0A0E14",
             primary_container=ft.Colors.with_opacity(0.18, seed or c.primary),
-            on_primary_container=c.fg,
+            on_primary_container=text_primary,
+            secondary="#8BE9FD",
+            on_secondary="#0A0E14",
+            secondary_container=ft.Colors.with_opacity(0.18, "#8BE9FD"),
+            on_secondary_container=text_primary,
             surface=c.bg,
-            on_surface=c.fg,
-            surface_variant=c.bg2,
-            on_surface_variant=c.fg2,
+            on_surface=text_primary,
+            surface_container=c.bg2,
+            on_surface_variant=text_secondary,
             outline=c.border,
             outline_variant=c.border_strong,
             error=c.danger,
             on_error="#0A0E14",
-            background=c.bg,
-            on_background=c.fg,
+            tertiary="#BD93F9",
+            on_tertiary="#0A0E14",
+            tertiary_container=ft.Colors.with_opacity(0.20, "#BD93F9"),
+            on_tertiary_container=text_primary,
+            surface_container_high=c.bg3,
+            surface_container_low=c.bg2,
+            surface_tint=text_muted,
         )
     else:
         c = ColorTokens()
+        # Keep light themes vibrant and legible instead of washed out.
+        text_primary = "#0E172A"
+        text_secondary = "#1F3352"
+        text_muted = "#3B5478"
         scheme = ft.ColorScheme(
             primary=seed or c.primary,
             on_primary="#FFFFFF",
             primary_container=ft.Colors.with_opacity(0.12, seed or c.primary),
-            on_primary_container=c.fg,
+            on_primary_container=text_primary,
+            secondary="#4F46E5",
+            on_secondary="#FFFFFF",
+            secondary_container=ft.Colors.with_opacity(0.16, "#4F46E5"),
+            on_secondary_container=text_primary,
             surface=c.bg,
-            on_surface=c.fg,
-            surface_variant=c.bg2,
-            on_surface_variant=c.fg2,
+            on_surface=text_primary,
+            surface_container=c.bg2,
+            on_surface_variant=text_secondary,
             outline=c.border,
             outline_variant=c.border_strong,
             error=c.danger,
             on_error="#FFFFFF",
-            background=c.bg,
-            on_background=c.fg,
+            tertiary="#0EA5E9",
+            on_tertiary="#FFFFFF",
+            tertiary_container=ft.Colors.with_opacity(0.18, "#0EA5E9"),
+            on_tertiary_container=text_primary,
+            surface_container_high=c.bg3,
+            surface_container_low=c.bg2,
+            surface_tint=text_muted,
         )
     return ft.Theme(
         color_scheme_seed=None,

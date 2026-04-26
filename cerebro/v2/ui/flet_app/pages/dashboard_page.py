@@ -91,6 +91,16 @@ class DashboardPage(ft.Column):
         except RuntimeError:
             return False
 
+    @staticmethod
+    def _safe_update(ctrl: ft.Control | None) -> None:
+        if ctrl is None:
+            return
+        try:
+            if ctrl.page is not None:
+                ctrl.update()
+        except RuntimeError:
+            pass
+
     # ------------------------------------------------------------------
     # Construction (Runs Once)
     # ------------------------------------------------------------------
@@ -241,9 +251,9 @@ class DashboardPage(ft.Column):
                 padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
             ),
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
-            ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs), alignment=ft.Alignment(0.5, 0.5)),
-            ft.Container(content=self._progress_label, alignment=ft.Alignment(0.5, 0.5)),
-            ft.Container(content=self._progress_detail, alignment=ft.Alignment(0.5, 0.5)),
+            ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs), alignment=ft.Alignment(0, 0)),
+            ft.Container(content=self._progress_label, alignment=ft.Alignment(0, 0)),
+            ft.Container(content=self._progress_detail, alignment=ft.Alignment(0, 0)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
         ]
         
@@ -321,15 +331,28 @@ class DashboardPage(ft.Column):
                         [
                             ft.Container(
                                 content=ft.Icon(icon, size=20, color=accent),
-                                bgcolor=ft.Colors.with_opacity(0.12, accent),
+                                bgcolor=ft.Colors.with_opacity(0.18, accent),
+                                border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent)),
                                 border_radius=8,
                                 padding=8,
                             ),
-                            ft.Text(value, size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
-                            ft.Text(label, size=t.typography.size_sm, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
+                            ft.Text(
+                                value,
+                                size=t.typography.size_xxl,
+                                weight=ft.FontWeight.W_700,
+                                color=accent,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            ft.Text(
+                                label,
+                                size=t.typography.size_base,
+                                color=t.colors.fg2,
+                                weight=ft.FontWeight.W_600,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
                         ],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=6,
+                        spacing=8,
                     ),
                     padding=ft.padding.symmetric(horizontal=28, vertical=18),
                     **self._get_glass_style(0.06),
@@ -340,8 +363,7 @@ class DashboardPage(ft.Column):
             )
             for icon, accent, label, value in cards
         ]
-        if self._is_mounted():
-            self._stats_row.update()
+        DashboardPage._safe_update(self._stats_row)
 
     def _update_modes_ui(self):
         self._mode_row.controls.clear()
@@ -357,8 +379,7 @@ class DashboardPage(ft.Column):
                 ),
             )
             self._mode_row.controls.append(btn)
-        if self._is_mounted():
-            self._mode_row.update()
+        DashboardPage._safe_update(self._mode_row)
 
     def _open_last_session(self, e=None):
         try:

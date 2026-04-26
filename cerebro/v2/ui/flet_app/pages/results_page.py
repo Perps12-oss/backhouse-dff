@@ -30,6 +30,16 @@ _FILTER_TABS = [
     ("other", "Other"),
 ]
 
+_FILTER_ACCENT = {
+    "all": "#C7D2FE",
+    "pictures": "#C084FC",
+    "music": "#34D399",
+    "videos": "#F472B6",
+    "documents": "#FB923C",
+    "archives": "#FBBF24",
+    "other": "#93C5FD",
+}
+
 # Above this many duplicate *groups*, build the ListView in chunks so the UI thread
 # can still process NavigationRail taps (see debug-4176e4: multi-second sync build).
 _LIST_BUILD_ASYNC_THRESHOLD = 72
@@ -146,11 +156,11 @@ class ResultsPage(ft.Column):
     def _build_ui(self) -> None:
         t = self._t
 
-        self._summary = ft.Text("", size=t.typography.size_base, color=t.colors.fg2)
+        self._summary = ft.Text("", size=t.typography.size_base, color="#BFD5FF", weight=ft.FontWeight.W_500)
 
         # Smart select row
         self._smart_seg = ft.SegmentedButton(
-            selected={"keep_largest"},
+            selected=["keep_largest"],
             allow_multiple_selection=False,
             on_change=self._on_smart_seg_change,
             segments=[
@@ -196,7 +206,7 @@ class ResultsPage(ft.Column):
         )
 
         self._filter_seg = ft.SegmentedButton(
-            selected={"all"},
+            selected=["all"],
             allow_multiple_selection=False,
             on_change=self._on_filter_seg_change,
             segments=[
@@ -204,9 +214,9 @@ class ResultsPage(ft.Column):
                     value=key,
                     label=ft.Column(
                         [
-                            ft.Text(label, size=11, weight=ft.FontWeight.W_500),
-                            ft.Text("0", size=10),
-                            ft.Text("0 B", size=9, color=ft.Colors.ON_SURFACE_VARIANT),
+                            ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#DDE8FF"),
+                            ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE")),
+                            ft.Text("0 B", size=10, color="#9FB0D0"),
                         ],
                         spacing=1,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -240,7 +250,7 @@ class ResultsPage(ft.Column):
                 spacing=t.spacing.lg,
             ),
             expand=True,
-            alignment=ft.Alignment(0.5, 0.5),
+            alignment=ft.Alignment(0, 0),
             **self._get_glass_style(0.04),
         )
         self._loading_state = ft.Container(
@@ -605,9 +615,18 @@ class ResultsPage(ft.Column):
                                     label=str(Path(str(f.path)).name),
                                     value=str(f.path) in self._selected_paths,
                                     on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
-                                    label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
+                                    label_style=ft.TextStyle(
+                                        size=t.typography.size_base,
+                                        color=t.colors.fg,
+                                        weight=ft.FontWeight.W_500,
+                                    ),
                                 ),
-                                ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
+                                ft.Text(
+                                    fmt_size(f.size),
+                                    size=t.typography.size_sm,
+                                    color=t.colors.fg2,
+                                    weight=ft.FontWeight.W_500,
+                                ),
                             ],
                             spacing=t.spacing.sm,
                         ),
@@ -626,7 +645,10 @@ class ResultsPage(ft.Column):
         expand_btn = ft.TextButton(
             "Expand",
             on_click=_toggle_expand,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
+            style=ft.ButtonStyle(
+                color=t.colors.fg2,
+                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
+            ),
         )
 
         return ft.Container(
@@ -645,11 +667,28 @@ class ResultsPage(ft.Column):
                                     ft.Text(name, weight=ft.FontWeight.W_600, color=t.colors.fg, size=t.typography.size_md, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
                                     ft.Row(
                                         [
-                                            ft.Text(f"{len(group.files)} files", size=t.typography.size_xs, color=t.colors.fg_muted),
-                                            ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
-                                            ft.Text(fmt_size(group.total_size), size=t.typography.size_xs, color=t.colors.fg_muted),
-                                            ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
-                                            ft.Text(parent, size=t.typography.size_xs, color=t.colors.fg_muted, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+                                            ft.Text(
+                                                f"{len(group.files)} files",
+                                                size=t.typography.size_sm,
+                                                color="#7DD3FC",
+                                                weight=ft.FontWeight.W_500,
+                                            ),
+                                            ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
+                                            ft.Text(
+                                                fmt_size(group.total_size),
+                                                size=t.typography.size_sm,
+                                                color="#A78BFA",
+                                                weight=ft.FontWeight.W_500,
+                                            ),
+                                            ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
+                                            ft.Text(
+                                                parent,
+                                                size=t.typography.size_sm,
+                                                color="#93C5FD",
+                                                no_wrap=True,
+                                                overflow=ft.TextOverflow.ELLIPSIS,
+                                                expand=True,
+                                            ),
                                         ],
                                         spacing=4,
                                     ),
@@ -662,7 +701,7 @@ class ResultsPage(ft.Column):
                             ft.IconButton(
                                 icon=ft.icons.Icons.VISIBILITY,
                                 tooltip="Review group",
-                                icon_color=t.colors.fg_muted,
+                                icon_color=t.colors.fg2,
                                 on_click=lambda e, g=group: self._open_group(g),
                             ),
                         ],
@@ -701,6 +740,7 @@ class ResultsPage(ft.Column):
         self._filter_group_counts = group_counts
 
     def _refresh_filter_labels(self) -> None:
+        selected = set(self._filter_seg.selected or [])
         for seg in self._filter_seg.segments:
             key = seg.value
             base = next((label for k, label in _FILTER_TABS if k == key), key.title())
@@ -708,9 +748,16 @@ class ResultsPage(ft.Column):
             size_n = self._filter_sizes.get(key, 0)
             col = seg.label
             if isinstance(col, ft.Column) and len(col.controls) >= 3:
+                is_active = key in selected
+                accent = _FILTER_ACCENT.get(key, "#C7D2FE")
                 col.controls[0].value = base
+                col.controls[0].color = "#FFFFFF" if is_active else "#DDE8FF"
+                col.controls[0].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[1].value = f"{files_n:,}"
+                col.controls[1].color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
+                col.controls[1].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[2].value = fmt_size(size_n)
+                col.controls[2].color = "#B7C6E6" if is_active else "#9FB0D0"
 
     def _open_group(self, group: DuplicateGroup) -> None:
         self._bridge.coordinator.review_open_group(group.group_id, self._groups)

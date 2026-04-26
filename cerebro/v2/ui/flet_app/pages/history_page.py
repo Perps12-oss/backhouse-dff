@@ -139,7 +139,7 @@ class HistoryPage(ft.Column):
                 spacing=t.spacing.md,
             ),
             expand=True,
-            alignment=ft.Alignment(0.5, 0.5),
+            alignment=ft.Alignment(0, 0),
             **self._get_glass_style(0.04),
         )
         

@@ -148,13 +148,16 @@ def _main(page: ft.Page) -> None:
 
     page.window.title_bar_hidden = True
 
-    def _min_btn(e=None): page.window.minimize()
+    def _min_btn(e=None):
+        page.window.minimized = True
     def _max_btn(e=None):
-        if page.window.maximized:
-            page.window.restore()
-        else:
-            page.window.maximize()
-    def _close_btn(e=None): page.window.close()
+        page.window.maximized = not bool(page.window.maximized)
+    async def _close_btn_async() -> None:
+        await page.window.close()
+
+    def _close_btn(e=None):
+        if hasattr(page, "run_task"):
+            page.run_task(_close_btn_async)
 
     title_bar = ft.WindowDragArea(
         content=ft.Container(
@@ -175,7 +178,6 @@ def _main(page: ft.Page) -> None:
                 spacing=4,
             ),
         ),
-        expand=True,
     )
 
     page.add(ft.Column([title_bar, layout], spacing=0, expand=True))

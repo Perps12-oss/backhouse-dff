@@ -32,6 +32,16 @@ _FILTER_TABS = [
     ("other", "Other"),
 ]
 
+_FILTER_ACCENT = {
+    "all": "#C7D2FE",
+    "pictures": "#C084FC",
+    "music": "#34D399",
+    "videos": "#F472B6",
+    "documents": "#FB923C",
+    "archives": "#FBBF24",
+    "other": "#93C5FD",
+}
+
 _SMART_RULES = [
     ("keep_largest", "Keep Largest"),
     ("keep_smallest", "Keep Smallest"),
@@ -58,6 +68,7 @@ class ReviewPage(ft.Column):
         self._grid_extent = 200  # tile max_extent: S=140 M=200 L=260
         self._loading = False
         self._tile_cache: Dict[str, ft.Container] = {}
+        self._thumb_slots: Dict[str, ft.Container] = {}
         self._files_by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
         self._glass_cache: dict = {}
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
@@ -152,10 +163,13 @@ class ReviewPage(ft.Column):
 
         # Smart select for grid mode
         self._smart_seg = ft.SegmentedButton(
-            selected={"keep_largest"},
+            selected=["keep_largest"],
             allow_multiple_selection=False,
             on_change=self._on_smart_seg_change,
-            segments=[ft.Segment(value=val, label=ft.Text(label, size=11)) for val, label in _SMART_RULES],
+            segments=[
+                ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
+                for val, label in _SMART_RULES
+            ],
         )
         self._zoom_row = self._build_zoom_row()
         self._smart_row = ft.Row(
@@ -167,10 +181,13 @@ class ReviewPage(ft.Column):
         # Compare navigation bar
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
         self._cmp_smart_seg = ft.SegmentedButton(
-            selected={"keep_largest"},
+            selected=["keep_largest"],
             allow_multiple_selection=False,
             on_change=self._on_cmp_smart_seg_change,
-            segments=[ft.Segment(value=val, label=ft.Text(label, size=11)) for val, label in _SMART_RULES],
+            segments=[
+                ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
+                for val, label in _SMART_RULES
+            ],
         )
         self._delete_btn = ft.OutlinedButton(
             "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
@@ -207,7 +224,7 @@ class ReviewPage(ft.Column):
 
         # Filter bar
         self._filter_seg = ft.SegmentedButton(
-            selected={"all"},
+            selected=["all"],
             allow_multiple_selection=False,
             on_change=self._on_filter_seg_change,
             segments=[
@@ -215,9 +232,9 @@ class ReviewPage(ft.Column):
                     value=key,
                     label=ft.Column(
                         [
-                            ft.Text(label, size=11, weight=ft.FontWeight.W_500),
-                            ft.Text("0", size=10),
-                            ft.Text("0 B", size=9, color=ft.Colors.ON_SURFACE_VARIANT),
+                            ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#DDE8FF"),
+                            ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE")),
+                            ft.Text("0 B", size=10, color="#9FB0D0"),
                         ],
                         spacing=1,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -263,7 +280,7 @@ class ReviewPage(ft.Column):
                 spacing=t.spacing.lg,
             ),
             expand=True,
-            alignment=ft.Alignment(0.5, 0.5),
+            alignment=ft.Alignment(0, 0),
             **self._get_glass_style(0.04),
         )
         self._loading_state = ft.Container(
@@ -276,7 +293,7 @@ class ReviewPage(ft.Column):
                 spacing=t.spacing.md,
             ),
             expand=True,
-            alignment=ft.Alignment(0.5, 0.5),
+            alignment=ft.Alignment(0, 0),
             **self._get_glass_style(0.04),
         )
 
@@ -382,6 +399,23 @@ class ReviewPage(ft.Column):
     def on_show(self) -> None:
         if not self._groups:
             self._enter_mode("empty")
+            return
+        # If groups were synced while Review was hidden (defer_render=True),
+        # ensure we materialize the grid when the page becomes visible.
+        if self._mode in ("empty", "loading"):
+            self._loading = True
+            self._enter_mode("loading")
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._finish_load_to_grid_async)
+            else:
+                self._loading = False
+                self._enter_mode("grid")
+            return
+        # If already in a rendered mode, refresh counts/chrome.
+        if self._mode == "grid":
+            self._refresh_grid()
+            self._safe_update(self._content)
 
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._groups)
@@ -548,8 +582,8 @@ class ReviewPage(ft.Column):
             ink=True,
             on_click=lambda e, file=f: self._on_tile_clicked(file),
             on_hover=_hover,
-            data={"thumb_slot": thumb_slot},
         )
+        self._thumb_slots[key] = thumb_slot
         self._tile_cache[key] = tile
         return tile
 
@@ -574,18 +608,16 @@ class ReviewPage(ft.Column):
                 continue
             if not b64:
                 continue
-            tile_data = getattr(tile, "data", None)
-            if isinstance(tile_data, dict):
-                thumb_slot = tile_data.get("thumb_slot")
-                if thumb_slot is not None:
-                    thumb_slot.content = ft.Image(
-                        src=f"data:image/jpeg;base64,{b64}",
-                        width=120,
-                        height=120,
-                        fit=ft.BoxFit.CONTAIN,
-                        border_radius=8,
-                    )
-                    self._safe_update(thumb_slot)
+            thumb_slot = self._thumb_slots.get(key)
+            if thumb_slot is not None:
+                thumb_slot.content = ft.Image(
+                    src=f"data:image/jpeg;base64,{b64}",
+                    width=120,
+                    height=120,
+                    fit=ft.BoxFit.CONTAIN,
+                    border_radius=8,
+                )
+                self._safe_update(thumb_slot)
             # Yield every 8 tiles to keep UI responsive
             if i % 8 == 0:
                 await asyncio.sleep(0)
@@ -930,6 +962,7 @@ class ReviewPage(ft.Column):
 
     def _rebuild_filter_index(self) -> None:
         self._tile_cache = {}
+        self._thumb_slots = {}
         by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
         group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         file_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
@@ -956,6 +989,7 @@ class ReviewPage(ft.Column):
         self._filter_group_counts = group_counts
 
     def _refresh_filter_labels(self) -> None:
+        selected = set(self._filter_seg.selected or [])
         for seg in self._filter_seg.segments:
             key = seg.value
             base = next((label for k, label in _FILTER_TABS if k == key), key.title())
@@ -963,9 +997,16 @@ class ReviewPage(ft.Column):
             size_n = self._filter_sizes.get(key, 0)
             col = seg.label
             if isinstance(col, ft.Column) and len(col.controls) >= 3:
+                is_active = key in selected
+                accent = _FILTER_ACCENT.get(key, "#C7D2FE")
                 col.controls[0].value = base
+                col.controls[0].color = "#FFFFFF" if is_active else "#DDE8FF"
+                col.controls[0].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[1].value = f"{files_n:,}"
+                col.controls[1].color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
+                col.controls[1].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[2].value = fmt_size(size_n)
+                col.controls[2].color = "#B7C6E6" if is_active else "#9FB0D0"
 
     # ------------------------------------------------------------------
     # Keyboard
