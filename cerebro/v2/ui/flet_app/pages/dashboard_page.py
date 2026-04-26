@@ -83,6 +83,9 @@ class DashboardPage(ft.Column):
         self._progress_label: ft.Text
         self._progress_detail: ft.Text
         self._status: ft.Text
+        self._similarity_slider: ft.Slider
+        self._similarity_pct: ft.Text
+        self._similarity_config: ft.Container
         self._ring: ft.ProgressRing
         self._ring_label: ft.Text
         self._ring_counter: ft.Text
@@ -148,6 +151,48 @@ class DashboardPage(ft.Column):
         )
         self._mode_row = ft.Row([], wrap=True, spacing=s.md, run_spacing=s.md)
         self._update_modes_ui()
+
+        # Similarity slider — shown only for photo modes
+        self._similarity_pct = ft.Text(
+            "90% Match",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_600,
+            color="#00BFA5",
+            text_align=ft.TextAlign.CENTER,
+        )
+        self._similarity_slider = ft.Slider(
+            min=0, max=100, divisions=20,
+            value=90,
+            active_color="#00BFA5",
+            thumb_color="#00BFA5",
+            on_change=self._on_similarity_change,
+        )
+        self._similarity_config = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Matching Level",
+                        size=t.typography.size_sm,
+                        weight=ft.FontWeight.W_600,
+                        color=t.colors.fg_muted,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("Exact", size=t.typography.size_xs, color=t.colors.fg_muted),
+                            ft.Container(content=self._similarity_slider, expand=True),
+                            ft.Text("Similar", size=t.typography.size_xs, color=t.colors.fg_muted),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=s.sm,
+                    ),
+                    ft.Container(content=self._similarity_pct, alignment=ft.Alignment(0, 0)),
+                ],
+                spacing=s.xs,
+            ),
+            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            visible=False,
+            **self._get_glass_style(0.04),
+        )
 
         # Folder list
         self._folder_chips_row = ft.Row(
@@ -320,6 +365,7 @@ class DashboardPage(ft.Column):
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
             ft.Container(content=self._mode_label, padding=ft.padding.only(left=s.md, top=s.sm)),
             ft.Container(content=self._mode_row, padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm)),
+            self._similarity_config,
             self._folder_container,
             ft.Container(
                 content=self._quick_add_wrap,
@@ -525,7 +571,14 @@ class DashboardPage(ft.Column):
         if self._selected_mode == key:
             return
         self._selected_mode = key
+        self._similarity_config.visible = key in ("similar_photos", "photos")
+        DashboardPage._safe_update(self._similarity_config)
         self._update_modes_ui()
+
+    def _on_similarity_change(self, e: ft.ControlEvent) -> None:
+        val = int(getattr(e.control, "value", 90))
+        self._similarity_pct.value = f"{val}% Match"
+        DashboardPage._safe_update(self._similarity_pct)
 
     def _refresh_quick_add_bar(self) -> None:
         """Populate one-tap smart suggestions based on scan history + recency."""
@@ -741,6 +794,7 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
+        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
         DashboardPage._safe_update(self)
         
@@ -761,6 +815,7 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
+        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = f"Scan error: {msg}"
         DashboardPage._safe_update(self)
         self._bridge.play_sound("error")
@@ -775,6 +830,7 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
+        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = "Cancelling scan..."
         DashboardPage._safe_update(self)
 
