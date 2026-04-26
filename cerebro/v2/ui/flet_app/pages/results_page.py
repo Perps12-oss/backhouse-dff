@@ -176,7 +176,33 @@ class ResultsPage(ft.Stack):
                 for val, label in _SMART_SELECT_OPTIONS
             ],
         )
-        self._smart_row = ft.Row([self._smart_seg], spacing=t.spacing.sm, visible=False)
+        self._auto_mark_btn = ft.FilledButton(
+            "Auto Mark",
+            icon=ft.icons.Icons.AUTO_FIX_HIGH,
+            on_click=self._apply_smart_select,
+            style=ft.ButtonStyle(
+                bgcolor="#00BFA5",
+                color="#0A0E14",
+                shape=ft.RoundedRectangleBorder(radius=8),
+                text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_700),
+            ),
+        )
+        self._unmark_all_btn = ft.OutlinedButton(
+            "Unmark All",
+            icon=ft.icons.Icons.DESELECT,
+            on_click=self._unmark_all,
+            style=ft.ButtonStyle(
+                color=t.colors.fg_muted,
+                side=ft.BorderSide(1, t.colors.border),
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
+        )
+        self._smart_row = ft.Row(
+            [self._auto_mark_btn, self._smart_seg, self._unmark_all_btn],
+            spacing=t.spacing.sm,
+            visible=False,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
         # Selection label and delete buttons
         self._selection_label = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
@@ -395,7 +421,10 @@ class ResultsPage(ft.Stack):
     def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"keep_largest"}
         self._smart_rule = next(iter(sel), "keep_largest")
-        self._apply_smart_select()
+
+    def _unmark_all(self, e=None) -> None:
+        self._selected_paths.clear()
+        self._refresh()
 
     def _apply_smart_select(self, e=None) -> None:
         self._selected_paths.clear()
