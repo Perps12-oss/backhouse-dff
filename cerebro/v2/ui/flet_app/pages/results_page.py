@@ -14,6 +14,7 @@ from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.ui.flet_app.theme import (
     FILTER_EXTS, classify_file, fmt_size, theme_for_mode,
 )
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -72,6 +73,9 @@ class ResultsPage(ft.Column):
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._glass_cache: dict = {}
+        self._view_mode: str = "list"
+        self._thumb_slots: Dict[str, ft.Container] = {}
+        self._tile_cache_grid: Dict[str, ft.Container] = {}
 
         # UI References
         self._summary: ft.Text
@@ -86,6 +90,9 @@ class ResultsPage(ft.Column):
         self._group_list: ft.ListView
         self._empty: ft.Container
         self._loading_state: ft.Container
+        self._results_grid: ft.ListView
+        self._grid_btn: ft.IconButton
+        self._list_btn: ft.IconButton
 
         self._build_ui()
 
@@ -197,10 +204,22 @@ class ResultsPage(ft.Column):
             visible=False,
         )
 
+        self._grid_btn = ft.IconButton(
+            icon=ft.icons.Icons.GRID_VIEW,
+            tooltip="Grid view",
+            icon_color="#22D3EE",
+            on_click=lambda e: self._toggle_view("grid"),
+        )
+        self._list_btn = ft.IconButton(
+            icon=ft.icons.Icons.VIEW_LIST,
+            tooltip="List view",
+            icon_color=t.colors.fg_muted,
+            on_click=lambda e: self._toggle_view("list"),
+        )
         self._header = ft.Row(
             [
                 ft.Text("Scan Results", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
-                self._summary,
+                ft.Row([self._summary, self._grid_btn, self._list_btn], spacing=t.spacing.xs, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
@@ -228,6 +247,7 @@ class ResultsPage(ft.Column):
         )
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
+        self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
 
         self._empty = ft.Container(
             content=ft.Column(
@@ -497,11 +517,33 @@ class ResultsPage(ft.Column):
                 self.controls.append(self._empty)
             if self._group_list in self.controls:
                 self.controls.remove(self._group_list)
+            if self._results_grid in self.controls:
+                self.controls.remove(self._results_grid)
             self._safe_update(self)
             return
 
         if self._empty in self.controls:
             self.controls.remove(self._empty)
+
+        if self._view_mode == "grid":
+            if self._group_list in self.controls:
+                self.controls.remove(self._group_list)
+            if self._results_grid not in self.controls:
+                self.controls.append(self._results_grid)
+            self._thumb_slots.clear()
+            self._tile_cache_grid.clear()
+            self._results_grid.controls = [
+                self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
+            ]
+            self._loading = False
+            self._safe_update(self)
+            page = self._bridge.flet_page
+            if self._thumb_slots and hasattr(page, "run_task"):
+                page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
+            return
+
+        if self._results_grid in self.controls:
+            self.controls.remove(self._results_grid)
         if self._group_list not in self.controls:
             self.controls.append(self._group_list)
 
@@ -716,6 +758,147 @@ class ResultsPage(ft.Column):
             ink=True,
             **self._get_glass_style(0.06),
         )
+
+    # ------------------------------------------------------------------
+    # View toggle
+    # ------------------------------------------------------------------
+    def _toggle_view(self, mode: str) -> None:
+        if self._view_mode == mode:
+            return
+        self._view_mode = mode
+        self._grid_btn.icon_color = "#22D3EE" if mode == "grid" else self._t.colors.fg_muted
+        self._list_btn.icon_color = "#22D3EE" if mode == "list" else self._t.colors.fg_muted
+        ResultsPage._safe_update(self._grid_btn)
+        ResultsPage._safe_update(self._list_btn)
+        self._refresh()
+
+    def _build_file_tile(self, f) -> ft.Container:
+        """Build a 120x120 thumbnail tile with checkbox and size overlay."""
+        t = self._t
+        key = str(getattr(f, "path", ""))
+        p = Path(key)
+
+        cb = ft.Checkbox(
+            value=key in self._selected_paths,
+            on_change=lambda e, path=key: self._on_file_checkbox(e, path),
+            active_color="#2563EB",
+        )
+
+        size_bar = ft.Container(
+            content=ft.Text(
+                fmt_size(f.size),
+                size=9,
+                color="#FFFFFF",
+                text_align=ft.TextAlign.CENTER,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
+            padding=ft.padding.symmetric(horizontal=4, vertical=3),
+            alignment=ft.alignment.center,
+        )
+
+        placeholder = ft.Container(
+            content=ft.Icon(
+                ft.icons.Icons.INSERT_DRIVE_FILE,
+                size=36,
+                color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE),
+            ),
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+        )
+        thumb_slot = ft.Container(
+            content=placeholder,
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        self._thumb_slots[key] = thumb_slot
+
+        stack = ft.Stack(
+            [
+                thumb_slot,
+                ft.Column([ft.Container(expand=True), size_bar], expand=True, spacing=0),
+                ft.Container(content=cb, padding=ft.padding.only(left=2, top=2)),
+            ],
+            expand=True,
+        )
+
+        is_sel = key in self._selected_paths
+        tile = ft.Container(
+            content=stack,
+            width=120,
+            height=120,
+            border_radius=8,
+            border=ft.border.all(
+                2 if is_sel else 1,
+                "#2563EB" if is_sel else ft.Colors.with_opacity(0.15, ft.Colors.WHITE),
+            ),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            tooltip=p.name,
+        )
+        self._tile_cache_grid[key] = tile
+        return tile
+
+    def _build_group_grid_section(self, group, idx: int) -> ft.Container:
+        """Build a group card with thumbnail tiles for grid view."""
+        t = self._t
+        tiles = [self._build_file_tile(f) for f in group.files]
+        header = ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(
+                        f"Group {idx + 1}",
+                        size=t.typography.size_sm,
+                        weight=ft.FontWeight.W_700,
+                        color=t.colors.fg,
+                    ),
+                    bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+                    border_radius=4,
+                    padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                ),
+                ft.Text(
+                    f"{len(group.files)} files · {fmt_size(group.reclaimable)} reclaimable",
+                    size=t.typography.size_sm,
+                    color=t.colors.fg_muted,
+                ),
+            ],
+            spacing=t.spacing.sm,
+        )
+        return ft.Container(
+            content=ft.Column(
+                [header, ft.Row(tiles, spacing=t.spacing.sm, wrap=True)],
+                spacing=t.spacing.sm,
+            ),
+            padding=t.spacing.md,
+            **self._get_glass_style(0.05),
+        )
+
+    async def _load_grid_thumbnails_async(self, slots: Dict[str, ft.Container]) -> None:
+        import asyncio as _aio
+        loop = _aio.get_event_loop()
+        for i, (key, slot) in enumerate(slots.items()):
+            p = Path(key)
+            if not is_image_path(p):
+                continue
+            try:
+                b64 = await loop.run_in_executor(
+                    None,
+                    lambda fp=p: get_thumbnail_cache().get_base64(fp),
+                )
+            except Exception:
+                continue
+            if not b64:
+                continue
+            slot.content = ft.Image(
+                src=f"data:image/jpeg;base64,{b64}",
+                width=120,
+                height=120,
+                fit=ft.BoxFit.COVER,
+                border_radius=6,
+            )
+            ResultsPage._safe_update(slot)
+            if i % 8 == 0:
+                await _aio.sleep(0)
 
     def _recompute_filter_counts(self) -> None:
         counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
