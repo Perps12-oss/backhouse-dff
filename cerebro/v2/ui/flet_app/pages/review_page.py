@@ -59,6 +59,7 @@ class ReviewPage(ft.Column):
         self._loading = False
         self._tile_cache: Dict[str, ft.Container] = {}
         self._files_by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
+        self._glass_cache: dict = {}
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
@@ -91,14 +92,20 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     def _get_glass_style(self, opacity: float = 0.06) -> dict:
         is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        bg = ft.Colors.with_opacity(opacity, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        border_color = ft.Colors.with_opacity(0.12, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        return dict(
+        cache_key = (opacity, is_light)
+        if cache_key in self._glass_cache:
+            return self._glass_cache[cache_key]
+        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        bg = ft.Colors.with_opacity(opacity, bg_base)
+        border_color = ft.Colors.with_opacity(0.12, border_base)
+        result = dict(
             bgcolor=bg,
             border=ft.border.all(1, border_color),
             border_radius=ft.border_radius.all(12),
-            blur=ft.Blur(8, 8),
         )
+        self._glass_cache[cache_key] = result
+        return result
 
     def _build_zoom_row(self) -> ft.Row:
         """Three-level zoom control for the grid density."""
@@ -463,18 +470,125 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     def _refresh_grid(self) -> None:
         files = self._files_by_filter.get(self._filter_key, [])
-        self._grid.controls = [self._tile_for_file(f) for f in files]
+        # Build placeholder tiles immediately — no thumbnail I/O
+        self._grid.controls = [self._tile_for_file_placeholder(f) for f in files]
         self._refresh_filter_labels()
         self._safe_update(self._grid)
+        # Load thumbnails asynchronously
+        page = self._bridge.flet_page
+        if files and hasattr(page, "run_task"):
+            page.run_task(self._load_thumbnails_async, list(files))
 
     def _tile_for_file(self, f: DuplicateFile) -> ft.Container:
         key = str(getattr(f, "path", ""))
         cached = self._tile_cache.get(key)
         if cached is not None:
             return cached
-        tile = self._build_tile(f)
+        return self._tile_for_file_placeholder(f)
+
+    def _tile_for_file_placeholder(self, f: DuplicateFile) -> ft.Container:
+        """Build a tile with a placeholder icon — no thumbnail loading."""
+        t = self._t
+        p = Path(str(f.path))
+        key = str(getattr(f, "path", ""))
+
+        info_bar = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(p.name, size=t.typography.size_xs, color="#FFFFFF",
+                            overflow=ft.TextOverflow.ELLIPSIS, max_lines=1,
+                            text_align=ft.TextAlign.CENTER),
+                    ft.Text(fmt_size(f.size), size=t.typography.size_xs,
+                            color=ft.Colors.with_opacity(0.75, "#FFFFFF")),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
+            padding=ft.padding.symmetric(horizontal=6, vertical=4),
+            animate_opacity=(
+                None if self._bridge.is_reduce_motion_enabled()
+                else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)
+            ),
+            opacity=0,
+        )
+
+        placeholder = ft.Container(
+            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE,
+                            size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE)),
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+        )
+        thumb_slot = ft.Container(content=placeholder, expand=True,
+                                   clip_behavior=ft.ClipBehavior.HARD_EDGE)
+
+        stack = ft.Stack(
+            [
+                thumb_slot,
+                ft.Column([ft.Container(expand=True), info_bar], expand=True, spacing=0),
+            ],
+            expand=True,
+        )
+
+        def _hover(e: ft.ControlEvent) -> None:
+            enter = e.data == "true"
+            info_bar.opacity = 1 if enter else 0
+            tile.border = (ft.border.all(2, "#22D3EE") if enter
+                           else ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)))
+            ReviewPage._safe_update(info_bar)
+            ReviewPage._safe_update(tile)
+
+        tile = ft.Container(
+            content=stack,
+            border_radius=ft.border_radius.all(10),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            ink=True,
+            on_click=lambda e, file=f: self._on_tile_clicked(file),
+            on_hover=_hover,
+            data={"thumb_slot": thumb_slot},
+        )
         self._tile_cache[key] = tile
         return tile
+
+    async def _load_thumbnails_async(self, files: List[DuplicateFile]) -> None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        for i, f in enumerate(files):
+            key = str(getattr(f, "path", ""))
+            tile = self._tile_cache.get(key)
+            if tile is None:
+                continue
+            p = Path(str(f.path))
+            if not is_image_path(p):
+                continue
+            try:
+                b64 = await loop.run_in_executor(
+                    None,
+                    lambda fp=p: get_thumbnail_cache().get_base64(fp),
+                )
+            except Exception:
+                continue
+            if not b64:
+                continue
+            tile_data = getattr(tile, "data", None)
+            if isinstance(tile_data, dict):
+                thumb_slot = tile_data.get("thumb_slot")
+                if thumb_slot is not None:
+                    thumb_slot.content = ft.Image(
+                        src=f"data:image/jpeg;base64,{b64}",
+                        width=120,
+                        height=120,
+                        fit=ft.BoxFit.CONTAIN,
+                        border_radius=8,
+                    )
+                    self._safe_update(thumb_slot)
+            # Yield every 8 tiles to keep UI responsive
+            if i % 8 == 0:
+                await asyncio.sleep(0)
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -969,6 +1083,7 @@ class ReviewPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls or keyboard bindings."""
+        self._glass_cache = {}
         self._t = theme_for_mode(mode)
 
         # Update Glass Styles

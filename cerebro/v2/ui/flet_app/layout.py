@@ -138,8 +138,6 @@ class AppLayout(ft.Row):
 
         route_info = ROUTE_MAP[key]
         self._page.route = route_info.route
-        # Flush the page tree first so new ``inner`` is attached before lifecycle hooks run.
-        self._page.update()
 
         # Keep StateStore.active_tab in sync with the rail. Otherwise global listeners
         # (e.g. on ThemeChanged) still see the old tab and call navigate_to(old), which
@@ -154,6 +152,16 @@ class AppLayout(ft.Row):
                 inner.on_show()
             except Exception:
                 _log.exception("on_show failed for route key %s", key)
+
+        # Apply any pending theme change that was deferred while this page was inactive
+        if inner is not None and hasattr(inner, "_pending_theme"):
+            pending = inner._pending_theme  # type: ignore[attr-defined]
+            if pending:
+                inner._pending_theme = None  # type: ignore[attr-defined]
+                try:
+                    inner.apply_theme(pending)
+                except Exception:
+                    _log.exception("Deferred apply_theme failed for route key %s", key)
 
     def refresh_current(self) -> None:
         """Rebuild the current page (e.g., after theme or state change)."""

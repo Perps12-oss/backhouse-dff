@@ -61,6 +61,7 @@ class ResultsPage(ft.Column):
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._glass_cache: dict = {}
 
         # UI References
         self._summary: ft.Text
@@ -83,14 +84,20 @@ class ResultsPage(ft.Column):
     # ------------------------------------------------------------------
     def _get_glass_style(self, opacity: float = 0.06) -> dict:
         is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        bg = ft.Colors.with_opacity(opacity, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        border_color = ft.Colors.with_opacity(0.12, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        return dict(
+        cache_key = (opacity, is_light)
+        if cache_key in self._glass_cache:
+            return self._glass_cache[cache_key]
+        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        bg = ft.Colors.with_opacity(opacity, bg_base)
+        border_color = ft.Colors.with_opacity(0.12, border_base)
+        result = dict(
             bgcolor=bg,
             border=ft.border.all(1, border_color),
             border_radius=ft.border_radius.all(12),
-            blur=ft.Blur(8, 8),
         )
+        self._glass_cache[cache_key] = result
+        return result
     
     def _file_type_icon(self, extension: str) -> tuple[str, str]:
         """Return (icon_name, accent_color) for a file extension."""
@@ -711,6 +718,7 @@ class ResultsPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
+        self._glass_cache = {}
         self._t = theme_for_mode(mode)
 
         # Update colors on static elements

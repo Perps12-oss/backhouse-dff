@@ -63,7 +63,8 @@ class DashboardPage(ft.Column):
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
         # Initial Theme Load
         self._t = theme_for_mode("dark")
-        
+        self._glass_cache: dict = {}
+
         # UI References (to update without rebuilding)
         self._hero: ft.Container
         self._stats_row: ft.Row
@@ -254,30 +255,28 @@ class DashboardPage(ft.Column):
     # ------------------------------------------------------------------
     def _get_glass_style(self, opacity: float = 0.08) -> dict:
         """Calculate glass style based on CURRENT theme."""
-        t = self._t
-        # Safely check bridge theme if available, otherwise default to system
         is_dark = False
         if hasattr(self._bridge, 'app_theme'):
             is_dark = "dark" in self._bridge.app_theme.lower()
-        
-        # In dark mode, glass is white with low opacity. In light mode, it's black.
+        cache_key = (opacity, is_dark)
+        if cache_key in self._glass_cache:
+            return self._glass_cache[cache_key]
         bg_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
         border_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
-        
         bg = ft.Colors.with_opacity(opacity, bg_base)
         border_color = ft.Colors.with_opacity(0.15, border_base)
-        
-        return dict(
+        result = dict(
             bgcolor=bg,
             border=ft.border.all(1, border_color),
             border_radius=ft.border_radius.all(16),
-            blur=ft.Blur(10, 10),
             shadow=ft.BoxShadow(
                 blur_radius=20,
                 color=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
                 offset=ft.Offset(0, 4),
             ),
         )
+        self._glass_cache[cache_key] = result
+        return result
 
     def _get_button_style(self, base_color: str = None) -> ft.ButtonStyle:
         t = self._t
@@ -584,13 +583,11 @@ class DashboardPage(ft.Column):
         
         if total > 0:
             self._progress.value = scanned / total
-            
-        # Batch update calls to reduce overhead if needed, 
-        # but Flet handles individual updates reasonably well for text/progress.
-        self._status.update()
-        self._progress_label.update()
-        self._progress_detail.update()
-        self._progress.update()
+
+        try:
+            self._bridge.flet_page.update()
+        except Exception:
+            pass
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
         self._progress.visible = False
@@ -672,6 +669,7 @@ class DashboardPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
+        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         
         # Update styles and colors on existing controls

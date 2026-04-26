@@ -546,7 +546,22 @@ def _main(page: ft.Page) -> None:
     bridge.subscribe()
 
     def _on_theme_change(mode: str) -> None:
-        for p in (dashboard_page, results_page, review_page, history_page, settings_page):
+        page_map = {
+            "dashboard": dashboard_page,
+            "duplicates": results_page,
+            "review": review_page,
+            "history": history_page,
+            "settings": settings_page,
+        }
+        active_key = layout.current_key
+        for key, p in page_map.items():
+            if key != active_key:
+                # Mark inactive pages as theme-dirty; they repaint via on_show
+                try:
+                    p._pending_theme = mode  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                continue
             try:
                 p.apply_theme(mode)
             except Exception:

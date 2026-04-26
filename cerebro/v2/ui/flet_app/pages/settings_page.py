@@ -51,6 +51,7 @@ class SettingsPage(ft.Column):
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._settings: Dict[str, Any] = {}  # loaded from bridge
+        self._glass_cache: dict = {}
         
         # UI References
         self._header: ft.Container
@@ -105,14 +106,20 @@ class SettingsPage(ft.Column):
     # ------------------------------------------------------------------
     def _get_glass_style(self, opacity: float = 0.06) -> dict:
         is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        bg = ft.Colors.with_opacity(opacity, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        border_color = ft.Colors.with_opacity(0.12, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
-        return dict(
+        cache_key = (opacity, is_light)
+        if cache_key in self._glass_cache:
+            return self._glass_cache[cache_key]
+        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        bg = ft.Colors.with_opacity(opacity, bg_base)
+        border_color = ft.Colors.with_opacity(0.12, border_base)
+        result = dict(
             bgcolor=bg,
             border=ft.border.all(1, border_color),
             border_radius=ft.border_radius.all(12),
-            blur=ft.Blur(8, 8),
         )
+        self._glass_cache[cache_key] = result
+        return result
 
     # ------------------------------------------------------------------
     # Build (Runs Once)
@@ -651,6 +658,7 @@ class SettingsPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls or losing pending input state."""
+        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         
         # Update Header

@@ -55,6 +55,7 @@ class StateBridge:
         self._on_theme_change: Optional[Callable[[str], None]] = None
         self._visual_theme: str = "light"
         self._scan_session: Dict[str, Any] = {}
+        self._suppress_page_update: bool = False
 
     @property
     def app_theme(self) -> str:
@@ -114,15 +115,20 @@ class StateBridge:
                 self._on_state_change(new, old, action)
             except Exception:
                 _log.exception("State change callback failed")
-        try:
-            self._page.update()
-        except Exception:
-            pass
+        if not self._suppress_page_update:
+            try:
+                self._page.update()
+            except Exception:
+                pass
 
     # -- Convenience dispatchers -----------------------------------------------
 
     def navigate(self, key: str) -> None:
-        self._coordinator.set_active_tab(key)
+        self._suppress_page_update = True
+        try:
+            self._coordinator.set_active_tab(key)
+        finally:
+            self._suppress_page_update = False
 
     def set_visual_theme(self, mode: str) -> None:
         """Update the glass overlay hint without changing ``Page.theme_mode`` (e.g. color‑seed themes)."""
