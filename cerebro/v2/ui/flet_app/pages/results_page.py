@@ -55,11 +55,12 @@ _SMART_SELECT_OPTIONS = [
 ]
 
 
-class ResultsPage(ft.Column):
+class ResultsPage(ft.Stack):
     """Duplicate group listing with type filters, smart selection, and delete."""
 
     def __init__(self, bridge: "StateBridge"):
-        super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
+        super().__init__(expand=True)
+        self._scroll_col = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._groups: List[DuplicateGroup] = []
@@ -282,14 +283,56 @@ class ResultsPage(ft.Column):
             padding=t.spacing.lg,
         )
 
-        self.controls = [
-            ft.Container(content=self._header, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
-                         **self._get_glass_style(0.04)),
-            ft.Container(content=self._action_bar, padding=ft.padding.only(left=t.spacing.lg)),
-            ft.Container(content=self._filter_seg, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
-                         **self._get_glass_style(0.03)),
+        self._sticky_bar = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Column(
+                        [self._selection_label],
+                        expand=True,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=0,
+                    ),
+                    self._delete_btn,
+                    self._permanent_btn,
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=t.spacing.md,
+            ),
+            padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+            bgcolor=ft.Colors.with_opacity(0.97, "#0D0505"),
+            border=ft.border.only(top=ft.BorderSide(2, "#EF4444")),
+            visible=False,
+            shadow=ft.BoxShadow(
+                blur_radius=20,
+                offset=ft.Offset(0, -4),
+                color=ft.Colors.with_opacity(0.45, "#EF4444"),
+            ),
+        )
+        self._sticky_overlay = ft.Column(
+            [ft.Container(expand=True), self._sticky_bar],
+            expand=True,
+            spacing=0,
+        )
+
+        self._scroll_col.controls = [
+            ft.Container(
+                content=self._header,
+                padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
+                **self._get_glass_style(0.04),
+            ),
+            ft.Container(
+                content=self._smart_row,
+                padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.xs),
+            ),
+            ft.Container(
+                content=self._filter_seg,
+                padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
+                **self._get_glass_style(0.03),
+            ),
             self._empty,
         ]
+        self.controls = [self._scroll_col, self._sticky_overlay]
 
     # ------------------------------------------------------------------
     # Public API
@@ -378,24 +421,23 @@ class ResultsPage(ft.Column):
     def _update_selection_ui(self) -> None:
         count = len(self._selected_paths)
         has_selection = count > 0
-        self._action_bar.visible = len(self._groups) > 0
-        self._smart_row.visible = len(self._groups) > 0
+        has_groups = len(self._groups) > 0
+        self._smart_row.visible = has_groups
+        ResultsPage._safe_update(self._smart_row)
         self._delete_btn.visible = has_selection
         self._permanent_btn.visible = has_selection
         if has_selection:
-            # Calculate size based on current groups
             total_bytes = 0
-            # Optimization: Create a set for fast lookup if groups are massive
-            selected_set = self._selected_paths 
+            selected_set = self._selected_paths
             for g in self._groups:
                 for f in g.files:
                     if str(f.path) in selected_set:
                         total_bytes += f.size
-            
-            self._selection_label.value = f"{count:,} files selected · {fmt_size(total_bytes)}"
+            self._selection_label.value = f"{count:,} files selected · {fmt_size(total_bytes)} to be freed"
         else:
             self._selection_label.value = ""
-        self._safe_update(self._action_bar)
+        self._sticky_bar.visible = has_selection
+        ResultsPage._safe_update(self._sticky_bar)
 
     # ------------------------------------------------------------------
     # Delete
@@ -500,58 +542,59 @@ class ResultsPage(ft.Column):
         self._safe_update(self._summary)
         self._update_selection_ui()
         self._refresh_filter_labels()
+        sc = self._scroll_col.controls
         if self._loading:
-            if self._empty in self.controls:
-                self.controls.remove(self._empty)
-            if self._group_list in self.controls:
-                self.controls.remove(self._group_list)
-            if self._loading_state not in self.controls:
-                self.controls.append(self._loading_state)
-            self._safe_update(self)
+            if self._empty in sc:
+                sc.remove(self._empty)
+            if self._group_list in sc:
+                sc.remove(self._group_list)
+            if self._loading_state not in sc:
+                sc.append(self._loading_state)
+            self._safe_update(self._scroll_col)
             return
-        if self._loading_state in self.controls:
-            self.controls.remove(self._loading_state)
+        if self._loading_state in sc:
+            sc.remove(self._loading_state)
 
         if not filtered:
-            if self._empty not in self.controls:
-                self.controls.append(self._empty)
-            if self._group_list in self.controls:
-                self.controls.remove(self._group_list)
-            if self._results_grid in self.controls:
-                self.controls.remove(self._results_grid)
-            self._safe_update(self)
+            if self._empty not in sc:
+                sc.append(self._empty)
+            if self._group_list in sc:
+                sc.remove(self._group_list)
+            if self._results_grid in sc:
+                sc.remove(self._results_grid)
+            self._safe_update(self._scroll_col)
             return
 
-        if self._empty in self.controls:
-            self.controls.remove(self._empty)
+        if self._empty in sc:
+            sc.remove(self._empty)
 
         if self._view_mode == "grid":
-            if self._group_list in self.controls:
-                self.controls.remove(self._group_list)
-            if self._results_grid not in self.controls:
-                self.controls.append(self._results_grid)
+            if self._group_list in sc:
+                sc.remove(self._group_list)
+            if self._results_grid not in sc:
+                sc.append(self._results_grid)
             self._thumb_slots.clear()
             self._tile_cache_grid.clear()
             self._results_grid.controls = [
                 self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
             ]
             self._loading = False
-            self._safe_update(self)
+            self._safe_update(self._scroll_col)
             page = self._bridge.flet_page
             if self._thumb_slots and hasattr(page, "run_task"):
                 page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
             return
 
-        if self._results_grid in self.controls:
-            self.controls.remove(self._results_grid)
-        if self._group_list not in self.controls:
-            self.controls.append(self._group_list)
+        if self._results_grid in sc:
+            sc.remove(self._results_grid)
+        if self._group_list not in sc:
+            sc.append(self._group_list)
 
         n = len(filtered)
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
             self._group_list.controls = [self._build_group_card(g) for g in filtered]
             self._loading = False
-            self._safe_update(self)
+            self._safe_update(self._scroll_col)
             if n > 80:
                 try:
                     self._bridge.flet_page.update()
@@ -565,7 +608,7 @@ class ResultsPage(ft.Column):
         head = filtered[:head_n]
         tail = filtered[head_n:]
         self._group_list.controls = [self._build_group_card(g) for g in head]
-        self._safe_update(self)
+        self._safe_update(self._scroll_col)
         try:
             self._bridge.flet_page.update()
         except Exception:
@@ -576,7 +619,7 @@ class ResultsPage(ft.Column):
                 page.run_task(self._append_group_cards_async, tail, gen)
             else:
                 self._group_list.controls.extend([self._build_group_card(g) for g in tail])
-                self._safe_update(self)
+                self._safe_update(self._scroll_col)
                 try:
                     page.update()
                 except Exception:
@@ -588,7 +631,7 @@ class ResultsPage(ft.Column):
                 return
             chunk = tail[i : i + _LIST_ASYNC_BATCH]
             self._group_list.controls.extend([self._build_group_card(g) for g in chunk])
-            self._safe_update(self)
+            self._safe_update(self._scroll_col)
             try:
                 self._bridge.flet_page.update()
             except Exception:
@@ -682,7 +725,7 @@ class ResultsPage(ft.Column):
             ResultsPage._safe_update(file_checks)
             expand_btn.text = "Collapse" if file_checks.visible else "Expand"
             ResultsPage._safe_update(expand_btn)
-            self._safe_update(self)
+            self._safe_update(self._scroll_col)
 
         expand_btn = ft.TextButton(
             "Expand",
