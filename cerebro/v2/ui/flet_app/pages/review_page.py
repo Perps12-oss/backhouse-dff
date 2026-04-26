@@ -859,6 +859,28 @@ class ReviewPage(ft.Column):
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
 
+    @staticmethod
+    def _get_image_dimensions(path: Path) -> str:
+        """Return 'WxH' string for image files, empty string otherwise."""
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                return f"{img.width} × {img.height}"
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _fmt_mtime(mtime) -> str:
+        """Format a unix timestamp to a human-readable date string."""
+        try:
+            import datetime
+            ts = float(mtime or 0)
+            if ts <= 0:
+                return ""
+            return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M")
+        except Exception:
+            return ""
+
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
         t = self._t
         label_color = "#22D3EE" if label == "A" else "#A78BFA"
@@ -896,13 +918,41 @@ class ReviewPage(ft.Column):
             border_radius=6,
             padding=ft.padding.symmetric(horizontal=8, vertical=3),
         )
+
+        def _meta_row(icon_name: str, value: str, color: str = "#9FB0D0") -> ft.Row:
+            return ft.Row(
+                [
+                    ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.55, color)),
+                    ft.Text(value, size=t.typography.size_xs, color=color, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+
+        meta_rows: list = []
+        date_str = self._fmt_mtime(getattr(f, "mtime", None))
+        if date_str:
+            meta_rows.append(_meta_row(ft.icons.Icons.SCHEDULE, date_str, "#BFD5FF"))
+        dims = self._get_image_dimensions(p) if is_image_path(p) else ""
+        if dims:
+            meta_rows.append(_meta_row(ft.icons.Icons.ASPECT_RATIO, dims, "#C084FC"))
+        meta_rows.append(_meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), "#93C5FD"))
+
+        meta_box = ft.Container(
+            content=ft.Column(meta_rows, spacing=4, tight=True),
+            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_radius=6,
+            width=260,
+        )
+
         return ft.Column(
             [
                 label_badge,
                 thumb,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 size_badge,
-                ft.Text(str(p.parent), size=t.typography.size_xs, color=t.colors.fg_muted, overflow=ft.TextOverflow.ELLIPSIS),
+                meta_box,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
