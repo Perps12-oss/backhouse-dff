@@ -13,7 +13,7 @@
 | **Phase 2** | Home Page Redesign | ✅ Complete |
 | **Phase 3** | Results Page Redesign | ✅ Complete |
 | **Phase 4** | Review Page (Visual Grid) Redesign | ✅ Complete |
-| **Phase 5** | History & Settings Polish | ⬜ Pending |
+| **Phase 5** | History & Settings Polish | ✅ Complete |
 | **Phase 6** | Motion, Micro-interactions & Polish Pass | ⬜ Pending |
 | **Phase 7** | *(Optional)* Engine-Adjacent Performance UX | ⬜ Optional |
 

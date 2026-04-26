@@ -49,7 +49,7 @@ class SettingsPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("light")
+        self._t = theme_for_mode("dark")
         self._settings: Dict[str, Any] = {}  # loaded from bridge
         
         # UI References
@@ -256,6 +256,7 @@ class SettingsPage(ft.Column):
 
         # Default scan mode
         content.controls.append(ft.Text("Default Scan Mode", weight=ft.FontWeight.W_600, color=t.colors.fg))
+        content.controls.append(ft.Text("Which engine runs when you click Start Scan.", size=t.typography.size_xs, color=t.colors.fg_muted, italic=True))
         self._general_mode = ft.Dropdown(
             options=[ft.dropdown.Option(key=val, text=label) for val, label in _SCAN_MODES],
             value=self._settings["general"].get("default_mode", "files"),
@@ -454,18 +455,40 @@ class SettingsPage(ft.Column):
         t = self._t
         content = ft.Column(
             [
-                ft.Text("Cerebro v2", size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.accent),
-                ft.Text("Ashisoft Edition", color=t.colors.fg2),
-                ft.Text("Version: 2.0.0", color=t.colors.fg2),
+                ft.Container(
+                    content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=36, color="#22D3EE"),
+                    bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                    border_radius=14,
+                    padding=16,
+                ),
+                ft.Text("Cerebro", size=t.typography.size_xxxl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
+                ft.Row(
+                    [
+                        ft.Container(
+                            content=ft.Text("v2.0.0", size=9, color="#22D3EE", weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
+                            border_radius=4,
+                            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                        ),
+                        ft.Container(
+                            content=ft.Text("Flet + Flutter", size=9, color="#A78BFA", weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, "#A78BFA"),
+                            border_radius=4,
+                            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=t.spacing.sm,
+                ),
                 ft.Text(
-                    "Duplicate file finder with pluggable scan engines.\n"
-                    "Supports files, images, videos, music, empty folders,\n"
-                    "and large files detection.",
+                    "Find and remove duplicate files to reclaim disk space.\n"
+                    "Supports files, images, videos, music, empty folders and large files.",
                     color=t.colors.fg2,
                     text_align=ft.TextAlign.CENTER,
+                    size=t.typography.size_base,
                 ),
-                ft.Text("Repository: github.com/Perps12-oss/silver-octo-pancake", color=t.colors.accent),
-                ft.Text("Built with Flet + Flutter", color=t.colors.fg_muted, size=t.typography.size_sm),
+                ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
+                ft.Text("Thanks for using Cerebro. ✨", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
             ],
             alignment=ft.MainAxisAlignment.CENTER,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,

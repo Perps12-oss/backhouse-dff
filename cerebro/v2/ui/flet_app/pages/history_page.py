@@ -21,7 +21,7 @@ class HistoryPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("light")
+        self._t = theme_for_mode("dark")
         self._scan_rows: list = []
         self._deletion_rows: list = []
         self._active_tab = "scan"
@@ -101,11 +101,23 @@ class HistoryPage(ft.Column):
         )
 
         self._empty_label = ft.Text(
-            "No history yet.", size=t.typography.size_base, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER
+            "Run a scan to start building your history.", size=t.typography.size_base, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER
         )
         self._empty_container = ft.Container(
-            content=ft.Column([ft.Icon(ft.icons.Icons.HISTORY, size=64, color=t.colors.fg_muted), self._empty_label],
-                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=t.spacing.md),
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Icon(ft.icons.Icons.HISTORY, size=40, color="#22D3EE"),
+                        bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                        border_radius=14,
+                        padding=18,
+                    ),
+                    ft.Text("No history yet", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                    self._empty_label,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=t.spacing.md,
+            ),
             expand=True,
             alignment=ft.Alignment(0.5, 0.5),
             **self._get_glass_style(0.04),
@@ -188,50 +200,75 @@ class HistoryPage(ft.Column):
     def _update_table_columns(self) -> None:
         """Update table headers based on the active tab context."""
         t = self._t
+        def _col(label: str, color: str = None) -> ft.DataColumn:
+            return ft.DataColumn(ft.Text(label, size=t.typography.size_xs, weight=ft.FontWeight.W_600, color=color or t.colors.fg_muted))
+
         if self._active_tab == "scan":
             self._table.columns = [
-                ft.DataColumn(ft.Text("Date/Time")),
-                ft.DataColumn(ft.Text("Mode")),
-                ft.DataColumn(ft.Text("Folders")),
-                ft.DataColumn(ft.Text("Groups")),
-                ft.DataColumn(ft.Text("Files")),
-                ft.DataColumn(ft.Text("Reclaimable")),
-                ft.DataColumn(ft.Text("Duration")),
+                _col("Date/Time"),
+                _col("Mode", "#22D3EE"),
+                _col("Folders"),
+                _col("Groups"),
+                _col("Files"),
+                _col("Reclaimable", "#34D399"),
+                _col("Duration"),
             ]
         else:
-            # Example different schema for deletion history
             self._table.columns = [
-                ft.DataColumn(ft.Text("Date/Time")),
-                ft.DataColumn(ft.Text("Policy")),
-                ft.DataColumn(ft.Text("Files Deleted")),
-                ft.DataColumn(ft.Text("Space Freed")),
-                ft.DataColumn(ft.Text("Status")),
+                _col("Date/Time"),
+                _col("Policy"),
+                _col("Files Deleted"),
+                _col("Space Freed", "#34D399"),
+                _col("Status"),
             ]
 
     def _build_row(self, row: dict) -> ft.DataRow:
         t = self._t
-        
+        _mode_colors = {
+            "files": "#22D3EE", "photos": "#A78BFA", "videos": "#F472B6",
+            "music": "#34D399", "large_files": "#FBBF24", "empty_folders": "#FB923C",
+        }
+        _policy_colors = {"Trash": "#34D399", "Permanent": "#F87171", "Unknown": "#6E7681"}
+
         if self._active_tab == "scan":
+            mode = str(row.get("mode", "files"))
+            mode_color = _mode_colors.get(mode, "#22D3EE")
+            size_text = _fmt(row.get("bytes_reclaimable", 0))
             return ft.DataRow(
                 cells=[
-                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("mode", "")), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("folder", "")), size=t.typography.size_sm, overflow=ft.TextOverflow.ELLIPSIS)),
-                    ft.DataCell(ft.Text(str(row.get("groups_found", 0)), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("files_scanned", 0)), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(_fmt(row.get("bytes_reclaimable", 0)), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("duration", "")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm, color=t.colors.fg2)),
+                    ft.DataCell(
+                        ft.Container(
+                            content=ft.Text(mode, size=9, color=mode_color, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, mode_color),
+                            border_radius=4,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                        )
+                    ),
+                    ft.DataCell(ft.Text(str(row.get("folder", "")), size=t.typography.size_sm, color=t.colors.fg2, overflow=ft.TextOverflow.ELLIPSIS)),
+                    ft.DataCell(ft.Text(str(row.get("groups_found", 0)), size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)),
+                    ft.DataCell(ft.Text(str(row.get("files_scanned", 0)), size=t.typography.size_sm, color=t.colors.fg2)),
+                    ft.DataCell(ft.Text(size_text, size=t.typography.size_sm, color="#34D399", weight=ft.FontWeight.W_600)),
+                    ft.DataCell(ft.Text(str(row.get("duration", "")), size=t.typography.size_sm, color=t.colors.fg_muted)),
                 ]
             )
         else:
-            # Deletion History Row Structure
+            policy = str(row.get("policy", "Unknown"))
+            policy_color = _policy_colors.get(policy, "#6E7681")
             return ft.DataRow(
                 cells=[
-                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("policy", "Unknown")), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("count", 0)), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(_fmt(row.get("bytes", 0)), size=t.typography.size_sm)),
-                    ft.DataCell(ft.Text(str(row.get("status", "")), size=t.typography.size_sm)),
+                    ft.DataCell(ft.Text(str(row.get("date", "")), size=t.typography.size_sm, color=t.colors.fg2)),
+                    ft.DataCell(
+                        ft.Container(
+                            content=ft.Text(policy, size=9, color=policy_color, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, policy_color),
+                            border_radius=4,
+                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                        )
+                    ),
+                    ft.DataCell(ft.Text(str(row.get("count", 0)), size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)),
+                    ft.DataCell(ft.Text(_fmt(row.get("bytes", 0)), size=t.typography.size_sm, color="#34D399", weight=ft.FontWeight.W_600)),
+                    ft.DataCell(ft.Text(str(row.get("status", "")), size=t.typography.size_sm, color=t.colors.fg2)),
                 ]
             )
 
