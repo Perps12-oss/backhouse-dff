@@ -15,7 +15,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 from cerebro.engines.base_engine import (
     BaseEngine,

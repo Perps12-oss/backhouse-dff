@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-from cerebro.core.models import DuplicateGroup, FileMetadata
+from cerebro.core.models import DuplicateGroup
 
 
 

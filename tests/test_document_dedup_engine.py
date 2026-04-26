@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
-import pytest
 
 from cerebro.engines.document_dedup_engine import (
     DocumentDedupEngine,

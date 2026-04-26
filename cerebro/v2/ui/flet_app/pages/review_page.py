@@ -56,6 +56,11 @@ class ReviewPage(ft.Column):
         self._compare_b: Optional[DuplicateFile] = None
         self._smart_rule = "keep_largest"
         self._grid_extent = 200  # tile max_extent: S=140 M=200 L=260
+        self._loading = False
+        self._tile_cache: Dict[str, ft.Container] = {}
+        self._files_by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
+        self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
 
         # UI References
         self._title_lbl: ft.Text
@@ -74,6 +79,7 @@ class ReviewPage(ft.Column):
         self._filter_bar: ft.Row
         self._content: ft.Column
         self._empty_state: ft.Container
+        self._loading_state: ft.Container
         self._grid: ft.GridView
         self._compare_panel_a: ft.Container
         self._compare_panel_b: ft.Container
@@ -276,6 +282,19 @@ class ReviewPage(ft.Column):
             alignment=ft.Alignment(0.5, 0.5),
             **self._get_glass_style(0.04),
         )
+        self._loading_state = ft.Container(
+            content=ft.Column(
+                [
+                    ft.ProgressRing(width=28, height=28, stroke_width=3, color="#22D3EE"),
+                    ft.Text("Loading review content...", color=t.colors.fg_muted, size=t.typography.size_sm),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=t.spacing.md,
+            ),
+            expand=True,
+            alignment=ft.Alignment(0.5, 0.5),
+            **self._get_glass_style(0.04),
+        )
 
         # Grid view
         self._grid = ft.GridView(
@@ -315,22 +334,49 @@ class ReviewPage(ft.Column):
     def load_group(self, groups: List[DuplicateGroup], group_id: int, mode: Optional[str] = None) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
             return
-        self._enter_compare(group_id)
+        self._loading = True
+        self._enter_mode("loading")
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._finish_load_to_compare_async, group_id)
+        else:
+            self._loading = False
+            self._enter_compare(group_id)
 
-    def load_results(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
+    def load_results(
+        self,
+        groups: List[DuplicateGroup],
+        mode: str = "files",
+        defer_render: bool = False,
+    ) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._rebuild_filter_index()
+        if defer_render:
+            # Keep data fresh, but do not build the heavy grid until this page is shown.
+            if not self._groups:
+                self._mode = "empty"
+            return
         if not self._groups:
             self._enter_mode("empty")
             return
-        self._enter_mode("grid")
+        self._loading = True
+        self._enter_mode("loading")
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._finish_load_to_grid_async)
+        else:
+            self._loading = False
+            self._enter_mode("grid")
 
     def apply_pruned_groups(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
             return
@@ -389,6 +435,11 @@ class ReviewPage(ft.Column):
             self._cmp_bar.visible = False
             self._smart_row.visible = False
             self._content.controls.append(self._empty_state)
+        elif mode == "loading":
+            self._filter_bar.visible = False
+            self._cmp_bar.visible = False
+            self._smart_row.visible = False
+            self._content.controls.append(self._loading_state)
         elif mode == "grid":
             self._filter_bar.visible = True
             self._cmp_bar.visible = False
@@ -407,6 +458,26 @@ class ReviewPage(ft.Column):
         self._safe_update(self._cmp_bar)
         self._safe_update(self._smart_row)
 
+    async def _finish_load_to_grid_async(self) -> None:
+        import asyncio
+
+        await asyncio.sleep(0)
+        self._loading = False
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        self._enter_mode("grid")
+
+    async def _finish_load_to_compare_async(self, group_id: int) -> None:
+        import asyncio
+
+        await asyncio.sleep(0)
+        self._loading = False
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        self._enter_compare(group_id)
+
     def _to_grid(self, e=None) -> None:
         self._enter_mode("grid")
 
@@ -414,13 +485,19 @@ class ReviewPage(ft.Column):
     # Grid
     # ------------------------------------------------------------------
     def _refresh_grid(self) -> None:
-        self._grid.controls = [
-            self._build_tile(f)
-            for g in self._groups
-            for f in g.files
-            if self._passes_filter(f)
-        ]
+        files = self._files_by_filter.get(self._filter_key, [])
+        self._grid.controls = [self._tile_for_file(f) for f in files]
+        self._refresh_filter_labels()
         self._safe_update(self._grid)
+
+    def _tile_for_file(self, f: DuplicateFile) -> ft.Container:
+        key = str(getattr(f, "path", ""))
+        cached = self._tile_cache.get(key)
+        if cached is not None:
+            return cached
+        tile = self._build_tile(f)
+        self._tile_cache[key] = tile
+        return tile
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -462,7 +539,11 @@ class ReviewPage(ft.Column):
             ),
             bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
             padding=ft.padding.symmetric(horizontal=6, vertical=4),
-            animate_opacity=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
+            animate_opacity=(
+                None
+                if self._bridge.is_reduce_motion_enabled()
+                else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)
+            ),
             opacity=0,
         )
 
@@ -579,10 +660,25 @@ class ReviewPage(ft.Column):
     def _execute_smart_delete(self, paths: List[str], policy: DeletionPolicy) -> None:
         from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
         service = DeleteService()
-        new_groups, _, _, _ = service.delete_and_prune(paths, self._groups, policy)
+        new_groups, deleted, failed, bytes_reclaimed = service.delete_and_prune(paths, self._groups, policy)
         self._groups = new_groups
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
         self._bridge.coordinator.results_files_removed(paths)
+        if deleted > 0:
+            if policy == DeletionPolicy.TRASH:
+                self._bridge.show_snackbar(
+                    f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                    action_label="Undo",
+                    on_action=lambda _e: self._undo_last_trash_delete(),
+                )
+            else:
+                self._bridge.show_snackbar(
+                    f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                )
+        if failed > 0:
+            self._bridge.show_snackbar(f"{failed:,} files could not be deleted.", error=True)
         if not self._groups:
             self._enter_mode("empty")
         else:
@@ -714,6 +810,37 @@ class ReviewPage(ft.Column):
         if self._mode == "grid":
             self._refresh_grid()
 
+    def _rebuild_filter_index(self) -> None:
+        self._tile_cache = {}
+        by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
+        group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        for g in self._groups:
+            group_counts["all"] += 1
+            seen_group_kinds: set[str] = set()
+            for f in g.files:
+                ext = getattr(f, "extension", Path(str(f.path)).suffix.lower())
+                if ext.lower() in EXT_ALL_KNOWN:
+                    kind = next((k for k, exts in FILTER_EXTS.items() if exts and ext.lower() in exts), "other")
+                else:
+                    kind = "other"
+                by_filter["all"].append(f)
+                by_filter[kind if kind in by_filter else "other"].append(f)
+                seen_group_kinds.add(kind if kind in group_counts else "other")
+            for kind in seen_group_kinds:
+                group_counts[kind] += 1
+        self._files_by_filter = by_filter
+        self._filter_counts = {k: len(v) for k, v in by_filter.items()}
+        self._filter_group_counts = group_counts
+
+    def _refresh_filter_labels(self) -> None:
+        for btn in self._filter_bar.controls:
+            key = str(getattr(btn, "data", "") or "")
+            base = next((label for k, label in _FILTER_TABS if k == key), key.title())
+            files_n = self._filter_counts.get(key, 0)
+            groups_n = self._filter_group_counts.get(key, 0)
+            btn.text = f"{base} · {files_n:,}"
+            btn.tooltip = f"{groups_n:,} groups · {files_n:,} files"
+
     # ------------------------------------------------------------------
     # Keyboard
     # ------------------------------------------------------------------
@@ -747,10 +874,25 @@ class ReviewPage(ft.Column):
         def _do_delete(policy: DeletionPolicy) -> None:
             from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
             service = DeleteService()
-            new_groups, *_ = service.delete_and_prune([path], self._groups, policy)
+            new_groups, deleted, failed, bytes_reclaimed = service.delete_and_prune([path], self._groups, policy)
             self._groups = new_groups
             self._group_files = {g.group_id: list(g.files) for g in self._groups}
             self._bridge.coordinator.results_files_removed([path])
+            if deleted > 0:
+                if policy == DeletionPolicy.TRASH:
+                    self._bridge.show_snackbar(
+                        f'Moved "{name}" to Trash.',
+                        success=True,
+                        action_label="Undo",
+                        on_action=lambda _e: self._undo_last_trash_delete(),
+                    )
+                else:
+                    self._bridge.show_snackbar(
+                        f'Permanently deleted "{name}".',
+                        success=True,
+                    )
+            if failed > 0:
+                self._bridge.show_snackbar(f"Failed to delete {failed:,} file(s).", error=True)
             if not self._groups:
                 self._enter_mode("empty")
                 return
@@ -790,6 +932,20 @@ class ReviewPage(ft.Column):
         )
         self._bridge.show_modal_dialog(dialog)
 
+    def _undo_last_trash_delete(self) -> None:
+        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+
+        ok, restored = DeleteService.undo_last_trash_delete()
+        if ok and restored > 0:
+            self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
+        elif restored > 0:
+            self._bridge.show_snackbar(
+                f"Partially restored {restored:,} file(s). Check missing paths.",
+                info=True,
+            )
+        else:
+            self._bridge.show_snackbar("Nothing to undo.", info=True)
+
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
@@ -825,6 +981,7 @@ class ReviewPage(ft.Column):
             btn.style = self._get_filter_btn_style(is_active)
 
         # Force refresh of dynamic content (Grid/Compare) to apply new text/icon colors
+        self._tile_cache = {}
         if self._mode == "grid":
             self._refresh_grid()
         elif self._mode == "compare":

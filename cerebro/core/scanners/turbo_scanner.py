@@ -23,11 +23,8 @@ use ``[Turbo] summary:`` at INFO and ``[DIAG:GUARD]`` at DEBUG only. See
 from __future__ import annotations
 
 import os
-import sys
 import time
 import hashlib
-import threading
-import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path

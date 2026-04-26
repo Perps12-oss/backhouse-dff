@@ -5,7 +5,6 @@ File preview functionality.
 """
 
 from pathlib import Path
-from typing import Optional
 import subprocess
 import os
 import platform

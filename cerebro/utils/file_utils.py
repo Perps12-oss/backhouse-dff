@@ -5,7 +5,7 @@ File utility functions for CEREBRO.
 import os
 import hashlib
 from pathlib import Path
-from typing import List, Optional, Generator, Tuple
+from typing import Generator
 
 
 def calculate_file_hash(file_path: Path, hash_algorithm: str = "sha256", chunk_size: int = 8192) -> str:

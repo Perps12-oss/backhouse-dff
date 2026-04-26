@@ -18,7 +18,6 @@ import pytest
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted
 from cerebro.v2.state.app_state import AppMode, create_initial_state
 from cerebro.v2.state.groups_prune import prune_paths_from_groups
 from cerebro.v2.coordinator import CerebroCoordinator

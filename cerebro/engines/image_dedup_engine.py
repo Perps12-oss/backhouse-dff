@@ -40,7 +40,7 @@ from cerebro.engines.base_engine import (
     DuplicateFile,
     EngineOption
 )
-from cerebro.engines.hash_cache import HashCache
+from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.engines.image_formats import (
     UnionFind,
     HammingBKTree,
@@ -165,6 +165,8 @@ class ImageDedupEngine(BaseEngine):
         """
         super().__init__()
         self._cache = HashCache(cache_path) if cache_path else None
+        if self._cache is not None:
+            self._cache.open()
         self._results: List[DuplicateGroup] = []
         self._progress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
@@ -464,7 +466,7 @@ class ImageDedupEngine(BaseEngine):
         # Hashing is the dominant cost in photo mode; parallelize misses.
         records_by_idx: list[Optional[dict]] = [None] * total_files
         future_to_job: dict = {}
-        cache_entries: list[tuple[str, float, int, str, str]] = []
+        cache_entries: list[tuple[str, StatSignature, str, str]] = []
         for idx, image_path in enumerate(image_files):
             if self._cancel_event.is_set():
                 return []
@@ -475,12 +477,18 @@ class ImageDedupEngine(BaseEngine):
                 continue
             mtime = stat.st_mtime
             size = stat.st_size
+            sig = StatSignature(
+                size=size,
+                mtime_ns=int(getattr(stat, "st_mtime_ns", int(mtime * 1_000_000_000))),
+                dev=int(getattr(stat, "st_dev", 0) or 0),
+                inode=int(getattr(stat, "st_ino", 0) or 0),
+            )
 
             cached_phash: Optional[str] = None
             cached_dhash: Optional[str] = None
             if self._cache is not None:
-                cached_phash = self._cache.get(image_path, mtime, size, "phash")
-                cached_dhash = self._cache.get(image_path, mtime, size, "dhash")
+                cached_phash = self._cache.get_quick(image_path, sig)
+                cached_dhash = self._cache.get_full(image_path, sig)
 
             if cached_phash and cached_dhash:
                 records_by_idx[idx] = {
@@ -506,7 +514,7 @@ class ImageDedupEngine(BaseEngine):
                     max_workers=min(32, (os.cpu_count() or 4) * 2)
                 )
             fut = self._worker_pool.submit(self._compute_hashes, image_path)
-            future_to_job[fut] = (idx, image_path, mtime, size)
+            future_to_job[fut] = (idx, image_path, mtime, size, sig)
 
         for fut in as_completed(list(future_to_job.keys())):
             if self._cancel_event.is_set():
@@ -514,14 +522,12 @@ class ImageDedupEngine(BaseEngine):
                     pending.cancel()
                 return []
 
-            idx, image_path, mtime, size = future_to_job[fut]
+            idx, image_path, mtime, size, sig = future_to_job[fut]
             hashes = fut.result()
             if hashes:
                 phash_hex, dhash_hex, phash_int, dhash_int, width, height = hashes
                 if self._cache is not None:
-                    path_str = str(image_path)
-                    cache_entries.append((path_str, mtime, size, "phash", phash_hex))
-                    cache_entries.append((path_str, mtime, size, "dhash", dhash_hex))
+                    cache_entries.append((str(image_path), sig, phash_hex, dhash_hex))
                 records_by_idx[idx] = {
                     "path": image_path,
                     "size": size,
@@ -540,7 +546,9 @@ class ImageDedupEngine(BaseEngine):
             if (processed % 25 == 0 or processed == total_files) and self._callback:
                 self._callback(dataclasses.replace(self._progress))
         if self._cache is not None and cache_entries:
-            self._cache.set_many(cache_entries)
+            for path_str, sig, phash_hex, dhash_hex in cache_entries:
+                self._cache.set_quick(path_str, sig, phash_hex, algo="phash")
+                self._cache.set_full(path_str, sig, dhash_hex, algo="dhash")
 
         records: list[dict] = [r for r in records_by_idx if r is not None]
         if not records:

@@ -33,7 +33,8 @@ class AppLayout(ft.Row):
         self._page = page
         self._bridge = state_bridge
         self._builders = page_builders
-        self._current_key: str = "dashboard"
+        # Start "uninitialized" so first navigate_to("dashboard") mounts content.
+        self._current_key: str = ""
 
         # Plain container (not AnimatedSwitcher): with singleton tab pages, the
         # switcher often failed to replace visible content while the rail updated.
@@ -61,7 +62,6 @@ class AppLayout(ft.Row):
                         size=8,
                         weight=ft.FontWeight.BOLD,
                         color="#22D3EE",
-                        letter_spacing=2,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -107,7 +107,9 @@ class AppLayout(ft.Row):
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
-        if key == self._current_key:
+        # If already on this key and content is mounted, skip redundant rebuild.
+        # If content host is unexpectedly empty, force remount for resilience.
+        if key == self._current_key and self._content_host.content is not None:
             return
         self._current_key = key
         idx = next((i for i, r in enumerate(ROUTES) if r.key == key), 0)
@@ -155,7 +157,9 @@ class AppLayout(ft.Row):
 
     def refresh_current(self) -> None:
         """Rebuild the current page (e.g., after theme or state change)."""
-        self.navigate_to(self._current_key)
+        key = self._current_key or "dashboard"
+        self._current_key = ""
+        self.navigate_to(key)
 
     @property
     def current_key(self) -> str:

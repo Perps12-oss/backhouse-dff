@@ -11,7 +11,6 @@ Covers:
 
 from pathlib import Path
 
-import pytest
 
 from cerebro.engines.similar_folder_engine import SimilarFolderEngine
 

@@ -75,11 +75,13 @@ class DashboardPage(ft.Column):
         self._quick_add_title: ft.Text
         self._quick_paths_row: ft.Row
         self._quick_add_wrap: ft.Column
+        self._clear_folders_btn: ft.TextButton
         self._actions: ft.Row
         self._start_btn: ft.FilledButton
         self._stop_btn: ft.OutlinedButton
         self._progress: ft.ProgressBar
         self._progress_label: ft.Text
+        self._progress_detail: ft.Text
         self._status: ft.Text
         self._recent_title: ft.Text
         self._recent_list: ft.ListView
@@ -135,14 +137,35 @@ class DashboardPage(ft.Column):
             spacing=s.xs,
         )
         self._folder_container = ft.Container(
-            content=self._folder_chips_row,
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text("Selected folders", color=t.colors.fg_muted, size=t.typography.size_sm),
+                            ft.Container(expand=True),
+                        ],
+                    ),
+                    self._folder_chips_row,
+                ],
+                spacing=s.xs,
+            ),
             padding=s.md,
             **self._get_glass_style(0.04),
         )
+        self._clear_folders_btn = ft.TextButton(
+            "Clear selected",
+            icon=ft.icons.Icons.CLEAR_ALL,
+            on_click=self._clear_selected_folders,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+            visible=False,
+        )
+        cast_col = self._folder_container.content
+        if isinstance(cast_col, ft.Column) and cast_col.controls and isinstance(cast_col.controls[0], ft.Row):
+            cast_col.controls[0].controls.append(self._clear_folders_btn)
 
         self._quick_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
         self._quick_add_title = ft.Text(
-            "Quick add — common folders on this PC",
+            "Quick add — smart suggestions (recent + frequent)",
             size=t.typography.size_sm,
             weight=ft.FontWeight.W_500,
             color=t.colors.fg_muted,
@@ -201,6 +224,7 @@ class DashboardPage(ft.Column):
 
         self._progress = ft.ProgressBar(width=400, bar_height=6, visible=False, color=t.colors.primary, bgcolor=t.colors.bg3)
         self._progress_label = ft.Text("", color=t.colors.fg2, size=t.typography.size_sm, visible=False)
+        self._progress_detail = ft.Text("", color=t.colors.fg_muted, size=t.typography.size_xs, visible=False)
 
         # Status text
         self._status = ft.Text(
@@ -235,6 +259,7 @@ class DashboardPage(ft.Column):
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
             ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs), alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._progress_label, alignment=ft.Alignment(0.5, 0.5)),
+            ft.Container(content=self._progress_detail, alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
             self._recent_container,
         ]
@@ -444,9 +469,9 @@ class DashboardPage(ft.Column):
         self._update_modes_ui()
 
     def _refresh_quick_add_bar(self) -> None:
-        """Populate one-tap buttons for standard profile folders that exist on disk."""
+        """Populate one-tap smart suggestions based on scan history + recency."""
         t = self._t
-        paths = _discover_existing_popular_paths()
+        paths = self._discover_smart_quick_paths(limit=8)
         self._quick_add_title.color = t.colors.fg_muted
         if not paths:
             self._quick_add_wrap.visible = False
@@ -455,17 +480,13 @@ class DashboardPage(ft.Column):
             return
         self._quick_add_wrap.visible = True
         self._quick_paths_row.controls = [
-            ft.OutlinedButton(
-                label,
-                icon=ft.icons.Icons.FOLDER_SPECIAL,
-                data=str(p),
-                on_click=self._on_quick_add_folder,
-                style=ft.ButtonStyle(
-                    color=t.colors.fg2,
-                    side=ft.BorderSide(1, t.colors.border3),
-                    shape=ft.RoundedRectangleBorder(radius=10),
-                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                ),
+            ft.Chip(
+                label=ft.Text(label, size=t.typography.size_sm),
+                leading=ft.Icon(ft.icons.Icons.FOLDER_SPECIAL, size=14, color=t.colors.fg2),
+                bgcolor=ft.Colors.with_opacity(0.10, t.colors.primary),
+                shape=ft.RoundedRectangleBorder(radius=10),
+                on_click=lambda _e, pp=p: self._add_folder(pp),
+                on_delete=lambda _e, pp=p: self._dismiss_quick_suggestion(pp),
             )
             for label, p in paths
         ]
@@ -473,11 +494,75 @@ class DashboardPage(ft.Column):
             self._quick_paths_row.update()
             self._quick_add_wrap.update()
 
-    def _on_quick_add_folder(self, e: ft.ControlEvent) -> None:
-        raw = getattr(e.control, "data", None)
-        if not raw:
-            return
-        self._add_folder(Path(str(raw)))
+    def _discover_smart_quick_paths(self, limit: int = 8) -> list[tuple[str, Path]]:
+        try:
+            from cerebro.v2.core.scan_history_db import get_scan_history_db
+            import time
+
+            hidden = self._get_hidden_quick_suggestions()
+            now = time.time()
+            scores: dict[str, float] = {}
+            pretty: dict[str, Path] = {}
+            entries = get_scan_history_db().get_recent(300)
+            for i, entry in enumerate(entries):
+                # Recency + frequency weighted score.
+                age_days = max(0.0, (now - float(entry.timestamp or now)) / 86400.0)
+                recency_boost = 1.0 / (1.0 + age_days)
+                order_boost = 1.0 / (1.0 + i)
+                for raw in (entry.folders or []):
+                    try:
+                        p = Path(str(raw)).resolve()
+                    except (OSError, RuntimeError, ValueError):
+                        continue
+                    if not p.is_dir():
+                        continue
+                    key = str(p).lower()
+                    if key in hidden:
+                        continue
+                    scores[key] = scores.get(key, 0.0) + 1.0 + (2.0 * recency_boost) + order_boost
+                    pretty[key] = p
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: max(1, limit)]
+            out: list[tuple[str, Path]] = []
+            for key, _score in ranked:
+                p = pretty[key]
+                label = p.name or str(p)
+                out.append((label, p))
+            if out:
+                return out
+        except Exception:
+            _log.exception("Failed building smart quick-add suggestions")
+        # Fallback for brand-new users.
+        return _discover_existing_popular_paths()[: max(1, limit)]
+
+    def _get_hidden_quick_suggestions(self) -> set[str]:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            return set()
+        dashboard = settings.get("dashboard")
+        if not isinstance(dashboard, dict):
+            return set()
+        hidden = dashboard.get("quick_add_hidden")
+        if not isinstance(hidden, list):
+            return set()
+        return {str(x).lower() for x in hidden}
+
+    def _dismiss_quick_suggestion(self, path: Path) -> None:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            settings = {}
+        dashboard = settings.get("dashboard")
+        if not isinstance(dashboard, dict):
+            dashboard = {}
+        hidden = dashboard.get("quick_add_hidden")
+        if not isinstance(hidden, list):
+            hidden = []
+        key = str(path).lower()
+        if key not in [str(x).lower() for x in hidden]:
+            hidden.append(str(path))
+        dashboard["quick_add_hidden"] = hidden
+        settings["dashboard"] = dashboard
+        self._bridge.save_settings(settings)
+        self._refresh_quick_add_bar()
 
     def _browse_folders(self, e: ft.ControlEvent) -> None:
         # Use the bridge's page reference to run async task safely
@@ -530,12 +615,18 @@ class DashboardPage(ft.Column):
                 )
                 for f in self._folders
             ]
+        self._clear_folders_btn.visible = bool(self._folders)
         if self._is_mounted():
             self._folder_chips_row.update()
+            self._clear_folders_btn.update()
 
     def _remove_folder(self, path: Path) -> None:
         if path in self._folders:
             self._folders.remove(path)
+        self._refresh_folder_chips()
+
+    def _clear_selected_folders(self, _e: ft.ControlEvent | None = None) -> None:
+        self._folders.clear()
         self._refresh_folder_chips()
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
@@ -569,9 +660,19 @@ class DashboardPage(ft.Column):
         scanned = data.get("files_scanned", 0)
         total = data.get("files_total", 0)
         elapsed = data.get("elapsed_seconds", 0.0)
+        current_file = str(data.get("current_file", "") or "")
         
         self._status.value = f"Scanning... {stage}"
-        self._progress_label.value = f"{scanned:,} files scanned · {elapsed:.1f}s"
+        percent = (float(scanned) / float(total) * 100.0) if total else 0.0
+        rate = (float(scanned) / float(elapsed)) if elapsed > 0 else 0.0
+        eta_s = ((float(total) - float(scanned)) / rate) if (total and rate > 0) else 0.0
+        self._progress_label.value = (
+            f"{percent:.1f}% · {scanned:,}/{total:,} files · {rate:,.0f} files/s · ETA {self._fmt_eta(eta_s)}"
+            if total
+            else f"{scanned:,} files scanned · {rate:,.0f} files/s · {elapsed:.1f}s"
+        )
+        self._progress_detail.value = self._shorten_path(current_file) if current_file else ""
+        self._progress_detail.visible = bool(current_file)
         
         if total > 0:
             self._progress.value = scanned / total
@@ -580,32 +681,48 @@ class DashboardPage(ft.Column):
         # but Flet handles individual updates reasonably well for text/progress.
         self._status.update()
         self._progress_label.update()
+        self._progress_detail.update()
         self._progress.update()
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
         self._progress.visible = False
         self._progress_label.visible = False
+        self._progress_detail.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
         
         self._progress.update()
         self._progress_label.update()
+        self._progress_detail.update()
         self._stop_btn.update()
         self._status.update()
         
         self._bridge.dispatch_scan_complete(results, mode)
+        try:
+            reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
+        except Exception:
+            reclaimed = 0
+        if reclaimed >= 1_073_741_824:
+            self._bridge.show_snackbar(
+                f"Great cleanup! Reclaimable space exceeds 1 GB ({fmt_size(reclaimed)}).",
+                success=True,
+            )
+        self._bridge.play_sound("success")
 
     def _on_scan_error(self, msg: str) -> None:
         self._bridge.abort_scan_session()
         self._progress.visible = False
         self._progress_label.visible = False
+        self._progress_detail.visible = False
         self._stop_btn.visible = False
         self._status.value = f"Scan error: {msg}"
         
         self._progress.update()
         self._progress_label.update()
+        self._progress_detail.update()
         self._stop_btn.update()
         self._status.update()
+        self._bridge.play_sound("error")
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
         try:
@@ -615,9 +732,31 @@ class DashboardPage(ft.Column):
 
         self._bridge.abort_scan_session()
         self._stop_btn.visible = False
+        self._progress_detail.visible = False
         self._status.value = "Cancelling scan..."
         self._status.update()
         self._stop_btn.update()
+        self._progress_detail.update()
+
+    @staticmethod
+    def _fmt_eta(seconds: float) -> str:
+        s = max(0, int(seconds))
+        m, s = divmod(s, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}h {m}m"
+        if m > 0:
+            return f"{m}m {s}s"
+        return f"{s}s"
+
+    @staticmethod
+    def _shorten_path(path: str, max_len: int = 88) -> str:
+        p = str(path)
+        if len(p) <= max_len:
+            return f"Current: {p}"
+        head = max_len // 2 - 2
+        tail = max_len - head - 3
+        return f"Current: {p[:head]}...{p[-tail:]}"
 
     def on_show(self) -> None:
         self._fetch_dashboard_data()

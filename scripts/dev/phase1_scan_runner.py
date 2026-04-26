@@ -8,7 +8,6 @@ Usage:
     python scripts/dev/phase1_scan_runner.py  # defaults to jhjl test tree
 """
 import sys
-import os
 import logging
 import time
 from pathlib import Path

@@ -13,7 +13,6 @@ and v2 (CustomTkinter) UIs read from this engine via their respective bridges.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -21,8 +20,6 @@ from .color_utils import (
     apply_derive,
     normalize_hex,
     validate_hex,
-    darken,
-    lighten,
 )
 from .theme_schema import (
     DEFAULT_DARK,
@@ -32,7 +29,6 @@ from .theme_schema import (
     REQUIRED_SLOTS,
     SLOT_REGISTRY,
     ColorSlot,
-    total_slots,
     validate_slot_key,
 )
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -302,6 +303,33 @@ class StateBridge:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def is_reduce_motion_enabled(self) -> bool:
+        settings = self.get_settings()
+        accessibility = settings.get("accessibility") if isinstance(settings, dict) else {}
+        return bool(isinstance(accessibility, dict) and accessibility.get("reduce_motion", False))
+
+    def is_sound_enabled(self) -> bool:
+        settings = self.get_settings()
+        notifications = settings.get("notifications") if isinstance(settings, dict) else {}
+        return bool(isinstance(notifications, dict) and notifications.get("sound_enabled", False))
+
+    def play_sound(self, event: str = "default") -> None:
+        if not self.is_sound_enabled():
+            return
+        if sys.platform != "win32":
+            return
+        try:
+            import winsound
+
+            if event == "success":
+                winsound.MessageBeep(winsound.MB_OK)
+            elif event == "error":
+                winsound.MessageBeep(winsound.MB_ICONHAND)
+            else:
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            _log.exception("Failed to play sound event %s", event)
+
     def get_cache_path(self) -> str:
         p = Path.home() / ".cerebro" / "cache"
         p.mkdir(parents=True, exist_ok=True)
@@ -314,6 +342,8 @@ class StateBridge:
         error: bool = False,
         success: bool = False,
         info: bool = False,
+        action_label: str | None = None,
+        on_action: Callable[[ft.ControlEvent], None] | None = None,
     ) -> None:
         if error:
             bg = "#B91C1C"
@@ -323,6 +353,11 @@ class StateBridge:
             bg = "#334155"
         else:
             bg = "#1E293B"
-        self._page.snack_bar = ft.SnackBar(content=ft.Text(str(message)), bgcolor=bg)
+        self._page.snack_bar = ft.SnackBar(
+            content=ft.Text(str(message)),
+            bgcolor=bg,
+            action=action_label,
+            on_action=on_action,
+        )
         self._page.snack_bar.open = True
         self._page.update()

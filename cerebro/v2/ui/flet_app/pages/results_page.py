@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Set
+from typing import TYPE_CHECKING, Dict, List, Set
 
 import flet as ft
 
@@ -57,6 +57,9 @@ class ResultsPage(ft.Column):
         self._selected_paths: Set[str] = set()
         self._smart_rule = "keep_largest"
         self._list_build_generation = 0
+        self._loading = False
+        self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
 
         # UI References
         self._summary: ft.Text
@@ -71,6 +74,7 @@ class ResultsPage(ft.Column):
         self._filter_bar: ft.Row
         self._group_list: ft.ListView
         self._empty: ft.Container
+        self._loading_state: ft.Container
 
         self._build_ui()
 
@@ -247,6 +251,14 @@ class ResultsPage(ft.Column):
             alignment=ft.Alignment(0.5, 0.5),
             **self._get_glass_style(0.04),
         )
+        self._loading_state = ft.Container(
+            content=ft.Column(
+                [self._build_skeleton_card() for _ in range(5)],
+                spacing=t.spacing.sm,
+            ),
+            expand=True,
+            padding=t.spacing.lg,
+        )
 
         self.controls = [
             ft.Container(content=self._header, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
@@ -264,7 +276,15 @@ class ResultsPage(ft.Column):
         self._groups = list(groups)
         self._scan_mode = mode or "files"
         self._selected_paths.clear()
+        self._recompute_filter_counts()
+        self._loading = True
         self._refresh()
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._finish_loading_async)
+        else:
+            self._loading = False
+            self._refresh()
 
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._groups)
@@ -395,6 +415,38 @@ class ResultsPage(ft.Column):
         self._groups = new_groups
         self._bridge.coordinator.results_files_removed(paths)
         self._refresh()
+        if deleted > 0:
+            if policy == DeletionPolicy.TRASH:
+                self._bridge.show_snackbar(
+                    f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                    action_label="Undo",
+                    on_action=lambda _e: self._undo_last_trash_delete(),
+                )
+            else:
+                self._bridge.show_snackbar(
+                    f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                )
+        if failed > 0:
+            self._bridge.show_snackbar(
+                f"{failed:,} files could not be deleted.",
+                error=True,
+            )
+
+    def _undo_last_trash_delete(self) -> None:
+        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+
+        ok, restored = DeleteService.undo_last_trash_delete()
+        if ok and restored > 0:
+            self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
+        elif restored > 0:
+            self._bridge.show_snackbar(
+                f"Partially restored {restored:,} file(s). Check missing paths.",
+                info=True,
+            )
+        else:
+            self._bridge.show_snackbar("Nothing to undo.", info=True)
 
     # ------------------------------------------------------------------
     # Filtering
@@ -426,6 +478,18 @@ class ResultsPage(ft.Column):
         self._summary.value = f"{len(filtered):,} groups · {total_files:,} files · {fmt_size(recoverable)} recoverable"
         self._safe_update(self._summary)
         self._update_selection_ui()
+        self._refresh_filter_labels()
+        if self._loading:
+            if self._empty in self.controls:
+                self.controls.remove(self._empty)
+            if self._group_list in self.controls:
+                self.controls.remove(self._group_list)
+            if self._loading_state not in self.controls:
+                self.controls.append(self._loading_state)
+            self._safe_update(self)
+            return
+        if self._loading_state in self.controls:
+            self.controls.remove(self._loading_state)
 
         if not filtered:
             if self._empty not in self.controls:
@@ -443,6 +507,7 @@ class ResultsPage(ft.Column):
         n = len(filtered)
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
             self._group_list.controls = [self._build_group_card(g) for g in filtered]
+            self._loading = False
             self._safe_update(self)
             if n > 80:
                 try:
@@ -486,6 +551,45 @@ class ResultsPage(ft.Column):
             except Exception:
                 pass
             await asyncio.sleep(0)
+        if gen == self._list_build_generation:
+            self._loading = False
+            self._refresh()
+
+    async def _finish_loading_async(self) -> None:
+        await asyncio.sleep(0)
+        self._loading = False
+        self._refresh()
+
+    def _build_skeleton_card(self) -> ft.Container:
+        t = self._t
+        bar = lambda w: ft.Container(
+            width=w,
+            height=10,
+            bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE),
+            border_radius=4,
+        )
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                width=30,
+                                height=30,
+                                bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE),
+                                border_radius=8,
+                            ),
+                            ft.Column([bar(220), bar(160)], spacing=8, expand=True),
+                            bar(80),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    )
+                ],
+                spacing=t.spacing.xs,
+            ),
+            padding=t.spacing.md,
+            **self._get_glass_style(0.04),
+        )
 
     def _build_group_card(self, group: DuplicateGroup) -> ft.Container:
         t = self._t
@@ -496,31 +600,32 @@ class ResultsPage(ft.Column):
         ext = sample_path.suffix if sample else ""
         icon_name, accent = self._file_type_icon(ext)
 
-        file_checks = ft.Column(
-            [
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Checkbox(
-                                label=str(Path(str(f.path)).name),
-                                value=str(f.path) in self._selected_paths,
-                                on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
-                                label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
-                            ),
-                            ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
-                        ],
-                        spacing=t.spacing.sm,
-                    ),
-                    padding=ft.padding.only(left=t.spacing.xl, top=2, bottom=2),
-                    border=ft.border.only(left=ft.BorderSide(2, ft.Colors.with_opacity(0.3, accent))),
-                )
-                for f in group.files
-            ],
-            spacing=2,
-            visible=False,
-        )
+        # Build heavy duplicate rows lazily on first expand to avoid long filter/render stalls.
+        file_checks = ft.Column([], spacing=2, visible=False)
+        details_built = {"value": False}
 
         def _toggle_expand(e):
+            if not details_built["value"]:
+                file_checks.controls = [
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Checkbox(
+                                    label=str(Path(str(f.path)).name),
+                                    value=str(f.path) in self._selected_paths,
+                                    on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
+                                    label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
+                                ),
+                                ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
+                            ],
+                            spacing=t.spacing.sm,
+                        ),
+                        padding=ft.padding.only(left=t.spacing.xl, top=2, bottom=2),
+                        border=ft.border.only(left=ft.BorderSide(2, ft.Colors.with_opacity(0.3, accent))),
+                    )
+                    for f in group.files
+                ]
+                details_built["value"] = True
             file_checks.visible = not file_checks.visible
             ResultsPage._safe_update(file_checks)
             expand_btn.text = "Collapse" if file_checks.visible else "Expand"
@@ -581,6 +686,32 @@ class ResultsPage(ft.Column):
             ink=True,
             **self._get_glass_style(0.06),
         )
+
+    def _recompute_filter_counts(self) -> None:
+        counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        for g in self._groups:
+            files = list(g.files)
+            counts["all"] += len(files)
+            group_counts["all"] += 1
+            seen_group_kinds: set[str] = set()
+            for f in files:
+                key = classify_file(getattr(f, "extension", ""))
+                counts[key if key in counts else "other"] += 1
+                seen_group_kinds.add(key if key in group_counts else "other")
+            for kind in seen_group_kinds:
+                group_counts[kind] += 1
+        self._filter_counts = counts
+        self._filter_group_counts = group_counts
+
+    def _refresh_filter_labels(self) -> None:
+        for btn in self._filter_bar.controls:
+            key = str(getattr(btn, "data", "") or "")
+            base = next((label for k, label in _FILTER_TABS if k == key), key.title())
+            files_n = self._filter_counts.get(key, 0)
+            groups_n = self._filter_group_counts.get(key, 0)
+            btn.text = f"{base} · {files_n:,}"
+            btn.tooltip = f"{groups_n:,} groups · {files_n:,} files"
 
     def _open_group(self, group: DuplicateGroup) -> None:
         self._bridge.coordinator.review_open_group(group.group_id, self._groups)

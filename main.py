@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 
 from cerebro.runtime_deps import ensure_runtime_dependencies
 

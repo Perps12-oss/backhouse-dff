@@ -8,7 +8,7 @@ import stat
 import hashlib
 import platform
 from pathlib import Path
-from typing import List, Optional, Generator, Dict, Any, Set, Tuple
+from typing import List, Optional, Dict, Any, Set
 
 # --- Constants ---
 DEFAULT_SKIP_DIRS: Set[str] = {

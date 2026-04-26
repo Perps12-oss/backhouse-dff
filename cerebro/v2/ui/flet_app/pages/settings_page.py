@@ -66,6 +66,8 @@ class SettingsPage(ft.Column):
         self._general_remember: ft.Checkbox
         self._general_collapse: ft.Checkbox
         self._general_hidden: ft.Checkbox
+        self._general_reduce_motion: ft.Checkbox
+        self._general_sound: ft.Checkbox
 
         # Control References (Appearance)
         self._appearance_font_slider: ft.Slider
@@ -213,6 +215,8 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("deletion", {})
         self._settings.setdefault("photo_mode", {})
         self._settings.setdefault("file_mode", {})
+        self._settings.setdefault("accessibility", {})
+        self._settings.setdefault("notifications", {})
         self._settings["appearance"].setdefault("ui_theme_preset", "arctic")
 
     def _apply_saved_values_to_controls(self) -> None:
@@ -223,6 +227,8 @@ class SettingsPage(ft.Column):
         self._general_remember.value = self._settings["general"].get("remember_folders", True)
         self._general_collapse.value = self._settings["general"].get("auto_collapse", True)
         self._general_hidden.value = self._settings["general"].get("show_hidden_files", False)
+        self._general_reduce_motion.value = self._settings["accessibility"].get("reduce_motion", False)
+        self._general_sound.value = self._settings["notifications"].get("sound_enabled", False)
 
         # Appearance
         self._appearance_font_slider.value = self._settings["appearance"].get("font_size", 13)
@@ -283,7 +289,22 @@ class SettingsPage(ft.Column):
             label="Show hidden files",
             value=self._settings["general"].get("show_hidden_files", False),
         )
-        for cb in [self._general_confirm, self._general_remember, self._general_collapse, self._general_hidden]:
+        self._general_reduce_motion = ft.Checkbox(
+            label="Reduce motion (minimize animations)",
+            value=self._settings["accessibility"].get("reduce_motion", False),
+        )
+        self._general_sound = ft.Checkbox(
+            label="Enable sound effects",
+            value=self._settings["notifications"].get("sound_enabled", False),
+        )
+        for cb in [
+            self._general_confirm,
+            self._general_remember,
+            self._general_collapse,
+            self._general_hidden,
+            self._general_reduce_motion,
+            self._general_sound,
+        ]:
             content.controls.append(cb)
 
         self._tab_contents["general"].content = content
@@ -546,6 +567,8 @@ class SettingsPage(ft.Column):
         self._settings["general"]["remember_folders"] = self._general_remember.value
         self._settings["general"]["auto_collapse"] = self._general_collapse.value
         self._settings["general"]["show_hidden_files"] = self._general_hidden.value
+        self._settings["accessibility"]["reduce_motion"] = bool(self._general_reduce_motion.value)
+        self._settings["notifications"]["sound_enabled"] = bool(self._general_sound.value)
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
         self._settings["appearance"]["ui_theme_preset"] = str(

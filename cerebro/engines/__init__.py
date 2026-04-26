@@ -13,7 +13,7 @@ from cerebro.engines.base_engine import (
     EngineOption
 )
 from cerebro.engines.orchestrator import ScanOrchestrator
-from cerebro.engines.hash_cache import HashCache
+from cerebro.services.hash_cache import HashCache
 
 __all__ = [
     'BaseEngine',

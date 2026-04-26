@@ -4,7 +4,6 @@ Entry point: ``python -m cerebro`` — proves the engine stack imports without t
 
 from __future__ import annotations
 
-import sys
 
 import cerebro
 from cerebro.engines.base_engine import ScanState
