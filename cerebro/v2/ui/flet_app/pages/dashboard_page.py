@@ -83,6 +83,13 @@ class DashboardPage(ft.Column):
         self._progress_label: ft.Text
         self._progress_detail: ft.Text
         self._status: ft.Text
+        self._ring: ft.ProgressRing
+        self._ring_label: ft.Text
+        self._ring_counter: ft.Text
+        self._ring_path: ft.Text
+        self._cancel_btn: ft.OutlinedButton
+        self._scan_view: ft.Container
+        self._main_panels: list
         self._build_ui()
 
     def _is_mounted(self) -> bool:
@@ -240,6 +247,65 @@ class DashboardPage(ft.Column):
         self._progress_label = ft.Text("", color=t.colors.fg2, size=t.typography.size_sm, visible=False)
         self._progress_detail = ft.Text("", color=t.colors.fg_muted, size=t.typography.size_xs, visible=False)
 
+        # Circular scan progress view — swaps in over main content during active scan
+        self._ring = ft.ProgressRing(
+            width=100, height=100,
+            stroke_width=8,
+            color="#00BFA5",
+            value=None,  # indeterminate until first progress callback
+        )
+        self._ring_label = ft.Text(
+            "Scanning your drive...",
+            size=t.typography.size_xl,
+            weight=ft.FontWeight.BOLD,
+            color=t.colors.fg,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self._ring_counter = ft.Text(
+            "Processed: 0 / 0",
+            size=t.typography.size_md,
+            color=t.colors.fg2,
+            font_family="Courier New",
+            text_align=ft.TextAlign.CENTER,
+        )
+        self._ring_path = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+            no_wrap=True,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            width=480,
+        )
+        self._cancel_btn = ft.OutlinedButton(
+            "Cancel Scan",
+            icon=ft.icons.Icons.STOP,
+            on_click=self._stop_scan,
+            style=ft.ButtonStyle(
+                color=t.colors.danger,
+                side=ft.BorderSide(1, t.colors.danger),
+                shape=ft.RoundedRectangleBorder(radius=10),
+                padding=ft.padding.symmetric(horizontal=24, vertical=12),
+            ),
+        )
+        self._scan_view = ft.Container(
+            content=ft.Column(
+                [
+                    self._ring,
+                    self._ring_label,
+                    self._ring_counter,
+                    self._ring_path,
+                    self._cancel_btn,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=s.lg,
+            ),
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            visible=False,
+        )
+
         # Status text (hidden initially; shown only during/after scan)
         self._status = ft.Text(
             "",
@@ -248,7 +314,7 @@ class DashboardPage(ft.Column):
             text_align=ft.TextAlign.CENTER,
         )
 
-        # Assemble
+        # Assemble — main panels tracked so scan view can swap in/out
         self.controls = [
             self._hero,
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
@@ -260,11 +326,10 @@ class DashboardPage(ft.Column):
                 padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
             ),
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
-            ft.Container(content=self._progress, padding=ft.padding.only(bottom=s.xs), alignment=ft.Alignment(0, 0)),
-            ft.Container(content=self._progress_label, alignment=ft.Alignment(0, 0)),
-            ft.Container(content=self._progress_detail, alignment=ft.Alignment(0, 0)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
         ]
+        self._main_panels = list(self.controls)  # snapshot for hide/show swap
+        self.controls.append(self._scan_view)     # scan view always last, starts hidden
         
         # Initial data fetch
         self._fetch_dashboard_data()
@@ -629,14 +694,14 @@ class DashboardPage(ft.Column):
             self._status.update()
             return
         
-        self._stop_btn.visible = True
-        self._progress.visible = True
-        self._progress_label.visible = True
-        self._status.value = "Starting scan..."
-        self._stop_btn.update()
-        self._progress.update()
-        self._progress_label.update()
-        self._status.update()
+        self._ring.value = None  # indeterminate until first progress tick
+        self._ring_counter.value = "Processed: 0 / 0"
+        self._ring_path.value = ""
+        self._ring_label.value = "Scanning your drive..."
+        for p in self._main_panels:
+            p.visible = False
+        self._scan_view.visible = True
+        DashboardPage._safe_update(self)
 
         self._bridge.begin_scan_session(self._folders, self._selected_mode)
 
@@ -656,20 +721,16 @@ class DashboardPage(ft.Column):
         elapsed = data.get("elapsed_seconds", 0.0)
         current_file = str(data.get("current_file", "") or "")
         
-        self._status.value = f"Scanning... {stage}"
-        percent = (float(scanned) / float(total) * 100.0) if total else 0.0
         rate = (float(scanned) / float(elapsed)) if elapsed > 0 else 0.0
         eta_s = ((float(total) - float(scanned)) / rate) if (total and rate > 0) else 0.0
-        self._progress_label.value = (
-            f"{percent:.1f}% · {scanned:,}/{total:,} files · {rate:,.0f} files/s · ETA {self._fmt_eta(eta_s)}"
+        self._ring_counter.value = (
+            f"Processed: {scanned:,} / {total:,}  ·  {rate:,.0f} files/s  ·  ETA {self._fmt_eta(eta_s)}"
             if total
-            else f"{scanned:,} files scanned · {rate:,.0f} files/s · {elapsed:.1f}s"
+            else f"Processed: {scanned:,}  ·  {rate:,.0f} files/s"
         )
-        self._progress_detail.value = self._shorten_path(current_file) if current_file else ""
-        self._progress_detail.visible = bool(current_file)
-        
+        self._ring_path.value = self._shorten_path(current_file) if current_file else ""
         if total > 0:
-            self._progress.value = scanned / total
+            self._ring.value = scanned / total
 
         try:
             self._bridge.flet_page.update()
@@ -677,17 +738,11 @@ class DashboardPage(ft.Column):
             pass
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
-        self._progress.visible = False
-        self._progress_label.visible = False
-        self._progress_detail.visible = False
-        self._stop_btn.visible = False
+        self._scan_view.visible = False
+        for p in self._main_panels:
+            p.visible = True
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
-        
-        self._progress.update()
-        self._progress_label.update()
-        self._progress_detail.update()
-        self._stop_btn.update()
-        self._status.update()
+        DashboardPage._safe_update(self)
         
         self._bridge.dispatch_scan_complete(results, mode)
         try:
@@ -703,17 +758,11 @@ class DashboardPage(ft.Column):
 
     def _on_scan_error(self, msg: str) -> None:
         self._bridge.abort_scan_session()
-        self._progress.visible = False
-        self._progress_label.visible = False
-        self._progress_detail.visible = False
-        self._stop_btn.visible = False
+        self._scan_view.visible = False
+        for p in self._main_panels:
+            p.visible = True
         self._status.value = f"Scan error: {msg}"
-        
-        self._progress.update()
-        self._progress_label.update()
-        self._progress_detail.update()
-        self._stop_btn.update()
-        self._status.update()
+        DashboardPage._safe_update(self)
         self._bridge.play_sound("error")
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
@@ -723,12 +772,11 @@ class DashboardPage(ft.Column):
             _log.error(f"Failed to stop scan: {err}")
 
         self._bridge.abort_scan_session()
-        self._stop_btn.visible = False
-        self._progress_detail.visible = False
+        self._scan_view.visible = False
+        for p in self._main_panels:
+            p.visible = True
         self._status.value = "Cancelling scan..."
-        self._status.update()
-        self._stop_btn.update()
-        self._progress_detail.update()
+        DashboardPage._safe_update(self)
 
     @staticmethod
     def _fmt_eta(seconds: float) -> str:
