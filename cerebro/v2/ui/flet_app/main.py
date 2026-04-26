@@ -16,7 +16,7 @@ from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted, SetActi
 from cerebro.v2.state.app_state import AppState, create_initial_state
 from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.flet_app.layout import AppLayout
-from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, default_route, key_for_route
+from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
@@ -37,6 +37,7 @@ def _main(page: ft.Page) -> None:
     page.window.min_width = 800
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
+    page.bgcolor = "#0A0E14"
     page.padding = 0
     page.spacing = 0
 

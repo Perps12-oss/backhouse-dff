@@ -162,7 +162,7 @@ class SettingsPage(ft.Column):
             icon=ft.icons.Icons.SAVE,
             on_click=self._on_save,
             style=ft.ButtonStyle(
-                bgcolor=ft.Colors.with_opacity(0.15, t.colors.success),
+                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
                 color=t.colors.fg,
                 shape=ft.RoundedRectangleBorder(radius=8),
             ),
@@ -630,7 +630,7 @@ class SettingsPage(ft.Column):
 
         # Buttons
         self._save_btn.style = ft.ButtonStyle(
-            bgcolor=ft.Colors.with_opacity(0.15, self._t.colors.success),
+            bgcolor=ft.Colors.with_opacity(0.15, self._t.colors.primary),
             color=self._t.colors.fg,
             shape=ft.RoundedRectangleBorder(radius=8),
         )

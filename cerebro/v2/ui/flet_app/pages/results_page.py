@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Set
+from typing import TYPE_CHECKING, List, Set
 
 import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.ui.flet_app.theme import (
-    FILTER_EXTS, EXT_ALL_KNOWN, ThemeTokens, classify_file, fmt_size, theme_for_mode,
+    FILTER_EXTS, classify_file, fmt_size, theme_for_mode,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class ResultsPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("light")
+        self._t = theme_for_mode("dark")
         self._groups: List[DuplicateGroup] = []
         self._filter_key = "all"
         self._scan_mode = "files"
@@ -90,10 +90,53 @@ class ResultsPage(ft.Column):
     
     def _get_filter_btn_style(self, is_active: bool) -> ft.ButtonStyle:
         return ft.ButtonStyle(
-            bgcolor=self._t.colors.primary if is_active else self._t.colors.bg3,
-            color=self._t.colors.bg if is_active else self._t.colors.fg2,
+            bgcolor="#22D3EE" if is_active else ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            color="#0A0E14" if is_active else self._t.colors.fg2,
+            overlay_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
             shape=ft.RoundedRectangleBorder(radius=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=8),
         )
+
+    def _file_type_icon(self, extension: str) -> tuple[str, str]:
+        """Return (icon_name, accent_color) for a file extension."""
+        ext = (extension or "").lower().lstrip(".")
+        _map = {
+            # Images
+            "jpg": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "jpeg": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "png": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "gif": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "heic": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "webp": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            "raw": (ft.icons.Icons.IMAGE, "#A78BFA"),
+            # Music
+            "mp3": (ft.icons.Icons.MUSIC_NOTE, "#34D399"),
+            "flac": (ft.icons.Icons.MUSIC_NOTE, "#34D399"),
+            "wav": (ft.icons.Icons.MUSIC_NOTE, "#34D399"),
+            "aac": (ft.icons.Icons.MUSIC_NOTE, "#34D399"),
+            "m4a": (ft.icons.Icons.MUSIC_NOTE, "#34D399"),
+            # Video
+            "mp4": (ft.icons.Icons.VIDEOCAM, "#F472B6"),
+            "mkv": (ft.icons.Icons.VIDEOCAM, "#F472B6"),
+            "mov": (ft.icons.Icons.VIDEOCAM, "#F472B6"),
+            "avi": (ft.icons.Icons.VIDEOCAM, "#F472B6"),
+            # Documents
+            "pdf": (ft.icons.Icons.PICTURE_AS_PDF, "#FB923C"),
+            "doc": (ft.icons.Icons.DESCRIPTION, "#60A5FA"),
+            "docx": (ft.icons.Icons.DESCRIPTION, "#60A5FA"),
+            "xls": (ft.icons.Icons.TABLE_CHART, "#34D399"),
+            "xlsx": (ft.icons.Icons.TABLE_CHART, "#34D399"),
+            "ppt": (ft.icons.Icons.SLIDESHOW, "#FB923C"),
+            "pptx": (ft.icons.Icons.SLIDESHOW, "#FB923C"),
+            "txt": (ft.icons.Icons.ARTICLE, "#94A3B8"),
+            # Archives
+            "zip": (ft.icons.Icons.FOLDER_ZIP, "#FBBF24"),
+            "rar": (ft.icons.Icons.FOLDER_ZIP, "#FBBF24"),
+            "7z": (ft.icons.Icons.FOLDER_ZIP, "#FBBF24"),
+            "tar": (ft.icons.Icons.FOLDER_ZIP, "#FBBF24"),
+            "gz": (ft.icons.Icons.FOLDER_ZIP, "#FBBF24"),
+        }
+        return _map.get(ext, (ft.icons.Icons.INSERT_DRIVE_FILE, "#6E7681"))
 
     # ------------------------------------------------------------------
     # Build (Runs Once)
@@ -131,11 +174,15 @@ class ResultsPage(ft.Column):
 
         # Selection label and delete buttons
         self._selection_label = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
-        self._delete_btn = ft.ElevatedButton(
+        self._delete_btn = ft.OutlinedButton(
             "Move to Trash",
             icon=ft.icons.Icons.DELETE_OUTLINE,
             on_click=self._on_delete_clicked,
-            style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
+            style=ft.ButtonStyle(
+                color=t.colors.danger,
+                side=ft.BorderSide(1, t.colors.danger),
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
             visible=False,
         )
         self._permanent_btn = ft.OutlinedButton(
@@ -179,13 +226,22 @@ class ResultsPage(ft.Column):
         self._empty = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.icons.Icons.SEARCH_OFF, size=64, color=t.colors.fg_muted),
-                    ft.Text("No results yet", size=t.typography.size_lg, color=t.colors.fg2),
-                    ft.Text("Run a scan from the Home page to find duplicates.",
-                            size=t.typography.size_base, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
+                    ft.Container(
+                        content=ft.Icon(ft.icons.Icons.MANAGE_SEARCH, size=48, color="#22D3EE"),
+                        bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                        border_radius=16,
+                        padding=20,
+                    ),
+                    ft.Text("No duplicates found yet", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                    ft.Text(
+                        "Head to Home and run a scan to see results here.",
+                        size=t.typography.size_base,
+                        color=t.colors.fg_muted,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=t.spacing.md,
+                spacing=t.spacing.lg,
             ),
             expand=True,
             alignment=ft.Alignment(0.5, 0.5),
@@ -434,30 +490,33 @@ class ResultsPage(ft.Column):
     def _build_group_card(self, group: DuplicateGroup) -> ft.Container:
         t = self._t
         sample = group.files[0].path if group.files else ""
-        name = Path(str(sample)).name if sample else "Group"
-        folder = str(Path(str(sample)).parent) if sample else ""
-        
-        # We need to capture the group reference correctly in the closure
-        # Use a local function to avoid lambda capture issues in loops if expanded later
-        group_id = group.group_id
-        
+        sample_path = Path(str(sample))
+        name = sample_path.name if sample else "Group"
+        parent = str(sample_path.parent) if sample else ""
+        ext = sample_path.suffix if sample else ""
+        icon_name, accent = self._file_type_icon(ext)
+
         file_checks = ft.Column(
             [
-                ft.Row(
-                    [
-                        ft.Checkbox(
-                            label=str(Path(str(f.path)).name),
-                            value=str(f.path) in self._selected_paths,
-                            on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
-                            label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
-                        ),
-                        ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
-                    ],
-                    spacing=t.spacing.sm,
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Checkbox(
+                                label=str(Path(str(f.path)).name),
+                                value=str(f.path) in self._selected_paths,
+                                on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
+                                label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2),
+                            ),
+                            ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
+                        ],
+                        spacing=t.spacing.sm,
+                    ),
+                    padding=ft.padding.only(left=t.spacing.xl, top=2, bottom=2),
+                    border=ft.border.only(left=ft.BorderSide(2, ft.Colors.with_opacity(0.3, accent))),
                 )
                 for f in group.files
             ],
-            spacing=0,
+            spacing=2,
             visible=False,
         )
 
@@ -468,38 +527,58 @@ class ResultsPage(ft.Column):
             ResultsPage._safe_update(expand_btn)
             self._safe_update(self)
 
-        expand_btn = ft.TextButton("Expand", on_click=_toggle_expand)
+        expand_btn = ft.TextButton(
+            "Expand",
+            on_click=_toggle_expand,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+        )
 
         return ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.icons.Icons.CONTENT_COPY, color=t.colors.primary),
+                            ft.Container(
+                                content=ft.Icon(icon_name, size=18, color=accent),
+                                bgcolor=ft.Colors.with_opacity(0.12, accent),
+                                border_radius=8,
+                                padding=8,
+                            ),
                             ft.Column(
                                 [
-                                    ft.Text(name, weight=ft.FontWeight.W_600, color=t.colors.fg, size=t.typography.size_md),
-                                    ft.Text(f"{len(group.files)} files · {fmt_size(group.total_size)} · {folder}",
-                                            color=t.colors.fg2, size=t.typography.size_sm),
+                                    ft.Text(name, weight=ft.FontWeight.W_600, color=t.colors.fg, size=t.typography.size_md, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
+                                    ft.Row(
+                                        [
+                                            ft.Text(f"{len(group.files)} files", size=t.typography.size_xs, color=t.colors.fg_muted),
+                                            ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
+                                            ft.Text(fmt_size(group.total_size), size=t.typography.size_xs, color=t.colors.fg_muted),
+                                            ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
+                                            ft.Text(parent, size=t.typography.size_xs, color=t.colors.fg_muted, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+                                        ],
+                                        spacing=4,
+                                    ),
                                 ],
-                                spacing=2,
+                                spacing=3,
                                 expand=True,
                             ),
-                            ft.Text(fmt_size(group.reclaimable), weight=ft.FontWeight.BOLD, color=t.colors.primary, size=t.typography.size_md),
+                            ft.Text(fmt_size(group.reclaimable), weight=ft.FontWeight.BOLD, color="#22D3EE", size=t.typography.size_md),
                             expand_btn,
                             ft.IconButton(
                                 icon=ft.icons.Icons.VISIBILITY,
                                 tooltip="Review group",
+                                icon_color=t.colors.fg_muted,
                                 on_click=lambda e, g=group: self._open_group(g),
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     file_checks,
                 ],
                 spacing=t.spacing.xs,
             ),
             padding=t.spacing.md,
+            ink=True,
             **self._get_glass_style(0.06),
         )
 

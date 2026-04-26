@@ -18,8 +18,9 @@ class PalettePreset:
     """If true, ``ThemeMode.DARK`` and dark glass tokens are used."""
 
 
-# Thirteen curated presets (name + seed + light/dark shell).
+# Fourteen curated presets (name + seed + light/dark shell).
 PRESET_THEMES: Tuple[PalettePreset, ...] = (
+    PalettePreset("cerebro", "Cerebro", "#22D3EE", True),
     PalettePreset("arctic", "Arctic", "#38BDF8", False),
     PalettePreset("blossom", "Blossom", "#F472B6", False),
     PalettePreset("dracula", "Dracula", "#BD93F9", True),

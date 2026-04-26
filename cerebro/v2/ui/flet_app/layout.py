@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
+from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -48,6 +49,33 @@ class AppLayout(ft.Row):
             for r in ROUTES
         ]
 
+        _t = theme_for_mode("dark")
+
+        # App wordmark shown at the top of the rail
+        _wordmark = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, color="#22D3EE", size=22),
+                    ft.Text(
+                        "CEREBRO",
+                        size=8,
+                        weight=ft.FontWeight.BOLD,
+                        color="#22D3EE",
+                        letter_spacing=2,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2,
+            ),
+            padding=ft.padding.only(top=8, bottom=4),
+        )
+
+        # Version badge pinned at the bottom of the rail
+        _version_badge = ft.Container(
+            content=ft.Text("v2.0", size=8, color="#6E7681"),
+            padding=ft.padding.only(bottom=8),
+        )
+
         self._nav = ft.NavigationRail(
             selected_index=0,
             destinations=nav_destinations,
@@ -55,12 +83,16 @@ class AppLayout(ft.Row):
             min_width=72,
             min_extended_width=200,
             label_type=ft.NavigationRailLabelType.ALL,
-            bgcolor=ft.Colors.SURFACE,
+            bgcolor="#080C11",
+            indicator_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
+            indicator_shape=ft.RoundedRectangleBorder(radius=8),
+            leading=_wordmark,
+            trailing=_version_badge,
         )
 
         self.controls = [
             self._nav,
-            ft.VerticalDivider(width=1),
+            ft.VerticalDivider(width=1, color="#30363D", thickness=1),
             self._content_host,
         ]
 

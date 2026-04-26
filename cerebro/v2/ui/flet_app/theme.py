@@ -50,37 +50,37 @@ class ColorTokens:
 
 @dataclass(frozen=True)
 class DarkColorTokens:
-    """Dark-mode color palette."""
+    """Dark-mode color palette — Cerebro navy/cyan brand."""
 
-    primary: str = "#60A5FA"
-    primary_hover: str = "#93C5FD"
+    primary: str = "#22D3EE"        # cyan accent (was #60A5FA blue)
+    primary_hover: str = "#06B6D4"  # cyan hover (was #93C5FD)
     danger: str = "#F87171"
     danger_hover: str = "#FCA5A5"
     success: str = "#34D399"
     warning: str = "#FBBF24"
 
-    bg: str = "#0F172A"
-    bg2: str = "#1E293B"
-    bg3: str = "#334155"
+    bg: str = "#0A0E14"             # deep navy (was #0F172A slate)
+    bg2: str = "#0D1117"            # panel bg (was #1E293B)
+    bg3: str = "#161B22"            # card bg (was #334155)
 
-    fg: str = "#F1F5F9"
-    fg2: str = "#CBD5E1"
-    fg_muted: str = "#64748B"
+    fg: str = "#E6EDF3"             # primary text (was #F1F5F9)
+    fg2: str = "#8B949E"            # secondary text (was #CBD5E1)
+    fg_muted: str = "#6E7681"       # muted text (was #64748B)
 
-    border: str = "#334155"
-    border_strong: str = "#475569"
-    border3: str = "#1E293B"
+    border: str = "#30363D"         # panel borders (was #334155)
+    border_strong: str = "#3B434D"  # highlighted borders (was #475569)
+    border3: str = "#21262D"        # subtle borders (was #1E293B)
 
-    nav_bg: str = "#020617"
-    nav_bar: str = "#0F172A"
+    nav_bg: str = "#080C11"         # sidebar bg (was #020617)
+    nav_bar: str = "#0D1117"        # nav bar (was #0F172A)
 
-    row_sel: str = "#1E3A5F"
-    row_sel_fg: str = "#F1F5F9"
+    row_sel: str = "#1C2333"        # selected row bg (was #1E3A5F)
+    row_sel_fg: str = "#E6EDF3"     # selected row text (was #F1F5F9)
 
-    glass_bg: str = "#1E293B"
-    glass_border: str = "#334155"
+    glass_bg: str = "#0D1117"       # glass panel (was #1E293B)
+    glass_border: str = "#30363D"   # glass border (was #334155)
 
-    accent: str = "#60A5FA"
+    accent: str = "#22D3EE"         # accent alias (was #60A5FA)
 
 
 @dataclass(frozen=True)
@@ -119,8 +119,14 @@ class ThemeTokens:
     spacing: Spacing = field(default_factory=Spacing)
     typography: Typography = field(default_factory=Typography)
     border_radius: int = 8
+    border_radius_sm: int = 4
+    border_radius_lg: int = 12
+    border_radius_xl: int = 20
     shadow_blur: float = 8.0
     shadow_offset_y: float = 2.0
+    duration_fast: int = 150
+    duration_normal: int = 300
+    duration_slow: int = 500
 
 
 def light_theme() -> ThemeTokens:
@@ -209,10 +215,11 @@ def glass_container(
     padding: int = 16,
     border_radius: int | None = None,
     expand: bool = False,
+    blur: int = 0,
 ) -> ft.Container:
     """Create a glassmorphism-styled container."""
     br = border_radius or t.border_radius
-    return ft.Container(
+    container_kwargs: dict = dict(
         content=content,
         padding=padding,
         border_radius=br,
@@ -226,3 +233,6 @@ def glass_container(
         ),
         expand=expand,
     )
+    if blur > 0:
+        container_kwargs["blur"] = ft.Blur(blur, blur)
+    return ft.Container(**container_kwargs)

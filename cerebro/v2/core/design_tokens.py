@@ -72,17 +72,6 @@ class Colors:
     WARNING_HOVER = Color.from_hex("#9A6700")   # Warning hover
     INFO = Color.from_hex("#58A6FF")            # Information
 
-    # CustomTkinter compatible string values
-    CTK_BG_PRIMARY = "#0A0E14"
-    CTK_BG_SECONDARY = "#0D1117"
-    CTK_BG_TERTIARY = "#161B22"
-    CTK_ACCENT = "#22D3EE"
-    CTK_ACCENT_HOVER = "#06B6D4"
-    CTK_TEXT_PRIMARY = "#E6EDF3"
-    CTK_TEXT_SECONDARY = "#8B949E"
-    CTK_DANGER = "#F85149"
-    CTK_SUCCESS = "#3FB950"
-    CTK_WARNING = "#D29922"
 
 
 class Spacing:
@@ -245,11 +234,6 @@ class Tokens:
 
 
 # Helper functions
-def hex_to_ctk_color(hex_color: str) -> str:
-    """Convert hex color to CustomTkinter color string."""
-    return hex_color
-
-
 def lighten_color(hex_color: str, percent: int = 10) -> str:
     """Lighten a hex color by a percentage."""
     color = Color.from_hex(hex_color)

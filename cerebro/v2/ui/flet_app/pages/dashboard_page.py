@@ -64,7 +64,7 @@ class DashboardPage(ft.Column):
         self._recent_rows: list[dict] = []
         
         # Initial Theme Load
-        self._t = theme_for_mode("light") 
+        self._t = theme_for_mode("dark")
         
         # UI References (to update without rebuilding)
         self._hero: ft.Container
@@ -76,6 +76,7 @@ class DashboardPage(ft.Column):
         self._quick_paths_row: ft.Row
         self._quick_add_wrap: ft.Column
         self._actions: ft.Row
+        self._start_btn: ft.FilledButton
         self._stop_btn: ft.OutlinedButton
         self._progress: ft.ProgressBar
         self._progress_label: ft.Text
@@ -100,30 +101,23 @@ class DashboardPage(ft.Column):
         t = self._t
         s = t.spacing
 
-        # Hero section
+        # Compact greeting strip (replaces wasteful hero)
         self._hero = ft.Container(
-            content=ft.Column(
+            content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.SEARCH, size=48, color=t.colors.primary),
+                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=20, color="#22D3EE"),
                     ft.Text(
-                        "Cerebro Duplicate Finder",
-                        size=t.typography.size_xxl,
-                        weight=ft.FontWeight.BOLD,
-                        color=t.colors.fg,
-                    ),
-                    ft.Text(
-                        "Find and remove duplicate files to reclaim disk space.",
+                        "Welcome back — find and reclaim wasted disk space.",
                         size=t.typography.size_md,
                         color=t.colors.fg2,
-                        text_align=ft.TextAlign.CENTER,
+                        expand=True,
                     ),
                 ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=s.sm,
+                spacing=s.md,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=t.spacing.xxl,
-            alignment=ft.Alignment(0.5, 0.5),
-            **self._get_glass_style(opacity=0.06),
+            padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+            **self._get_glass_style(opacity=0.04),
         )
 
         # Stat cards
@@ -159,7 +153,7 @@ class DashboardPage(ft.Column):
         )
         self._refresh_quick_add_bar()
 
-        # Action buttons
+        # Action buttons — clear hierarchy: primary CTA, secondary, tertiary
         self._stop_btn = ft.OutlinedButton(
             "Stop Scan",
             icon=ft.icons.Icons.STOP,
@@ -167,23 +161,37 @@ class DashboardPage(ft.Column):
             visible=False,
             style=ft.ButtonStyle(color=t.colors.danger),
         )
+        self._start_btn = ft.FilledButton(
+            "Start Scan",
+            icon=ft.icons.Icons.PLAY_ARROW,
+            on_click=self._start_scan,
+            style=ft.ButtonStyle(
+                bgcolor="#22D3EE",
+                color="#0A0E14",
+                overlay_color=ft.Colors.with_opacity(0.2, "#22D3EE"),
+                shape=ft.RoundedRectangleBorder(radius=10),
+                padding=ft.padding.symmetric(horizontal=24, vertical=12),
+            ),
+        )
         self._actions = ft.Row(
             [
                 ft.OutlinedButton(
                     "Browse Folders",
                     icon=ft.icons.Icons.FOLDER_OPEN,
                     on_click=self._browse_folders,
+                    style=ft.ButtonStyle(
+                        color=t.colors.fg2,
+                        side=ft.BorderSide(1, t.colors.border),
+                        shape=ft.RoundedRectangleBorder(radius=10),
+                        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+                    ),
                 ),
-                ft.FilledButton(
-                    "Start Scan",
-                    icon=ft.icons.Icons.PLAY_ARROW,
-                    on_click=self._start_scan,
-                    style=self._get_button_style(),
-                ),
-                ft.OutlinedButton(
+                self._start_btn,
+                ft.TextButton(
                     "Open Last Session",
-                    icon=ft.icons.Icons.RESTORE,
+                    icon=ft.icons.Icons.HISTORY,
                     on_click=self._open_last_session,
+                    style=ft.ButtonStyle(color=t.colors.fg_muted),
                 ),
                 self._stop_btn,
             ],
@@ -302,24 +310,31 @@ class DashboardPage(ft.Column):
     def _update_stats_ui(self):
         t = self._t
         cards = [
-            ("Scans Run", f"{self._stats.get('scans', 0):,}"),
-            ("Duplicates Found", f"{self._stats.get('dupes', 0):,}"),
-            ("Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
+            (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", f"{self._stats.get('scans', 0):,}"),
+            (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", f"{self._stats.get('dupes', 0):,}"),
+            (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
         ]
         self._stats_row.controls = [
             ft.Container(
                 content=ft.Column(
                     [
+                        ft.Container(
+                            content=ft.Icon(icon, size=20, color=accent),
+                            bgcolor=ft.Colors.with_opacity(0.12, accent),
+                            border_radius=8,
+                            padding=8,
+                        ),
+                        ft.Text(value, size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
                         ft.Text(label, size=t.typography.size_sm, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
-                        ft.Text(value, size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=4,
+                    spacing=6,
                 ),
-                padding=ft.padding.symmetric(horizontal=24, vertical=16),
+                padding=ft.padding.symmetric(horizontal=28, vertical=18),
                 **self._get_glass_style(0.06),
+                ink=True,
             )
-            for label, value in cards
+            for icon, accent, label, value in cards
         ]
         if self._is_mounted():
             self._stats_row.update()
@@ -343,37 +358,73 @@ class DashboardPage(ft.Column):
 
     def _update_recent_ui(self):
         t = self._t
+        _mode_colors = {
+            "files": "#22D3EE", "photos": "#A78BFA", "videos": "#F472B6",
+            "music": "#34D399", "large_files": "#FBBF24", "empty_folders": "#FB923C",
+        }
         if not self._recent_rows:
-            self._recent_list.controls = [
-                ft.Text("No recent scans", size=t.typography.size_sm, color=t.colors.fg_muted)
-            ]
-        else:
             self._recent_list.controls = [
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Icon(ft.icons.Icons.HISTORY, color=t.colors.primary, size=18),
-                            ft.Column(
-                                [
-                                    ft.Text(row.get("date", ""), size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg),
-                                    ft.Text(
-                                        f"{row.get('groups_found', 0)} groups · {fmt_size(row.get('bytes_reclaimable', 0))} · {row.get('mode', 'files')}",
-                                        size=t.typography.size_xs,
-                                        color=t.colors.fg2,
-                                    ),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
+                            ft.Icon(ft.icons.Icons.INBOX, size=28, color=t.colors.fg_muted),
+                            ft.Text("No scans yet — start your first scan above!", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
                         ],
                         spacing=t.spacing.sm,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=t.spacing.md,
-                    **self._get_glass_style(0.04),
+                    padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.lg),
                 )
-                for row in self._recent_rows
             ]
+        else:
+            items = []
+            for row in self._recent_rows:
+                mode = row.get("mode", "files")
+                mode_color = _mode_colors.get(mode, "#22D3EE")
+                groups = row.get("groups_found", 0)
+                size = fmt_size(row.get("bytes_reclaimable", 0))
+                date = row.get("date", "")
+                items.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Icon(ft.icons.Icons.HISTORY, size=16, color=mode_color),
+                                    bgcolor=ft.Colors.with_opacity(0.12, mode_color),
+                                    border_radius=6,
+                                    padding=6,
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Text(date, size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                                        ft.Row(
+                                            [
+                                                ft.Container(
+                                                    content=ft.Text(mode, size=8, color=mode_color, weight=ft.FontWeight.W_600),
+                                                    bgcolor=ft.Colors.with_opacity(0.12, mode_color),
+                                                    border_radius=4,
+                                                    padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                                                ),
+                                                ft.Text(f"{groups:,} groups", size=t.typography.size_xs, color=t.colors.fg2),
+                                                ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
+                                                ft.Text(size, size=t.typography.size_xs, color="#34D399", weight=ft.FontWeight.W_600),
+                                            ],
+                                            spacing=6,
+                                        ),
+                                    ],
+                                    spacing=3,
+                                    expand=True,
+                                ),
+                            ],
+                            spacing=t.spacing.sm,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
+                        **self._get_glass_style(0.04),
+                        ink=True,
+                    )
+                )
+            self._recent_list.controls = items
         if self._is_mounted():
             self._recent_list.update()
 
@@ -456,7 +507,18 @@ class DashboardPage(ft.Column):
         t = self._t
         if not self._folders:
             self._folder_chips_row.controls = [
-                ft.Text("No folders selected", color=t.colors.fg_muted, size=t.typography.size_base)
+                ft.Row(
+                    [
+                        ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=16, color=t.colors.fg_muted),
+                        ft.Text(
+                            "No folders selected — browse or quick-add below",
+                            color=t.colors.fg_muted,
+                            size=t.typography.size_base,
+                            italic=True,
+                        ),
+                    ],
+                    spacing=6,
+                )
             ]
         else:
             self._folder_chips_row.controls = [
