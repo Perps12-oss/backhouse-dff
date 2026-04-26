@@ -14,7 +14,7 @@ from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import (
-    FILTER_EXTS, EXT_ALL_KNOWN, ThemeTokens, classify_file, fmt_size, theme_for_mode,
+    FILTER_EXTS, EXT_ALL_KNOWN, fmt_size, theme_for_mode,
 )
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ class ReviewPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("light")
+        self._t = theme_for_mode("dark")
         self._groups: List[DuplicateGroup] = []
         self._group_files: Dict[int, List[DuplicateFile]] = {}
         self._filter_key = "all"
@@ -55,7 +55,8 @@ class ReviewPage(ft.Column):
         self._compare_a: Optional[DuplicateFile] = None
         self._compare_b: Optional[DuplicateFile] = None
         self._smart_rule = "keep_largest"
-        
+        self._grid_extent = 200  # tile max_extent: S=140 M=200 L=260
+
         # UI References
         self._title_lbl: ft.Text
         self._summary_lbl: ft.Text
@@ -63,6 +64,7 @@ class ReviewPage(ft.Column):
         self._smart_dropdown: ft.Dropdown
         self._smart_apply: ft.ElevatedButton
         self._smart_row: ft.Row
+        self._zoom_row: ft.Row
         self._cmp_title: ft.Text
         self._cmp_smart_dropdown: ft.Dropdown
         self._cmp_smart_apply: ft.ElevatedButton
@@ -95,9 +97,32 @@ class ReviewPage(ft.Column):
 
     def _get_filter_btn_style(self, is_active: bool) -> ft.ButtonStyle:
         return ft.ButtonStyle(
-            bgcolor=self._t.colors.primary if is_active else self._t.colors.bg3,
-            color=self._t.colors.bg if is_active else self._t.colors.fg2,
+            bgcolor="#22D3EE" if is_active else ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            color="#0A0E14" if is_active else self._t.colors.fg2,
+            overlay_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
             shape=ft.RoundedRectangleBorder(radius=8),
+            padding=ft.padding.symmetric(horizontal=14, vertical=8),
+        )
+
+    def _build_zoom_row(self) -> ft.Row:
+        """Three-level zoom control for the grid density."""
+        def _set_size(extent: int) -> None:
+            self._grid_extent = extent
+            self._grid.max_extent = extent
+            ReviewPage._safe_update(self._grid)
+
+        return ft.Row(
+            [
+                ft.Text("Size:", size=9, color=self._t.colors.fg_muted),
+                ft.TextButton("S", on_click=lambda e: _set_size(140),
+                    style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
+                ft.TextButton("M", on_click=lambda e: _set_size(200),
+                    style=ft.ButtonStyle(color="#22D3EE", padding=ft.padding.symmetric(horizontal=6, vertical=2))),
+                ft.TextButton("L", on_click=lambda e: _set_size(260),
+                    style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
+            ],
+            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
     # ------------------------------------------------------------------
@@ -139,8 +164,9 @@ class ReviewPage(ft.Column):
                 shape=ft.RoundedRectangleBorder(radius=8),
             ),
         )
+        self._zoom_row = self._build_zoom_row()
         self._smart_row = ft.Row(
-            [self._smart_dropdown, self._smart_apply],
+            [self._smart_dropdown, self._smart_apply, self._zoom_row],
             spacing=t.spacing.sm,
             visible=False,
         )
@@ -163,10 +189,14 @@ class ReviewPage(ft.Column):
                 shape=ft.RoundedRectangleBorder(radius=8),
             ),
         )
-        self._delete_btn = ft.ElevatedButton(
+        self._delete_btn = ft.OutlinedButton(
             "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
             on_click=lambda e: self._delete_compare_side("b"),
-            style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
+            style=ft.ButtonStyle(
+                color=t.colors.danger,
+                side=ft.BorderSide(width=1, color=t.colors.danger),
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
         )
         self._keep_btn = ft.OutlinedButton(
             "Keep A", icon=ft.icons.Icons.CHECK,
@@ -215,18 +245,32 @@ class ReviewPage(ft.Column):
         self._empty_state = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.icons.Icons.SEARCH, size=64, color=t.colors.fg_muted),
-                    ft.Text("No scan results yet", size=t.typography.size_lg, color=t.colors.fg2),
-                    ft.Text("Run a scan, then come here for visual triage.", size=t.typography.size_base,
-                            color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
-                    ft.ElevatedButton(
+                    ft.Container(
+                        content=ft.Icon(ft.icons.Icons.GRID_VIEW, size=44, color="#22D3EE"),
+                        bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                        border_radius=16,
+                        padding=20,
+                    ),
+                    ft.Text("Nothing to review yet", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                    ft.Text(
+                        "Run a scan first, then come here to visually triage duplicates.",
+                        size=t.typography.size_base,
+                        color=t.colors.fg_muted,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.FilledButton(
                         "Go to Results",
+                        icon=ft.icons.Icons.LIST_ALT,
                         on_click=lambda e: self._bridge.navigate("duplicates"),
-                        style=ft.ButtonStyle(bgcolor=t.colors.primary, color=t.colors.bg),
+                        style=ft.ButtonStyle(
+                            bgcolor="#22D3EE",
+                            color="#0A0E14",
+                            shape=ft.RoundedRectangleBorder(radius=8),
+                        ),
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=t.spacing.md,
+                spacing=t.spacing.lg,
             ),
             expand=True,
             alignment=ft.Alignment(0.5, 0.5),
@@ -237,7 +281,7 @@ class ReviewPage(ft.Column):
         self._grid = ft.GridView(
             expand=True,
             runs_count=5,
-            max_extent=180,
+            max_extent=self._grid_extent,
             child_aspect_ratio=1.0,
             spacing=t.spacing.sm,
             run_spacing=t.spacing.sm,
@@ -250,7 +294,7 @@ class ReviewPage(ft.Column):
         self._compare_view = ft.Row(
             [
                 self._compare_panel_a,
-                ft.VerticalDivider(width=1),
+                ft.VerticalDivider(width=1, color="#30363D", thickness=1),
                 self._compare_panel_b,
             ],
             expand=True,
@@ -405,26 +449,49 @@ class ReviewPage(ft.Column):
         t = self._t
         p = Path(str(f.path))
         name = p.name
-        thumb = self._thumb_widget(p, 72)
-        
-        # Define hover effect locally
+        thumb = self._thumb_widget(p, 120)
+
+        info_bar = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(name, size=t.typography.size_xs, color="#FFFFFF", overflow=ft.TextOverflow.ELLIPSIS, max_lines=1, text_align=ft.TextAlign.CENTER),
+                    ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=ft.Colors.with_opacity(0.75, "#FFFFFF")),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
+            padding=ft.padding.symmetric(horizontal=6, vertical=4),
+            animate_opacity=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
+            opacity=0,
+        )
+
+        stack = ft.Stack(
+            [
+                ft.Container(content=thumb, expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE),
+                ft.Column(
+                    [ft.Container(expand=True), info_bar],
+                    expand=True,
+                    spacing=0,
+                ),
+            ],
+            expand=True,
+        )
+
         def _hover(e: ft.ControlEvent) -> None:
             enter = e.data == "true"
-            tile.bgcolor = t.colors.bg3 if enter else ft.Colors.with_opacity(0.06, t.colors.bg)
+            info_bar.opacity = 1 if enter else 0
+            tile.border = ft.border.all(2, "#22D3EE") if enter else ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE))
+            ReviewPage._safe_update(info_bar)
             ReviewPage._safe_update(tile)
 
         tile = ft.Container(
-            content=ft.Column(
-                [
-                    thumb,
-                    ft.Text(name, size=t.typography.size_xs, color=t.colors.fg2, overflow=ft.TextOverflow.ELLIPSIS, max_lines=1, text_align=ft.TextAlign.CENTER),
-                    ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=t.colors.fg_muted),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=4,
-            ),
-            padding=t.spacing.sm,
-            **self._get_glass_style(0.06),
+            content=stack,
+            border_radius=ft.border_radius.all(10),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            ink=True,
             on_click=lambda e, file=f: self._on_tile_clicked(file),
             on_hover=_hover,
         )
@@ -545,6 +612,7 @@ class ReviewPage(ft.Column):
 
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
         t = self._t
+        label_color = "#22D3EE" if label == "A" else "#A78BFA"
         if not f:
             return ft.Column(
                 [ft.Text(f"Side {label}: No peer file", color=t.colors.fg_muted)],
@@ -554,14 +622,38 @@ class ReviewPage(ft.Column):
             )
         p = Path(str(f.path))
         name = p.name
-        thumb = self._thumb_widget(p, 120)
+        thumb = self._thumb_widget(p, 200)
+        label_badge = ft.Container(
+            content=ft.Text(
+                f"Side {label}",
+                size=t.typography.size_sm,
+                weight=ft.FontWeight.BOLD,
+                color=label_color,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.12, label_color),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, label_color)),
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+        )
+        size_badge = ft.Container(
+            content=ft.Text(
+                fmt_size(f.size),
+                size=t.typography.size_xs,
+                weight=ft.FontWeight.W_600,
+                color="#4ADE80",
+            ),
+            bgcolor=ft.Colors.with_opacity(0.10, "#4ADE80"),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#4ADE80")),
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+        )
         return ft.Column(
             [
-                ft.Text(f"Side {label}", size=t.typography.size_sm, weight=ft.FontWeight.BOLD, color=t.colors.primary),
+                label_badge,
                 thumb,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
-                ft.Text(fmt_size(f.size), size=t.typography.size_sm, color=t.colors.fg2),
-                ft.Text(str(Path(str(f.path)).parent), size=t.typography.size_xs, color=t.colors.fg_muted, overflow=ft.TextOverflow.ELLIPSIS),
+                size_badge,
+                ft.Text(str(p.parent), size=t.typography.size_xs, color=t.colors.fg_muted, overflow=ft.TextOverflow.ELLIPSIS),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
