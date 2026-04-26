@@ -148,13 +148,13 @@ def theme_for_mode(mode: str) -> ThemeTokens:
     return light_theme()
 
 
-# Well-known scan-mode definitions (icons are Unicode for cross-platform).
+# Well-known scan-mode definitions used by the dashboard card grid.
 SCAN_MODES: list[Dict[str, str]] = [
-    {"key": "files", "icon": "description", "label": "Files"},
-    {"key": "empty_folders", "icon": "folder", "label": "Folders"},
-    {"key": "photos", "icon": "image", "label": "Compare"},
-    {"key": "music", "icon": "music_note", "label": "Music"},
-    {"key": "large_files", "icon": "bar_chart", "label": "Unique"},
+    {"key": "files",          "icon": "description",  "label": "Full Scan",      "desc": "All duplicate files"},
+    {"key": "photos",         "icon": "image",         "label": "Scan Pictures",  "desc": "Exact image matches"},
+    {"key": "similar_photos", "icon": "image_search",  "label": "Similar Photos", "desc": "Near-duplicate images"},
+    {"key": "videos",         "icon": "videocam",      "label": "Scan Videos",    "desc": "Duplicate video files"},
+    {"key": "music",          "icon": "music_note",    "label": "Scan Audio",     "desc": "Duplicate audio files"},
 ]
 
 # Extension filter buckets used by results and review pages.

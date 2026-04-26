@@ -68,6 +68,7 @@ class DashboardPage(ft.Column):
         # UI References (to update without rebuilding)
         self._hero: ft.Container
         self._stats_row: ft.Row
+        self._mode_label: ft.Text
         self._mode_row: ft.Row
         self._folder_chips_row: ft.Row
         self._folder_container: ft.Container
@@ -132,7 +133,13 @@ class DashboardPage(ft.Column):
         self._update_stats_ui()
 
         # Scan mode selector
-        self._mode_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=s.sm)
+        self._mode_label = ft.Text(
+            "Choose scan type",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_500,
+            color=t.colors.fg_muted,
+        )
+        self._mode_row = ft.Row([], wrap=True, spacing=s.md, run_spacing=s.md)
         self._update_modes_ui()
 
         # Folder list
@@ -245,6 +252,8 @@ class DashboardPage(ft.Column):
         self.controls = [
             self._hero,
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
+            ft.Container(content=self._mode_label, padding=ft.padding.only(left=s.md, top=s.sm)),
+            ft.Container(content=self._mode_row, padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm)),
             self._folder_container,
             ft.Container(
                 content=self._quick_add_wrap,
@@ -365,20 +374,77 @@ class DashboardPage(ft.Column):
         ]
         DashboardPage._safe_update(self._stats_row)
 
-    def _update_modes_ui(self):
-        self._mode_row.controls.clear()
+    def _update_modes_ui(self) -> None:
+        t = self._t
+        s = t.spacing
+        TEAL = "#00BFA5"
+
+        cards = []
         for m in SCAN_MODES:
             is_active = m["key"] == self._selected_mode
-            btn = ft.ElevatedButton(
-                m["label"],
-                icon=m["icon"],
-                data=m["key"],
-                on_click=lambda e, k=m["key"]: self._select_mode(k),
-                style=self._get_button_style(
-                    self._t.colors.primary if is_active else None
-                ),
+
+            icon_bg = ft.Colors.with_opacity(0.20 if is_active else 0.08, TEAL if is_active else ft.Colors.WHITE)
+            icon_color = TEAL if is_active else t.colors.fg_muted
+            label_color = t.colors.fg if is_active else t.colors.fg2
+            border_color = TEAL if is_active else ft.Colors.with_opacity(0.12, ft.Colors.WHITE)
+            bg_color = ft.Colors.with_opacity(0.12 if is_active else 0.04, TEAL if is_active else ft.Colors.WHITE)
+
+            card_content = ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Icon(m["icon"], size=20, color=icon_color),
+                                bgcolor=icon_bg,
+                                border_radius=8,
+                                padding=8,
+                            ),
+                            ft.Container(expand=True),
+                            ft.Icon(
+                                ft.icons.Icons.RADIO_BUTTON_CHECKED if is_active
+                                else ft.icons.Icons.RADIO_BUTTON_UNCHECKED,
+                                size=14,
+                                color=TEAL if is_active else ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                    ),
+                    ft.Text(
+                        m["label"],
+                        size=t.typography.size_md,
+                        weight=ft.FontWeight.W_600,
+                        color=label_color,
+                    ),
+                    ft.Text(
+                        m.get("desc", ""),
+                        size=t.typography.size_xs,
+                        color=t.colors.fg_muted,
+                    ),
+                ],
+                spacing=s.sm,
+                tight=True,
             )
-            self._mode_row.controls.append(btn)
+
+            card_kwargs: dict = dict(
+                content=card_content,
+                width=160,
+                padding=ft.padding.all(s.md),
+                border=ft.border.all(2 if is_active else 1, border_color),
+                border_radius=12,
+                bgcolor=bg_color,
+                ink=True,
+                on_click=lambda e, k=m["key"]: self._select_mode(k),
+            )
+            if is_active:
+                card_kwargs["shadow"] = ft.BoxShadow(
+                    blur_radius=16,
+                    spread_radius=0,
+                    color=ft.Colors.with_opacity(0.28, TEAL),
+                    offset=ft.Offset(0, 2),
+                )
+            cards.append(ft.Container(**card_kwargs))
+
+        self._mode_row.controls = cards
         DashboardPage._safe_update(self._mode_row)
 
     def _open_last_session(self, e=None):
@@ -702,6 +768,7 @@ class DashboardPage(ft.Column):
         self._folder_container.border = self._get_glass_style(0.04).get('border')
 
         # Refresh text colors and stats to match new theme
+        self._mode_label.color = self._t.colors.fg_muted
         self._update_stats_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
