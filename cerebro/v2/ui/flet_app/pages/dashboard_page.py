@@ -61,8 +61,6 @@ class DashboardPage(ft.Column):
         self._folders: list[Path] = []  # Enforce Path objects
         self._selected_mode = "files"
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
-        self._recent_rows: list[dict] = []
-        
         # Initial Theme Load
         self._t = theme_for_mode("dark")
         
@@ -83,10 +81,6 @@ class DashboardPage(ft.Column):
         self._progress_label: ft.Text
         self._progress_detail: ft.Text
         self._status: ft.Text
-        self._recent_title: ft.Text
-        self._recent_list: ft.ListView
-        self._recent_container: ft.Container
-
         self._build_ui()
 
     def _is_mounted(self) -> bool:
@@ -152,6 +146,8 @@ class DashboardPage(ft.Column):
             padding=s.md,
             **self._get_glass_style(0.04),
         )
+        self._folder_container.on_click = self._browse_folders
+        self._folder_container.ink = True
         self._clear_folders_btn = ft.TextButton(
             "Clear selected",
             icon=ft.icons.Icons.CLEAR_ALL,
@@ -226,31 +222,18 @@ class DashboardPage(ft.Column):
         self._progress_label = ft.Text("", color=t.colors.fg2, size=t.typography.size_sm, visible=False)
         self._progress_detail = ft.Text("", color=t.colors.fg_muted, size=t.typography.size_xs, visible=False)
 
-        # Status text
+        # Status text (hidden initially; shown only during/after scan)
         self._status = ft.Text(
-            "Select folders and start a scan to find duplicates.",
+            "",
             color=t.colors.fg_muted,
             size=t.typography.size_base,
             text_align=ft.TextAlign.CENTER,
-        )
-
-        # Recent scans
-        self._recent_title = ft.Text("Recent Scans", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg)
-        self._recent_list = ft.ListView(expand=True, spacing=s.sm, padding=0)
-        self._recent_container = ft.Container(
-            content=ft.Column([
-                self._recent_title,
-                self._recent_list,
-            ], spacing=s.sm),
-            padding=s.lg,
-            **self._get_glass_style(0.04),
         )
 
         # Assemble
         self.controls = [
             self._hero,
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
-            ft.Container(content=self._mode_row, padding=ft.padding.only(bottom=s.lg)),
             self._folder_container,
             ft.Container(
                 content=self._quick_add_wrap,
@@ -261,7 +244,6 @@ class DashboardPage(ft.Column):
             ft.Container(content=self._progress_label, alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._progress_detail, alignment=ft.Alignment(0.5, 0.5)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
-            self._recent_container,
         ]
         
         # Initial data fetch
@@ -321,16 +303,10 @@ class DashboardPage(ft.Column):
             if stats:
                 self._stats = stats
             
-            recent = self._bridge.get_recent_scans(limit=5)
-            if recent:
-                self._recent_rows = recent
-                
         except Exception as e:
             _log.error("Failed to fetch dashboard data", exc_info=True)
-            # Optionally show user feedback here
-        
+
         self._update_stats_ui()
-        self._update_recent_ui()
 
     def _update_stats_ui(self):
         t = self._t
@@ -340,24 +316,28 @@ class DashboardPage(ft.Column):
             (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
         ]
         self._stats_row.controls = [
-            ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Container(
-                            content=ft.Icon(icon, size=20, color=accent),
-                            bgcolor=ft.Colors.with_opacity(0.12, accent),
-                            border_radius=8,
-                            padding=8,
-                        ),
-                        ft.Text(value, size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
-                        ft.Text(label, size=t.typography.size_sm, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=6,
+            ft.GestureDetector(
+                content=ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                content=ft.Icon(icon, size=20, color=accent),
+                                bgcolor=ft.Colors.with_opacity(0.12, accent),
+                                border_radius=8,
+                                padding=8,
+                            ),
+                            ft.Text(value, size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg, text_align=ft.TextAlign.CENTER),
+                            ft.Text(label, size=t.typography.size_sm, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=6,
+                    ),
+                    padding=ft.padding.symmetric(horizontal=28, vertical=18),
+                    **self._get_glass_style(0.06),
+                    ink=True,
                 ),
-                padding=ft.padding.symmetric(horizontal=28, vertical=18),
-                **self._get_glass_style(0.06),
-                ink=True,
+                on_tap=lambda _e: self._bridge.navigate("history"),
+                mouse_cursor=ft.MouseCursor.CLICK,
             )
             for icon, accent, label, value in cards
         ]
@@ -380,78 +360,6 @@ class DashboardPage(ft.Column):
             self._mode_row.controls.append(btn)
         if self._is_mounted():
             self._mode_row.update()
-
-    def _update_recent_ui(self):
-        t = self._t
-        _mode_colors = {
-            "files": "#22D3EE", "photos": "#A78BFA", "videos": "#F472B6",
-            "music": "#34D399", "large_files": "#FBBF24", "empty_folders": "#FB923C",
-        }
-        if not self._recent_rows:
-            self._recent_list.controls = [
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.icons.Icons.INBOX, size=28, color=t.colors.fg_muted),
-                            ft.Text("No scans yet — start your first scan above!", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
-                        ],
-                        spacing=t.spacing.sm,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.lg),
-                )
-            ]
-        else:
-            items = []
-            for row in self._recent_rows:
-                mode = row.get("mode", "files")
-                mode_color = _mode_colors.get(mode, "#22D3EE")
-                groups = row.get("groups_found", 0)
-                size = fmt_size(row.get("bytes_reclaimable", 0))
-                date = row.get("date", "")
-                items.append(
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Icon(ft.icons.Icons.HISTORY, size=16, color=mode_color),
-                                    bgcolor=ft.Colors.with_opacity(0.12, mode_color),
-                                    border_radius=6,
-                                    padding=6,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Text(date, size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg),
-                                        ft.Row(
-                                            [
-                                                ft.Container(
-                                                    content=ft.Text(mode, size=8, color=mode_color, weight=ft.FontWeight.W_600),
-                                                    bgcolor=ft.Colors.with_opacity(0.12, mode_color),
-                                                    border_radius=4,
-                                                    padding=ft.padding.symmetric(horizontal=6, vertical=2),
-                                                ),
-                                                ft.Text(f"{groups:,} groups", size=t.typography.size_xs, color=t.colors.fg2),
-                                                ft.Text("·", size=t.typography.size_xs, color=t.colors.fg_muted),
-                                                ft.Text(size, size=t.typography.size_xs, color="#34D399", weight=ft.FontWeight.W_600),
-                                            ],
-                                            spacing=6,
-                                        ),
-                                    ],
-                                    spacing=3,
-                                    expand=True,
-                                ),
-                            ],
-                            spacing=t.spacing.sm,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
-                        **self._get_glass_style(0.04),
-                        ink=True,
-                    )
-                )
-            self._recent_list.controls = items
-        if self._is_mounted():
-            self._recent_list.update()
 
     def _open_last_session(self, e=None):
         try:
@@ -773,16 +681,12 @@ class DashboardPage(ft.Column):
         # Re-apply styles to containers
         self._folder_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._folder_container.border = self._get_glass_style(0.04).get('border')
-        
-        self._recent_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._recent_container.border = self._get_glass_style(0.04).get('border')
-        
+
         # Refresh text colors and stats to match new theme
         self._update_stats_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
         self._refresh_quick_add_bar()
-        self._update_recent_ui()
 
         if self._is_mounted():
             self.update()

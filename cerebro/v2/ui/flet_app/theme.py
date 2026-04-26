@@ -208,6 +208,52 @@ def fmt_size(n: int) -> str:
     return f"{n / 1024 ** 3:.1f} GB"
 
 
+def build_flet_theme(mode: str, seed: str | None = None) -> ft.Theme:
+    """Build a complete ft.Theme with explicit ColorScheme for correct Material 3 contrast."""
+    if mode == "dark":
+        c = DarkColorTokens()
+        scheme = ft.ColorScheme(
+            primary=seed or c.primary,
+            on_primary="#0A0E14",
+            primary_container=ft.Colors.with_opacity(0.18, seed or c.primary),
+            on_primary_container=c.fg,
+            surface=c.bg,
+            on_surface=c.fg,
+            surface_variant=c.bg2,
+            on_surface_variant=c.fg2,
+            outline=c.border,
+            outline_variant=c.border_strong,
+            error=c.danger,
+            on_error="#0A0E14",
+            background=c.bg,
+            on_background=c.fg,
+        )
+    else:
+        c = ColorTokens()
+        scheme = ft.ColorScheme(
+            primary=seed or c.primary,
+            on_primary="#FFFFFF",
+            primary_container=ft.Colors.with_opacity(0.12, seed or c.primary),
+            on_primary_container=c.fg,
+            surface=c.bg,
+            on_surface=c.fg,
+            surface_variant=c.bg2,
+            on_surface_variant=c.fg2,
+            outline=c.border,
+            outline_variant=c.border_strong,
+            error=c.danger,
+            on_error="#FFFFFF",
+            background=c.bg,
+            on_background=c.fg,
+        )
+    return ft.Theme(
+        color_scheme_seed=None,
+        color_scheme=scheme,
+        font_family=Typography().family,
+        visual_density=ft.VisualDensity.COMFORTABLE,
+    )
+
+
 def glass_container(
     content: ft.Control,
     t: ThemeTokens,

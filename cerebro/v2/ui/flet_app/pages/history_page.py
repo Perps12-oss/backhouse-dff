@@ -28,6 +28,8 @@ class HistoryPage(ft.Column):
         
         # UI References
         self._header: ft.Container
+        self._recent_strip: ft.Column
+        self._recent_strip_container: ft.Container
         self._mode_switch: ft.SegmentedButton
         self._clear_btn: ft.OutlinedButton
         self._action_bar: ft.Row
@@ -68,6 +70,17 @@ class HistoryPage(ft.Column):
         self._header = ft.Container(
             content=ft.Text("History", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
             padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.lg),
+        )
+
+        # Recent scans strip
+        self._recent_strip = ft.Column([], spacing=4, visible=False)
+        self._recent_strip_container = ft.Container(
+            content=ft.Column([
+                ft.Text("Recent", size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg_muted),
+                self._recent_strip,
+            ], spacing=4),
+            padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.sm),
+            visible=False,
         )
 
         # Scan vs deletion (Flet 0.25+ uses TabBar+TabBarView inside Tabs; SegmentedButton fits one shared table)
@@ -135,6 +148,7 @@ class HistoryPage(ft.Column):
         # Assemble
         self.controls = [
             self._header,
+            self._recent_strip_container,
             ft.Container(content=self._mode_switch, padding=ft.padding.only(left=t.spacing.lg)),
             ft.Container(content=self._action_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.sm)),
             self._data_container,
@@ -146,6 +160,7 @@ class HistoryPage(ft.Column):
     def load_history(self, rows: list) -> None:
         """Called externally to load scan history rows."""
         self._scan_rows = rows or []
+        self._refresh_recent_strip(rows or [])
         if self._active_tab == "scan":
             self._refresh_view()
 
@@ -158,6 +173,37 @@ class HistoryPage(ft.Column):
     def on_show(self) -> None:
         self.load_history(self._bridge.get_scan_history_table_rows())
         self.load_deletion_history(self._bridge.get_deletion_history_table_rows())
+
+    def _refresh_recent_strip(self, rows: list) -> None:
+        t = self._t
+        recent = rows[:10]
+        if not recent:
+            self._recent_strip_container.visible = False
+            if self._is_mounted():
+                self._recent_strip_container.update()
+            return
+        _mode_colors = {
+            "files": "#22D3EE", "photos": "#A78BFA", "videos": "#F472B6",
+            "music": "#34D399", "large_files": "#FBBF24", "empty_folders": "#FB923C",
+        }
+        from cerebro.v2.ui.flet_app.theme import fmt_size
+        items = []
+        for row in recent:
+            mode = row.get("mode", "files")
+            mc = _mode_colors.get(mode, "#22D3EE")
+            items.append(ft.Container(
+                content=ft.Row([
+                    ft.Container(width=6, height=6, border_radius=3, bgcolor=mc),
+                    ft.Text(row.get("date", ""), size=t.typography.size_xs, color=t.colors.fg2),
+                    ft.Text(f"{row.get('groups_found', 0):,} groups", size=t.typography.size_xs, color=t.colors.fg_muted),
+                    ft.Text(fmt_size(row.get("bytes_reclaimable", 0)), size=t.typography.size_xs, color="#34D399"),
+                ], spacing=8),
+                padding=ft.padding.symmetric(vertical=2),
+            ))
+        self._recent_strip.controls = items
+        self._recent_strip_container.visible = True
+        if self._is_mounted():
+            self._recent_strip_container.update()
 
     # ------------------------------------------------------------------
     # Tab logic

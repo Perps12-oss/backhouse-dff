@@ -60,23 +60,22 @@ class ReviewPage(ft.Column):
         self._tile_cache: Dict[str, ft.Container] = {}
         self._files_by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
 
         # UI References
         self._title_lbl: ft.Text
         self._summary_lbl: ft.Text
         self._top_bar: ft.Container
-        self._smart_dropdown: ft.Dropdown
-        self._smart_apply: ft.ElevatedButton
+        self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
         self._zoom_row: ft.Row
         self._cmp_title: ft.Text
-        self._cmp_smart_dropdown: ft.Dropdown
-        self._cmp_smart_apply: ft.ElevatedButton
+        self._cmp_smart_seg: ft.SegmentedButton
         self._delete_btn: ft.ElevatedButton
         self._keep_btn: ft.OutlinedButton
         self._cmp_bar: ft.Container
-        self._filter_bar: ft.Row
+        self._filter_seg: ft.SegmentedButton
         self._content: ft.Column
         self._empty_state: ft.Container
         self._loading_state: ft.Container
@@ -99,15 +98,6 @@ class ReviewPage(ft.Column):
             border=ft.border.all(1, border_color),
             border_radius=ft.border_radius.all(12),
             blur=ft.Blur(8, 8),
-        )
-
-    def _get_filter_btn_style(self, is_active: bool) -> ft.ButtonStyle:
-        return ft.ButtonStyle(
-            bgcolor="#22D3EE" if is_active else ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            color="#0A0E14" if is_active else self._t.colors.fg2,
-            overlay_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
-            shape=ft.RoundedRectangleBorder(radius=8),
-            padding=ft.padding.symmetric(horizontal=14, vertical=8),
         )
 
     def _build_zoom_row(self) -> ft.Row:
@@ -154,46 +144,26 @@ class ReviewPage(ft.Column):
         )
 
         # Smart select for grid mode
-        self._smart_dropdown = ft.Dropdown(
-            options=[ft.dropdown.Option(key=val, text=label) for val, label in _SMART_RULES],
-            value=self._smart_rule,
-            width=160,
-            label="Smart Select",
-            border_radius=8,
-        )
-        self._smart_apply = ft.ElevatedButton(
-            "Apply",
-            on_click=self._apply_smart_select_review,
-            style=ft.ButtonStyle(
-                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
-                color=t.colors.fg,
-                shape=ft.RoundedRectangleBorder(radius=8),
-            ),
+        self._smart_seg = ft.SegmentedButton(
+            selected={"keep_largest"},
+            allow_multiple_selection=False,
+            on_change=self._on_smart_seg_change,
+            segments=[ft.Segment(value=val, label=ft.Text(label, size=11)) for val, label in _SMART_RULES],
         )
         self._zoom_row = self._build_zoom_row()
         self._smart_row = ft.Row(
-            [self._smart_dropdown, self._smart_apply, self._zoom_row],
+            [self._smart_seg, self._zoom_row],
             spacing=t.spacing.sm,
             visible=False,
         )
 
         # Compare navigation bar
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
-        self._cmp_smart_dropdown = ft.Dropdown(
-            options=[ft.dropdown.Option(key=val, text=label) for val, label in _SMART_RULES],
-            value=self._smart_rule,
-            width=150,
-            label="Smart Select",
-            border_radius=8,
-        )
-        self._cmp_smart_apply = ft.ElevatedButton(
-            "Apply",
-            on_click=self._apply_smart_select_compare_current,
-            style=ft.ButtonStyle(
-                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
-                color=t.colors.fg,
-                shape=ft.RoundedRectangleBorder(radius=8),
-            ),
+        self._cmp_smart_seg = ft.SegmentedButton(
+            selected={"keep_largest"},
+            allow_multiple_selection=False,
+            on_change=self._on_cmp_smart_seg_change,
+            segments=[ft.Segment(value=val, label=ft.Text(label, size=11)) for val, label in _SMART_RULES],
         )
         self._delete_btn = ft.OutlinedButton(
             "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
@@ -215,8 +185,7 @@ class ReviewPage(ft.Column):
                     ft.TextButton("← Grid", on_click=self._to_grid),
                     ft.TextButton("← Prev", on_click=self._prev_group),
                     ft.TextButton("Next →", on_click=self._next_group),
-                    self._cmp_smart_dropdown,
-                    self._cmp_smart_apply,
+                    self._cmp_smart_seg,
                     self._cmp_title,
                     self._keep_btn,
                     self._delete_btn,
@@ -230,18 +199,26 @@ class ReviewPage(ft.Column):
         )
 
         # Filter bar
-        self._filter_bar = ft.Row(
-            [
-                ft.ElevatedButton(
-                    label,
-                    on_click=lambda e, k=key: self._set_filter(k),
-                    data=key,
-                    style=self._get_filter_btn_style(key == "all"),
+        self._filter_seg = ft.SegmentedButton(
+            selected={"all"},
+            allow_multiple_selection=False,
+            on_change=self._on_filter_seg_change,
+            segments=[
+                ft.Segment(
+                    value=key,
+                    label=ft.Column(
+                        [
+                            ft.Text(label, size=11, weight=ft.FontWeight.W_500),
+                            ft.Text("0", size=10),
+                            ft.Text("0 B", size=9, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ],
+                        spacing=1,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        tight=True,
+                    ),
                 )
                 for key, label in _FILTER_TABS
             ],
-            spacing=t.spacing.xs,
-            wrap=True,
         )
 
         # Content area
@@ -324,7 +301,7 @@ class ReviewPage(ft.Column):
             self._top_bar,
             ft.Container(content=self._smart_row, padding=ft.padding.only(left=t.spacing.lg)),
             ft.Container(content=self._cmp_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg)),
-            ft.Container(content=self._filter_bar, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm)),
+            ft.Container(content=self._filter_seg, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm)),
             self._content,
         ]
 
@@ -431,30 +408,30 @@ class ReviewPage(ft.Column):
         
         self._content.controls.clear()
         if mode == "empty":
-            self._filter_bar.visible = False
+            self._filter_seg.visible = False
             self._cmp_bar.visible = False
             self._smart_row.visible = False
             self._content.controls.append(self._empty_state)
         elif mode == "loading":
-            self._filter_bar.visible = False
+            self._filter_seg.visible = False
             self._cmp_bar.visible = False
             self._smart_row.visible = False
             self._content.controls.append(self._loading_state)
         elif mode == "grid":
-            self._filter_bar.visible = True
+            self._filter_seg.visible = True
             self._cmp_bar.visible = False
             self._smart_row.visible = True
             self._refresh_grid()
             self._content.controls.append(self._grid)
         elif mode == "compare":
-            self._filter_bar.visible = False
+            self._filter_seg.visible = False
             self._cmp_bar.visible = True
             self._smart_row.visible = False
             self._content.controls.append(self._compare_view)
             self._bind_keys()
             
         self._safe_update(self._content)
-        self._safe_update(self._filter_bar)
+        self._safe_update(self._filter_seg)
         self._safe_update(self._cmp_bar)
         self._safe_update(self._smart_row)
 
@@ -586,9 +563,40 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     # Smart select (grid mode)
     # ------------------------------------------------------------------
+    def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"keep_largest"}
+        self._smart_rule = next(iter(sel), "keep_largest")
+
+    def _on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"keep_largest"}
+        self._apply_smart_select_compare_current_with_rule(next(iter(sel), "keep_largest"))
+
+    def _apply_smart_select_compare_current_with_rule(self, rule: str) -> None:
+        """Apply keep rule to files in the current compare group."""
+        gid = self._compare_gid
+        if gid is None:
+            return
+        files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
+        if len(files) < 2:
+            return
+        if rule == "keep_largest":
+            keep = max(files, key=lambda f: f.size)
+        elif rule == "keep_smallest":
+            keep = min(files, key=lambda f: f.size)
+        elif rule == "keep_newest":
+            keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        elif rule == "keep_oldest":
+            keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        else:
+            keep = max(files, key=lambda f: f.size)
+        to_delete = [str(f.path) for f in files if f is not keep]
+        if not to_delete:
+            return
+        self._show_smart_delete_dialog(to_delete)
+
     def _apply_smart_select_review(self, e=None):
         """Apply keep rule to all visible groups and delete the rest."""
-        rule = self._smart_dropdown.value or "keep_largest"
+        rule = self._smart_rule or "keep_largest"
         to_delete = []
         for g in self._groups:
             files = [f for f in g.files if self._passes_filter(f)]
@@ -616,7 +624,7 @@ class ReviewPage(ft.Column):
         gid = self._compare_gid
         if gid is None:
             return
-        rule = self._cmp_smart_dropdown.value or self._smart_rule or "keep_largest"
+        rule = next(iter(getattr(self._cmp_smart_seg, "selected", None) or {"keep_largest"}), "keep_largest")
         files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
         if len(files) < 2:
             return
@@ -692,7 +700,6 @@ class ReviewPage(ft.Column):
         if not files:
             self._to_grid()
             return
-        self._cmp_smart_dropdown.value = self._smart_dropdown.value or self._smart_rule
         self._compare_gid = gid
         self._compare_a = files[0]
         self._compare_b = files[1] if len(files) > 1 else None
@@ -801,12 +808,9 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     # Filter
     # ------------------------------------------------------------------
-    def _set_filter(self, key: str) -> None:
-        self._filter_key = key
-        for btn in self._filter_bar.controls:
-            is_active = btn.data == key
-            btn.style = self._get_filter_btn_style(is_active)
-            self._safe_update(btn)
+    def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"all"}
+        self._filter_key = next(iter(sel), "all")
         if self._mode == "grid":
             self._refresh_grid()
 
@@ -814,6 +818,7 @@ class ReviewPage(ft.Column):
         self._tile_cache = {}
         by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
         group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        file_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         for g in self._groups:
             group_counts["all"] += 1
             seen_group_kinds: set[str] = set()
@@ -823,23 +828,30 @@ class ReviewPage(ft.Column):
                     kind = next((k for k, exts in FILTER_EXTS.items() if exts and ext.lower() in exts), "other")
                 else:
                     kind = "other"
+                bucket = kind if kind in by_filter else "other"
                 by_filter["all"].append(f)
-                by_filter[kind if kind in by_filter else "other"].append(f)
+                by_filter[bucket].append(f)
+                file_sizes["all"] += f.size
+                file_sizes[bucket] += f.size
                 seen_group_kinds.add(kind if kind in group_counts else "other")
             for kind in seen_group_kinds:
                 group_counts[kind] += 1
         self._files_by_filter = by_filter
         self._filter_counts = {k: len(v) for k, v in by_filter.items()}
+        self._filter_sizes = file_sizes
         self._filter_group_counts = group_counts
 
     def _refresh_filter_labels(self) -> None:
-        for btn in self._filter_bar.controls:
-            key = str(getattr(btn, "data", "") or "")
+        for seg in self._filter_seg.segments:
+            key = seg.value
             base = next((label for k, label in _FILTER_TABS if k == key), key.title())
             files_n = self._filter_counts.get(key, 0)
-            groups_n = self._filter_group_counts.get(key, 0)
-            btn.text = f"{base} · {files_n:,}"
-            btn.tooltip = f"{groups_n:,} groups · {files_n:,} files"
+            size_n = self._filter_sizes.get(key, 0)
+            col = seg.label
+            if isinstance(col, ft.Column) and len(col.controls) >= 3:
+                col.controls[0].value = base
+                col.controls[1].value = f"{files_n:,}"
+                col.controls[2].value = fmt_size(size_n)
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -958,34 +970,22 @@ class ReviewPage(ft.Column):
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls or keyboard bindings."""
         self._t = theme_for_mode(mode)
-        
+
         # Update Glass Styles
         self._top_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._top_bar.border = self._get_glass_style(0.04).get('border')
-        
+
         self._cmp_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._cmp_bar.border = self._get_glass_style(0.04).get('border')
-        
+
         self._empty_state.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._empty_state.border = self._get_glass_style(0.04).get('border')
 
         self._compare_panel_a.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._compare_panel_a.border = self._get_glass_style(0.04).get('border')
-        
+
         self._compare_panel_b.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._compare_panel_b.border = self._get_glass_style(0.04).get('border')
-
-        # Update Filter Buttons
-        for btn in self._filter_bar.controls:
-            is_active = btn.data == self._filter_key
-            btn.style = self._get_filter_btn_style(is_active)
-
-        # Force refresh of dynamic content (Grid/Compare) to apply new text/icon colors
-        self._tile_cache = {}
-        if self._mode == "grid":
-            self._refresh_grid()
-        elif self._mode == "compare":
-            self._update_compare_panels()
 
         if self._is_mounted():
             self.update()

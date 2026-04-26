@@ -20,7 +20,7 @@ from cerebro.v2.ui.flet_app.layout import AppLayout
 from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
-from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
 
 _log = logging.getLogger(__name__)
 
@@ -42,16 +42,8 @@ def _main(page: ft.Page) -> None:
     page.padding = 0
     page.spacing = 0
 
-    theme = theme_for_mode("light")
-    page.theme = ft.Theme(
-        color_scheme_seed=theme.colors.primary,
-        font_family=theme.typography.family,
-    )
-    dark_theme = theme_for_mode("dark")
-    page.dark_theme = ft.Theme(
-        color_scheme_seed=dark_theme.colors.primary,
-        font_family=dark_theme.typography.family,
-    )
+    page.theme = build_flet_theme("light")
+    page.dark_theme = build_flet_theme("dark")
 
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
@@ -153,7 +145,40 @@ def _main(page: ft.Page) -> None:
     }
 
     layout = AppLayout(page, bridge, builders)
-    page.add(layout)
+
+    page.window.title_bar_hidden = True
+
+    def _min_btn(e=None): page.window.minimize()
+    def _max_btn(e=None):
+        if page.window.maximized:
+            page.window.restore()
+        else:
+            page.window.maximize()
+    def _close_btn(e=None): page.window.close()
+
+    title_bar = ft.WindowDragArea(
+        content=ft.Container(
+            height=36,
+            bgcolor=ft.Colors.SURFACE,
+            padding=ft.padding.symmetric(horizontal=8),
+            content=ft.Row(
+                [
+                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
+                    ft.Text("Cerebro", size=12, weight=ft.FontWeight.W_500),
+                    ft.Container(expand=True),
+                    ft.IconButton(ft.icons.Icons.REMOVE, icon_size=14, on_click=lambda _e: _min_btn(), tooltip="Minimise"),
+                    ft.IconButton(ft.icons.Icons.CROP_SQUARE, icon_size=14, on_click=lambda _e: _max_btn(), tooltip="Maximise"),
+                    ft.IconButton(ft.icons.Icons.CLOSE, icon_size=14, on_click=lambda _e: _close_btn(), tooltip="Close"),
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
+            ),
+        ),
+        expand=True,
+    )
+
+    page.add(ft.Column([title_bar, layout], spacing=0, expand=True))
 
     def _persist_window_state() -> None:
         try:
@@ -438,6 +463,13 @@ def _main(page: ft.Page) -> None:
             return
         if ctrl and key == "n":
             layout.navigate_to("dashboard")
+            return
+        if ctrl and key == "o":
+            layout.navigate_to("dashboard")
+            try:
+                dashboard_page._browse_folders(None)
+            except Exception:
+                pass
             return
         if ctrl and key == "r":
             bridge.open_last_session()

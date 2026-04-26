@@ -59,19 +59,19 @@ class ResultsPage(ft.Column):
         self._list_build_generation = 0
         self._loading = False
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
 
         # UI References
         self._summary: ft.Text
-        self._smart_dropdown: ft.Dropdown
-        self._apply_smart_btn: ft.ElevatedButton
+        self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
         self._selection_label: ft.Text
         self._delete_btn: ft.ElevatedButton
         self._permanent_btn: ft.OutlinedButton
         self._action_bar: ft.Row
         self._header: ft.Row
-        self._filter_bar: ft.Row
+        self._filter_seg: ft.SegmentedButton
         self._group_list: ft.ListView
         self._empty: ft.Container
         self._loading_state: ft.Container
@@ -92,15 +92,6 @@ class ResultsPage(ft.Column):
             blur=ft.Blur(8, 8),
         )
     
-    def _get_filter_btn_style(self, is_active: bool) -> ft.ButtonStyle:
-        return ft.ButtonStyle(
-            bgcolor="#22D3EE" if is_active else ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            color="#0A0E14" if is_active else self._t.colors.fg2,
-            overlay_color=ft.Colors.with_opacity(0.15, "#22D3EE"),
-            shape=ft.RoundedRectangleBorder(radius=8),
-            padding=ft.padding.symmetric(horizontal=14, vertical=8),
-        )
-
     def _file_type_icon(self, extension: str) -> tuple[str, str]:
         """Return (icon_name, accent_color) for a file extension."""
         ext = (extension or "").lower().lstrip(".")
@@ -151,30 +142,16 @@ class ResultsPage(ft.Column):
         self._summary = ft.Text("", size=t.typography.size_base, color=t.colors.fg2)
 
         # Smart select row
-        self._smart_dropdown = ft.Dropdown(
-            options=[ft.dropdown.Option(key=val, text=label) for val, label in _SMART_SELECT_OPTIONS],
-            value=self._smart_rule,
-            width=160,
-            label="Smart Select",
-            text_size=12,
-            border_radius=8,
-            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
-            on_select=self._on_smart_rule_changed,
+        self._smart_seg = ft.SegmentedButton(
+            selected={"keep_largest"},
+            allow_multiple_selection=False,
+            on_change=self._on_smart_seg_change,
+            segments=[
+                ft.Segment(value=val, label=ft.Text(label, size=11))
+                for val, label in _SMART_SELECT_OPTIONS
+            ],
         )
-        self._apply_smart_btn = ft.ElevatedButton(
-            "Apply",
-            on_click=self._apply_smart_select,
-            style=ft.ButtonStyle(
-                bgcolor=ft.Colors.with_opacity(0.15, t.colors.primary),
-                color=t.colors.fg,
-                shape=ft.RoundedRectangleBorder(radius=8),
-            ),
-        )
-        self._smart_row = ft.Row(
-            [self._smart_dropdown, self._apply_smart_btn],
-            spacing=t.spacing.sm,
-            visible=False,
-        )
+        self._smart_row = ft.Row([self._smart_seg], spacing=t.spacing.sm, visible=False)
 
         # Selection label and delete buttons
         self._selection_label = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
@@ -211,18 +188,26 @@ class ResultsPage(ft.Column):
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
-        self._filter_bar = ft.Row(
-            [
-                ft.ElevatedButton(
-                    label,
-                    on_click=lambda e, k=key: self._set_filter(k),
-                    data=key,
-                    style=self._get_filter_btn_style(key == "all"),
+        self._filter_seg = ft.SegmentedButton(
+            selected={"all"},
+            allow_multiple_selection=False,
+            on_change=self._on_filter_seg_change,
+            segments=[
+                ft.Segment(
+                    value=key,
+                    label=ft.Column(
+                        [
+                            ft.Text(label, size=11, weight=ft.FontWeight.W_500),
+                            ft.Text("0", size=10),
+                            ft.Text("0 B", size=9, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ],
+                        spacing=1,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        tight=True,
+                    ),
                 )
                 for key, label in _FILTER_TABS
             ],
-            spacing=t.spacing.xs,
-            wrap=True,
         )
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
@@ -264,7 +249,7 @@ class ResultsPage(ft.Column):
             ft.Container(content=self._header, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
                          **self._get_glass_style(0.04)),
             ft.Container(content=self._action_bar, padding=ft.padding.only(left=t.spacing.lg)),
-            ft.Container(content=self._filter_bar, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
+            ft.Container(content=self._filter_seg, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
                          **self._get_glass_style(0.03)),
             self._empty,
         ]
@@ -327,8 +312,10 @@ class ResultsPage(ft.Column):
             self._selected_paths.discard(path)
         self._update_selection_ui()
 
-    def _on_smart_rule_changed(self, e) -> None:
-        self._smart_rule = self._smart_dropdown.value
+    def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"keep_largest"}
+        self._smart_rule = next(iter(sel), "keep_largest")
+        self._apply_smart_select()
 
     def _apply_smart_select(self, e=None) -> None:
         self._selected_paths.clear()
@@ -451,12 +438,9 @@ class ResultsPage(ft.Column):
     # ------------------------------------------------------------------
     # Filtering
     # ------------------------------------------------------------------
-    def _set_filter(self, key: str) -> None:
-        self._filter_key = key
-        for btn in self._filter_bar.controls:
-            is_active = btn.data == key
-            btn.style = self._get_filter_btn_style(is_active)
-            self._safe_update(btn)
+    def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"all"}
+        self._filter_key = next(iter(sel), "all")
         self._refresh()
 
     def _filtered_groups(self) -> List[DuplicateGroup]:
@@ -690,6 +674,7 @@ class ResultsPage(ft.Column):
     def _recompute_filter_counts(self) -> None:
         counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         for g in self._groups:
             files = list(g.files)
             counts["all"] += len(files)
@@ -697,21 +682,28 @@ class ResultsPage(ft.Column):
             seen_group_kinds: set[str] = set()
             for f in files:
                 key = classify_file(getattr(f, "extension", ""))
-                counts[key if key in counts else "other"] += 1
+                bucket = key if key in counts else "other"
+                counts[bucket] += 1
+                sizes["all"] += f.size
+                sizes[bucket] += f.size
                 seen_group_kinds.add(key if key in group_counts else "other")
             for kind in seen_group_kinds:
                 group_counts[kind] += 1
         self._filter_counts = counts
+        self._filter_sizes = sizes
         self._filter_group_counts = group_counts
 
     def _refresh_filter_labels(self) -> None:
-        for btn in self._filter_bar.controls:
-            key = str(getattr(btn, "data", "") or "")
+        for seg in self._filter_seg.segments:
+            key = seg.value
             base = next((label for k, label in _FILTER_TABS if k == key), key.title())
             files_n = self._filter_counts.get(key, 0)
-            groups_n = self._filter_group_counts.get(key, 0)
-            btn.text = f"{base} · {files_n:,}"
-            btn.tooltip = f"{groups_n:,} groups · {files_n:,} files"
+            size_n = self._filter_sizes.get(key, 0)
+            col = seg.label
+            if isinstance(col, ft.Column) and len(col.controls) >= 3:
+                col.controls[0].value = base
+                col.controls[1].value = f"{files_n:,}"
+                col.controls[2].value = fmt_size(size_n)
 
     def _open_group(self, group: DuplicateGroup) -> None:
         self._bridge.coordinator.review_open_group(group.group_id, self._groups)
@@ -729,20 +721,12 @@ class ResultsPage(ft.Column):
         if hdr_parent is not None:
             hdr_parent.bgcolor = self._get_glass_style(0.04).get("bgcolor")
             hdr_parent.border = self._get_glass_style(0.04).get("border")
-        filt_parent = getattr(self._filter_bar, "parent", None)
+        filt_parent = getattr(self._filter_seg, "parent", None)
         if filt_parent is not None:
             filt_parent.bgcolor = self._get_glass_style(0.03).get("bgcolor")
             filt_parent.border = self._get_glass_style(0.03).get("border")
 
         self._empty.bgcolor = self._get_glass_style(0.04).get("bgcolor")
         self._empty.border = self._get_glass_style(0.04).get("border")
-
-        # Update Filter Buttons
-        for btn in self._filter_bar.controls:
-            is_active = btn.data == self._filter_key
-            btn.style = self._get_filter_btn_style(is_active)
-
-        # Re-render list items to apply new theme colors to text/icons
-        self._refresh()
 
         self._safe_update(self)

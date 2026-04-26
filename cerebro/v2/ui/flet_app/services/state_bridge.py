@@ -143,15 +143,14 @@ class StateBridge:
     def apply_preset_theme(self, preset_id: str) -> bool:
         """Apply a named palette (Material seed + light/dark shell) and sync app state."""
         from cerebro.v2.ui.flet_app.palette_themes import default_preset, preset_by_id
-        from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
         preset = preset_by_id(preset_id) or default_preset()
         mode_str = "dark" if preset.is_dark else "light"
-        family = theme_for_mode(mode_str).typography.family
 
+        from cerebro.v2.ui.flet_app.theme import build_flet_theme
         self._page.theme_mode = ft.ThemeMode.DARK if preset.is_dark else ft.ThemeMode.LIGHT
-        self._page.theme = ft.Theme(color_scheme_seed=preset.seed, font_family=family)
-        self._page.dark_theme = ft.Theme(color_scheme_seed=preset.seed, font_family=family)
+        self._page.theme = build_flet_theme(mode_str, seed=preset.seed)
+        self._page.dark_theme = build_flet_theme(mode_str, seed=preset.seed)
         self._visual_theme = mode_str
 
         try:
