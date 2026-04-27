@@ -1,91 +1,74 @@
 # CEREBRO UI Architecture
-_Last updated: 2026-04-18_
+_Last updated: 2026-04-26_
 
 ## Launch path
 
 ```
 python -m cerebro.v2
   → cerebro/v2/__main__.py
-  → app_shell.run_app()
-  → AppShell (CTk root window)
+  → cerebro/v2/ui/flet_app/main.py
 ```
 
-## Shell structure
+## Runtime shell
+
+The live desktop UI is Flet-based and route-driven:
 
 ```
-AppShell
-├── TitleBar          (32px, #0B1929) — wordmark, Themes/Settings links
-├── TabBar            (36px, #F0F0F0) — 6 tabs with active underline
-└── Page frames (stacked via place/place_forget)
-    ├── WelcomePage   — dark branded landing screen
-    ├── ScanPage      — folder tree + mode bar + config + progress
-    ├── ResultsPage   — virtual grid + stats + filters
-    ├── ReviewPage    — large preview + copy list + group nav
-    ├── HistoryPage   — scan/deletion history from SQLite
-    └── DiagnosticsPage — engine status + DB info
+main.py
+├── StateBridge (store/theme/events bridge)
+├── AppLayout (navigation rail + content host)
+└── Pages
+    ├── DashboardPage   (home / scan entry / progress / quick actions)
+    ├── ResultsPage     (grouped duplicate list, filters, delete actions)
+    ├── ReviewPage      (visual triage grid + compare flow)
+    ├── HistoryPage     (scan/deletion history views)
+    └── SettingsPage    (theme and behavior preferences)
 ```
 
-## Engine integration
+## Navigation and routing
 
-- Engine: `TurboFileEngine` via `ScanOrchestrator`
-- Progress: `ScanProgress` events → `after(0, ...)` → UI update
-- Thread rule: ALL file I/O and DB queries run in `threading.Thread(daemon=True)`
-- Marshal rule: ALL UI updates from threads go through `self.after(0, lambda: ...)`
+- Canonical tab keys: `dashboard`, `duplicates`, `review`, `history`, `settings`
+- Route mapping is handled in `cerebro/v2/ui/flet_app/main.py`
+- `AppLayout.navigate_to()` mounts the active page and coordinates shell updates
+- Inactive pages receive deferred updates; active page is updated immediately
 
-## Design tokens
+## Engine and state integration
 
-All visual constants live in `cerebro/v2/ui/design_tokens.py`.
-No hardcoded hex values in page files.
+- Scan and orchestration logic remain in core/engines (unchanged contract)
+- UI receives state via `StateBridge` subscriptions and coordinator callbacks
+- `ScanCompleted` / `ResultsFilesRemoved` synchronize Results and Review datasets
+- UI-only performance techniques: deferred rendering, lazy card/tile construction,
+  batched updates, and safe mount-aware updates
 
-## Theme system
+## Theme and tokens
 
-Themes are JSON files in `cerebro/themes/builtin/` and `~/.cerebro/themes/`.
-`ThemeEngineV3` (`cerebro/core/theme_engine_v3.py`) loads all themes on startup.
-Active theme is applied via `cerebro/v2/core/theme_bridge_v2.py`.
-The **Cerebro Navy** palette (`cerebro_navy.json`) is the Phase 6/7 overhaul palette.
+- Theme tokens and palette behavior are defined in:
+  `cerebro/v2/ui/flet_app/theme.py`
+- Preset palettes are loaded via `palette_themes.py`
+- Theme application flows through `StateBridge.apply_preset_theme()` and per-page
+  `apply_theme()` methods
+- Contrast and typography were tuned in the Phase 6 polish pass for readability
 
-## Settings
+## Settings persistence
 
-`SettingsDialog` (`cerebro/v2/ui/settings_dialog.py`) is a `CTkToplevel` modal
-opened from the Settings link in the title bar. Settings are persisted to
-`~/.cerebro/settings.json`.
+- UI settings persist in `~/.cerebro/flet_ui_settings.json`
+- Includes onboarding completion, reduce-motion, sound effects, and window state
 
-## Delete ceremony widgets
+## Key implementation files
 
-`cerebro/v2/ui/delete_ceremony_widgets.py` — modals and undo toast used by
-`delete_flow.py` (Results / Review delete path). Not the app root; see
-`app_shell.py` for the live window.
-
-## Key components
-
-| Component | File | Notes |
-|---|---|---|
-| AppShell | app_shell.py | CTk root window, 6-tab page stack |
-| TitleBar | title_bar.py | 32px navy bar, traffic-light dots, Settings/Themes links |
-| TabBar | tab_bar.py | 36px bar, 6 tabs, active underline, Results badge |
-| WelcomePage | welcome_page.py | Dark branded landing, stats from SQLite in thread |
-| ScanPage | scan_page.py | FolderTree (lazy ttk), ScanModeBar, ConfigSubTabs, ProgressView |
-| ResultsPage | results_page.py | StatsBar, FilterTabBar, VirtualFileGrid |
-| VirtualFileGrid | results_page.py | Canvas-based, only renders visible rows (ROW_H=24) |
-| ReviewPage | review_page.py | PIL preview in thread, CopyList cards, GroupNav |
-| HistoryPage | history_page.py | Scan + Deletion history sub-tabs, SQLite in thread |
-| DiagnosticsPage | diagnostics_page.py | Engine status, DB info, app version — lazy-loaded |
-| SettingsDialog | settings_dialog.py | Full CTkToplevel modal, 5 tabs, persisted to JSON |
-
-## Tab switching
-
-`AppShell._on_tab_changed(key)` hides the current page via `place_forget()`
-and shows the new page via `place(relwidth=1, relheight=1)`. Pages that
-implement `on_show()` receive a call to trigger lazy data loading.
-
-## Phase delivery
-
-| Phase | Deliverable |
+| Area | File |
 |---|---|
-| P1 | AppShell, TitleBar, TabBar |
-| P2 | WelcomePage |
-| P3 | ScanPage |
-| P4 | ResultsPage (VirtualFileGrid) |
-| P5 | ReviewPage |
-| P6 | HistoryPage, DiagnosticsPage, design_tokens.py |
-| P7 | Settings/Themes wired, cerebro_navy theme, legacy retirement, this doc |
+| App entry | `cerebro/v2/ui/flet_app/main.py` |
+| Shell layout | `cerebro/v2/ui/flet_app/layout.py` |
+| Bridge/services | `cerebro/v2/ui/flet_app/services/state_bridge.py` |
+| Home | `cerebro/v2/ui/flet_app/pages/dashboard_page.py` |
+| Results | `cerebro/v2/ui/flet_app/pages/results_page.py` |
+| Review | `cerebro/v2/ui/flet_app/pages/review_page.py` |
+| History | `cerebro/v2/ui/flet_app/pages/history_page.py` |
+| Settings | `cerebro/v2/ui/flet_app/pages/settings_page.py` |
+| Theme tokens | `cerebro/v2/ui/flet_app/theme.py` |
+
+## Notes
+
+- This document intentionally reflects the current Flet architecture only.
+- Legacy CTk/Tk shell references are retained in archival docs, not here.

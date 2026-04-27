@@ -1,6 +1,12 @@
- Project Cerebro: Flet Migration Blueprint
-Objective: Rebuild the UI with Flet (Flutter) for a modern, responsive, glass-morphic aesthetic.
-Constraint: Keep all existing logic, scanning engines, and state management intact. Remove all Tkinter dependencies from the new UI layer.
+# Project Cerebro: Flet Migration Blueprint (Historical)
+
+Status: Migration delivered. The live UI is now under
+`cerebro/v2/ui/flet_app/`.
+
+Objective: Rebuild the UI with Flet (Flutter) for a modern, responsive,
+glass-morphic aesthetic.
+Constraint: Keep all existing logic, scanning engines, and state management
+intact. Remove all Tkinter dependencies from the new UI layer.
 
 Phase 0: The Great Divorce (Preparation)
 Goal: Ensure the core logic is completely independent of the UI.

@@ -49,6 +49,10 @@ _SMART_RULES = [
     ("keep_oldest", "Keep Oldest"),
 ]
 
+_GRID_BUILD_ASYNC_THRESHOLD = 220
+_GRID_FIRST_SYNC_FILES = 80
+_GRID_ASYNC_BATCH = 120
+
 
 class ReviewPage(ft.Column):
     """Grid and compare view for visual triage of duplicate groups."""
@@ -74,6 +78,8 @@ class ReviewPage(ft.Column):
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._grid_build_generation = 0
+        self._rendering_generation = 0
 
         # UI References
         self._title_lbl: ft.Text
@@ -92,6 +98,7 @@ class ReviewPage(ft.Column):
         self._empty_state: ft.Container
         self._loading_state: ft.Container
         self._grid: ft.GridView
+        self._rendering_badge: ft.Container
         self._compare_panel_a: ft.Container
         self._compare_panel_b: ft.Container
         self._compare_view: ft.Row
@@ -307,6 +314,25 @@ class ReviewPage(ft.Column):
             run_spacing=t.spacing.sm,
             padding=t.spacing.lg,
         )
+        self._rendering_badge = ft.Container(
+            alignment=ft.Alignment(-1, -1),
+            margin=ft.margin.only(top=t.spacing.sm, right=t.spacing.md),
+            visible=False,
+            content=ft.Container(
+                content=ft.Row(
+                    [
+                        ft.ProgressRing(width=14, height=14, stroke_width=2, color="#22D3EE"),
+                        ft.Text("View ready - filling items...", size=t.typography.size_xs, color="#9FDDF7"),
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                bgcolor=ft.Colors.with_opacity(0.82, "#09111D"),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.25, "#22D3EE")),
+                border_radius=999,
+                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            ),
+        )
 
         # Compare view
         self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._get_glass_style(0.04))
@@ -327,6 +353,7 @@ class ReviewPage(ft.Column):
             ft.Container(content=self._cmp_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg)),
             ft.Container(content=self._filter_seg, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm)),
             self._content,
+            self._rendering_badge,
         ]
 
     # ------------------------------------------------------------------
@@ -437,6 +464,26 @@ class ReviewPage(ft.Column):
         except RuntimeError:
             pass
 
+    def _set_rendering(self, value: bool) -> None:
+        self._rendering_generation += 1
+        gen = self._rendering_generation
+        self._rendering_badge.visible = value
+        self._safe_update(self._rendering_badge)
+        if value:
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._rendering_failsafe_async, gen)
+
+    async def _rendering_failsafe_async(self, gen: int) -> None:
+        import asyncio
+
+        await asyncio.sleep(1.6)
+        if gen != self._rendering_generation:
+            return
+        if self._rendering_badge.visible:
+            self._rendering_badge.visible = False
+            self._safe_update(self._rendering_badge)
+
     # ------------------------------------------------------------------
     # Mode management
     # ------------------------------------------------------------------
@@ -448,6 +495,8 @@ class ReviewPage(ft.Column):
                 self._bridge.flet_page.on_keyboard_event = None
         
         self._content.controls.clear()
+        if mode != "grid":
+            self._set_rendering(False)
         if mode == "empty":
             self._filter_seg.visible = False
             self._cmp_bar.visible = False
@@ -504,14 +553,60 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     def _refresh_grid(self) -> None:
         files = self._files_by_filter.get(self._filter_key, [])
-        # Build placeholder tiles immediately — no thumbnail I/O
-        self._grid.controls = [self._tile_for_file_placeholder(f) for f in files]
         self._refresh_filter_labels()
+        n = len(files)
+        if n <= _GRID_BUILD_ASYNC_THRESHOLD:
+            # Build placeholder tiles immediately — no thumbnail I/O
+            self._grid.controls = [self._tile_for_file_placeholder(f) for f in files]
+            self._set_rendering(False)
+            self._safe_update(self._grid)
+            page = self._bridge.flet_page
+            if files and hasattr(page, "run_task"):
+                page.run_task(self._load_thumbnails_async, list(files))
+            return
+
+        self._grid_build_generation += 1
+        gen = self._grid_build_generation
+        self._set_rendering(True)
+        head_n = min(_GRID_FIRST_SYNC_FILES, n)
+        head = files[:head_n]
+        tail = files[head_n:]
+        self._grid.controls = [self._tile_for_file_placeholder(f) for f in head]
         self._safe_update(self._grid)
-        # Load thumbnails asynchronously
+        try:
+            self._bridge.flet_page.update()
+        except Exception:
+            pass
         page = self._bridge.flet_page
-        if files and hasattr(page, "run_task"):
-            page.run_task(self._load_thumbnails_async, list(files))
+        if tail and hasattr(page, "run_task"):
+            page.run_task(self._append_grid_tiles_async, tail, gen, list(files))
+        elif tail:
+            self._grid.controls.extend([self._tile_for_file_placeholder(f) for f in tail])
+            self._safe_update(self._grid)
+            self._set_rendering(False)
+            if files and hasattr(page, "run_task"):
+                page.run_task(self._load_thumbnails_async, list(files))
+
+    async def _append_grid_tiles_async(self, tail: List[DuplicateFile], gen: int, all_files: List[DuplicateFile]) -> None:
+        import asyncio
+
+        for i in range(0, len(tail), _GRID_ASYNC_BATCH):
+            if gen != self._grid_build_generation:
+                self._set_rendering(False)
+                return
+            chunk = tail[i : i + _GRID_ASYNC_BATCH]
+            self._grid.controls.extend([self._tile_for_file_placeholder(f) for f in chunk])
+            self._safe_update(self._grid)
+            try:
+                self._bridge.flet_page.update()
+            except Exception:
+                pass
+            await asyncio.sleep(0)
+        if gen == self._grid_build_generation:
+            self._set_rendering(False)
+            page = self._bridge.flet_page
+            if all_files and hasattr(page, "run_task"):
+                page.run_task(self._load_thumbnails_async, list(all_files))
 
     def _tile_for_file(self, f: DuplicateFile) -> ft.Container:
         key = str(getattr(f, "path", ""))

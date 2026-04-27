@@ -45,6 +45,7 @@ _SCAN_MODES = [
 
 class SettingsPage(ft.Column):
     """Application settings with tabbed interface."""
+    _BASE_FONT_SIZE = 13
 
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
@@ -90,6 +91,9 @@ class SettingsPage(ft.Column):
         self._deletion_phash_label: ft.Text
         self._deletion_dhash_slider: ft.Slider
         self._deletion_dhash_label: ft.Text
+        self._deletion_similarity_slider: ft.Slider
+        self._deletion_similarity_label: ft.Text
+        self._criteria_radio: ft.RadioGroup
 
         self._theme_chips: Dict[str, ft.Container] = {}
 
@@ -254,8 +258,10 @@ class SettingsPage(ft.Column):
         self._deletion_rule.value = rule if rule in dict(_AUTO_MARK_RULES) else "keep_largest"
         self._deletion_phash_slider.value = self._settings["photo_mode"].get("phash_threshold", 8)
         self._deletion_dhash_slider.value = self._settings["photo_mode"].get("dhash_threshold", 10)
+        self._deletion_similarity_slider.value = self._settings["photo_mode"].get("similarity_match_percent", 90)
         self._deletion_phash_label.value = f"pHash threshold: {int(self._deletion_phash_slider.value)}"
         self._deletion_dhash_label.value = f"dHash threshold: {int(self._deletion_dhash_slider.value)}"
+        self._deletion_similarity_label.value = f"Matching level: {int(self._deletion_similarity_slider.value)}%"
 
         preset_id = str(self._settings["appearance"].get("ui_theme_preset", "arctic"))
         self._bridge.apply_preset_theme(preset_id)
@@ -327,7 +333,7 @@ class SettingsPage(ft.Column):
             max=18,
             divisions=8,
             value=self._settings["appearance"].get("font_size", 13),
-            on_change=lambda e: setattr(self._appearance_font_label, 'value', f"Font size: {int(e.control.value)}"),
+            on_change=self._on_font_size_change,
         )
         self._appearance_font_label = ft.Text(f"Font size: {int(self._appearance_font_slider.value)}", color=t.colors.fg2)
         content.controls.append(self._appearance_font_label)
@@ -375,6 +381,31 @@ class SettingsPage(ft.Column):
         content.controls.append(chips_wrap)
 
         self._tab_contents["appearance"].content = content
+
+    def _font_scale_for_size(self, size: int) -> float:
+        clamped = max(10, min(18, int(size)))
+        return round(clamped / float(self._BASE_FONT_SIZE), 2)
+
+    def _apply_font_size_to_page(self, size: int) -> None:
+        page = self._bridge.flet_page
+        scale = self._font_scale_for_size(size)
+        try:
+            if hasattr(page, "text_scale"):
+                page.text_scale = scale
+            elif hasattr(page, "text_scale_factor"):
+                page.text_scale_factor = scale
+            if self._is_mounted():
+                page.update()
+        except Exception:
+            _log.debug("Could not apply font scale", exc_info=True)
+
+    def _on_font_size_change(self, e: ft.ControlEvent) -> None:
+        value = int(getattr(e.control, "value", self._BASE_FONT_SIZE))
+        self._appearance_font_label.value = f"Font size: {value}"
+        if self._is_mounted():
+            self._appearance_font_label.update()
+        # Live preview so slider has visible effect immediately.
+        self._apply_font_size_to_page(value)
 
     def _build_performance_tab(self) -> None:
         t = self._t
@@ -424,6 +455,30 @@ class SettingsPage(ft.Column):
         t = self._t
         content = ft.Column(spacing=t.spacing.md)
 
+        # Matching criteria (scan filter)
+        content.controls.append(
+            ft.Text("Matching Criteria", weight=ft.FontWeight.W_600, color=t.colors.fg)
+        )
+        content.controls.append(
+            ft.Text("How files are compared to detect duplicates.", size=t.typography.size_xs, color=t.colors.fg_muted, italic=True)
+        )
+        _criteria = [
+            ("name", "Same name (ignoring case)"),
+            ("size", "Same size"),
+            ("content", "Same content (Recommended)"),
+        ]
+        default_criteria = self._settings.get("file_mode", {}).get("matching_criteria", "content")
+        self._criteria_radio = ft.RadioGroup(
+            content=ft.Column(
+                [ft.Radio(value=v, label=label, label_style=ft.TextStyle(size=t.typography.size_sm, color=t.colors.fg2))
+                 for v, label in _criteria],
+                spacing=4,
+            ),
+            value=default_criteria,
+        )
+        content.controls.append(self._criteria_radio)
+        content.controls.append(ft.Divider(height=1, color=ft.Colors.with_opacity(0.10, ft.Colors.WHITE)))
+
         # Deletion method
         content.controls.append(ft.Text("Deletion Method", weight=ft.FontWeight.W_600, color=t.colors.fg))
         self._deletion_method = ft.Dropdown(
@@ -465,6 +520,27 @@ class SettingsPage(ft.Column):
         self._deletion_dhash_label = ft.Text(f"dHash threshold: {int(self._deletion_dhash_slider.value)}", color=t.colors.fg2)
         content.controls.append(self._deletion_dhash_label)
         content.controls.append(self._deletion_dhash_slider)
+
+        content.controls.append(ft.Text("Matching Level", weight=ft.FontWeight.W_600, color=t.colors.fg))
+        content.controls.append(
+            ft.Text(
+                "Used for similar photo scans (higher = stricter matching).",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                italic=True,
+            )
+        )
+        self._deletion_similarity_slider = ft.Slider(
+            min=50, max=100, divisions=10,
+            value=self._settings["photo_mode"].get("similarity_match_percent", 90),
+            on_change=lambda e: setattr(self._deletion_similarity_label, 'value', f"Matching level: {int(e.control.value)}%"),
+        )
+        self._deletion_similarity_label = ft.Text(
+            f"Matching level: {int(self._deletion_similarity_slider.value)}%",
+            color=t.colors.fg2,
+        )
+        content.controls.append(self._deletion_similarity_label)
+        content.controls.append(self._deletion_similarity_slider)
 
         # Warning notice
         content.controls.append(
@@ -590,6 +666,8 @@ class SettingsPage(ft.Column):
         self._settings["deletion"]["auto_mark_rule"] = self._deletion_rule.value
         self._settings["photo_mode"]["phash_threshold"] = int(self._deletion_phash_slider.value)
         self._settings["photo_mode"]["dhash_threshold"] = int(self._deletion_dhash_slider.value)
+        self._settings["photo_mode"]["similarity_match_percent"] = int(self._deletion_similarity_slider.value)
+        self._settings.setdefault("file_mode", {})["matching_criteria"] = self._criteria_radio.value or "content"
 
         try:
             self._bridge.save_settings(self._settings)
@@ -597,7 +675,13 @@ class SettingsPage(ft.Column):
             # Show error feedback
             self._bridge.show_snackbar(f"Save failed: {exc}", error=True)
             return
+        self._apply_font_size_to_page(self._settings["appearance"]["font_size"])
         self._bridge.show_snackbar("Settings saved successfully.", success=True)
+        # If settings is opened as a modal chooser, close it after save.
+        try:
+            self._bridge.dismiss_top_dialog()
+        except Exception:
+            pass
 
     def _on_cancel(self, e):
         # Reload original settings to discard changes
@@ -653,6 +737,7 @@ class SettingsPage(ft.Column):
         """Refresh values from bridge when page becomes visible."""
         self._load_settings()
         self._apply_saved_values_to_controls()
+        self._apply_font_size_to_page(self._settings.get("appearance", {}).get("font_size", self._BASE_FONT_SIZE))
         if self._is_mounted():
             self.update()
 

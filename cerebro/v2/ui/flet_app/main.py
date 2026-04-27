@@ -125,6 +125,7 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
     from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
+    from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -135,12 +136,14 @@ def _main(page: ft.Page) -> None:
     review_page = ReviewPage(bridge)
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
+    exclude_page = ExcludeListPage(bridge)
 
     builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
         "duplicates": lambda: results_page,
         "review": lambda: review_page,
         "history": lambda: history_page,
+        "exclude": lambda: exclude_page,
         "settings": lambda: settings_page,
     }
 
@@ -239,6 +242,7 @@ def _main(page: ft.Page) -> None:
             ("Go to Results", lambda: layout.navigate_to("duplicates")),
             ("Go to Review", lambda: layout.navigate_to("review")),
             ("Go to History", lambda: layout.navigate_to("history")),
+            ("Go to Exclude", lambda: layout.navigate_to("exclude")),
             ("Go to Settings", lambda: layout.navigate_to("settings")),
             ("Open Last Session", bridge.open_last_session),
             ("Show Keyboard Shortcuts", _show_shortcuts_overlay),
@@ -553,6 +557,7 @@ def _main(page: ft.Page) -> None:
             "duplicates": results_page,
             "review": review_page,
             "history": history_page,
+            "exclude": exclude_page,
             "settings": settings_page,
         }
         active_key = layout.current_key

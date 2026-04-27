@@ -25,6 +25,7 @@ ROUTES: list[RouteInfo] = [
     RouteInfo(key="duplicates", route="/duplicates", icon=ft.icons.Icons.CONTENT_COPY, label="Results"),
     RouteInfo(key="review", route="/review", icon=ft.icons.Icons.GRID_VIEW, label="Review"),
     RouteInfo(key="history", route="/history", icon=ft.icons.Icons.HISTORY, label="History"),
+    RouteInfo(key="exclude", route="/exclude", icon=ft.icons.Icons.BLOCK, label="Exclude"),
     RouteInfo(key="settings", route="/settings", icon=ft.icons.Icons.SETTINGS, label="Settings"),
 ]
 

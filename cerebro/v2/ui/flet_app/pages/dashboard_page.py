@@ -15,6 +15,14 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+_SCAN_MODE_ICON_MAP = {
+    "description": ft.icons.Icons.DESCRIPTION,
+    "image": ft.icons.Icons.IMAGE,
+    "image_search": ft.icons.Icons.IMAGE_SEARCH,
+    "videocam": ft.icons.Icons.VIDEOCAM,
+    "music_note": ft.icons.Icons.MUSIC_NOTE,
+}
+
 
 def _popular_scan_folder_candidates() -> List[Tuple[str, Path]]:
     """Display labels and paths under the user profile commonly used for dedup scans."""
@@ -61,6 +69,9 @@ class DashboardPage(ft.Column):
         self._folders: list[Path] = []  # Enforce Path objects
         self._selected_mode = "files"
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
+        self._session_hidden_quick_add: set[str] = set()
+        self._session_recent_scan_paths: list[Path] = []
+        self._quick_add_expanded: bool = False
         # Initial Theme Load
         self._t = theme_for_mode("dark")
         self._glass_cache: dict = {}
@@ -72,20 +83,24 @@ class DashboardPage(ft.Column):
         self._mode_row: ft.Row
         self._folder_chips_row: ft.Row
         self._folder_container: ft.Container
+        self._recent_paths_row: ft.Row
+        self._recent_wrap: ft.Column
         self._quick_add_title: ft.Text
         self._quick_paths_row: ft.Row
         self._quick_add_wrap: ft.Column
+        self._quick_add_body: ft.Container
+        self._quick_toggle_btn: ft.TextButton
+        self._quick_reset_btn: ft.TextButton
         self._clear_folders_btn: ft.TextButton
         self._actions: ft.Row
+        self._browse_btn: ft.OutlinedButton
+        self._last_session_btn: ft.TextButton
         self._start_btn: ft.FilledButton
         self._stop_btn: ft.OutlinedButton
         self._progress: ft.ProgressBar
         self._progress_label: ft.Text
         self._progress_detail: ft.Text
         self._status: ft.Text
-        self._similarity_slider: ft.Slider
-        self._similarity_pct: ft.Text
-        self._similarity_config: ft.Container
         self._ring: ft.ProgressRing
         self._ring_label: ft.Text
         self._ring_counter: ft.Text
@@ -111,6 +126,33 @@ class DashboardPage(ft.Column):
                 ctrl.update()
         except RuntimeError:
             pass
+
+    def _is_dark_theme(self) -> bool:
+        try:
+            return "dark" in str(getattr(self._bridge, "app_theme", "")).lower()
+        except Exception:
+            return True
+
+    def _hover_glow_color(self, variant: str = "primary") -> str:
+        if self._is_dark_theme():
+            if variant == "secondary":
+                return "#A78BFA"
+            return "#22D3EE"
+        if variant == "secondary":
+            return "#4F46E5"
+        return str(self._t.colors.primary)
+
+    def _hover_shadow(self, color: str, strong: bool = False) -> ft.BoxShadow:
+        return ft.BoxShadow(
+            blur_radius=24 if strong else 14,
+            spread_radius=0,
+            color=ft.Colors.with_opacity(0.42 if strong else 0.26, color),
+            offset=ft.Offset(0, 3 if strong else 2),
+        )
+
+    def _set_container_glow(self, container: ft.Container, hovering: bool, *, variant: str = "primary", strong: bool = False) -> None:
+        container.shadow = self._hover_shadow(self._hover_glow_color(variant), strong=strong) if hovering else None
+        DashboardPage._safe_update(container)
 
     # ------------------------------------------------------------------
     # Construction (Runs Once)
@@ -149,50 +191,15 @@ class DashboardPage(ft.Column):
             weight=ft.FontWeight.W_500,
             color=t.colors.fg_muted,
         )
-        self._mode_row = ft.Row([], wrap=True, spacing=s.md, run_spacing=s.md)
+        self._mode_row = ft.Row(
+            [],
+            wrap=True,
+            spacing=s.md,
+            run_spacing=s.md,
+            alignment=ft.MainAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
         self._update_modes_ui()
-
-        # Similarity slider — shown only for photo modes
-        self._similarity_pct = ft.Text(
-            "90% Match",
-            size=t.typography.size_sm,
-            weight=ft.FontWeight.W_600,
-            color="#00BFA5",
-            text_align=ft.TextAlign.CENTER,
-        )
-        self._similarity_slider = ft.Slider(
-            min=0, max=100, divisions=20,
-            value=90,
-            active_color="#00BFA5",
-            thumb_color="#00BFA5",
-            on_change=self._on_similarity_change,
-        )
-        self._similarity_config = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(
-                        "Matching Level",
-                        size=t.typography.size_sm,
-                        weight=ft.FontWeight.W_600,
-                        color=t.colors.fg_muted,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text("Exact", size=t.typography.size_xs, color=t.colors.fg_muted),
-                            ft.Container(content=self._similarity_slider, expand=True),
-                            ft.Text("Similar", size=t.typography.size_xs, color=t.colors.fg_muted),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=s.sm,
-                    ),
-                    ft.Container(content=self._similarity_pct, alignment=ft.Alignment(0, 0)),
-                ],
-                spacing=s.xs,
-            ),
-            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
-            visible=False,
-            **self._get_glass_style(0.04),
-        )
 
         # Folder list
         self._folder_chips_row = ft.Row(
@@ -230,16 +237,51 @@ class DashboardPage(ft.Column):
             cast_col.controls[0].controls.append(self._clear_folders_btn)
 
         self._quick_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
+        self._recent_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
+        self._recent_wrap = ft.Column(
+            [
+                ft.Text(
+                    "Recent scan folders",
+                    size=t.typography.size_sm,
+                    weight=ft.FontWeight.W_500,
+                    color=t.colors.fg_muted,
+                ),
+                self._recent_paths_row,
+            ],
+            spacing=s.xs,
+            visible=False,
+        )
         self._quick_add_title = ft.Text(
             "Quick add — smart suggestions (recent + frequent)",
             size=t.typography.size_sm,
             weight=ft.FontWeight.W_500,
             color=t.colors.fg_muted,
         )
+        self._quick_reset_btn = ft.TextButton(
+            "Reset hidden suggestions",
+            on_click=self._reset_hidden_quick_suggestions,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+            visible=False,
+        )
+        self._quick_toggle_btn = ft.TextButton(
+            "Show suggestions",
+            icon=ft.icons.Icons.EXPAND_MORE,
+            on_click=self._toggle_quick_add,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+        )
+        self._quick_add_body = ft.Container(content=self._quick_paths_row, visible=False)
         self._quick_add_wrap = ft.Column(
-            [self._quick_add_title, self._quick_paths_row],
+            [
+                ft.Row(
+                    [self._quick_add_title, self._quick_toggle_btn, ft.Container(expand=True), self._quick_reset_btn],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self._quick_add_body,
+            ],
             spacing=s.xs,
         )
+        self._load_quick_add_ui_preferences()
+        self._refresh_recent_paths_bar()
         self._refresh_quick_add_bar()
 
         # Action buttons — clear hierarchy: primary CTA, secondary, tertiary
@@ -262,26 +304,34 @@ class DashboardPage(ft.Column):
                 padding=ft.padding.symmetric(horizontal=24, vertical=12),
             ),
         )
+        self._browse_btn = ft.OutlinedButton(
+            "Browse Folders",
+            icon=ft.icons.Icons.FOLDER_OPEN,
+            on_click=self._browse_folders,
+            style=ft.ButtonStyle(
+                color=t.colors.fg2,
+                side=ft.BorderSide(1, t.colors.border),
+                shape=ft.RoundedRectangleBorder(radius=10),
+                padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            ),
+        )
+        self._last_session_btn = ft.TextButton(
+            "Open Last Session",
+            icon=ft.icons.Icons.HISTORY,
+            on_click=self._open_last_session,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+        )
+        browse_wrap = ft.Container(content=self._browse_btn, border_radius=10)
+        start_wrap = ft.Container(content=self._start_btn, border_radius=10)
+        last_wrap = ft.Container(content=self._last_session_btn, border_radius=10)
+        browse_wrap.on_hover = lambda e, c=browse_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
+        start_wrap.on_hover = lambda e, c=start_wrap: self._set_container_glow(c, e.data == "true", variant="primary", strong=True)
+        last_wrap.on_hover = lambda e, c=last_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
         self._actions = ft.Row(
             [
-                ft.OutlinedButton(
-                    "Browse Folders",
-                    icon=ft.icons.Icons.FOLDER_OPEN,
-                    on_click=self._browse_folders,
-                    style=ft.ButtonStyle(
-                        color=t.colors.fg2,
-                        side=ft.BorderSide(1, t.colors.border),
-                        shape=ft.RoundedRectangleBorder(radius=10),
-                        padding=ft.padding.symmetric(horizontal=16, vertical=12),
-                    ),
-                ),
-                self._start_btn,
-                ft.TextButton(
-                    "Open Last Session",
-                    icon=ft.icons.Icons.HISTORY,
-                    on_click=self._open_last_session,
-                    style=ft.ButtonStyle(color=t.colors.fg_muted),
-                ),
+                browse_wrap,
+                start_wrap,
+                last_wrap,
                 self._stop_btn,
             ],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -365,10 +415,9 @@ class DashboardPage(ft.Column):
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
             ft.Container(content=self._mode_label, padding=ft.padding.only(left=s.md, top=s.sm)),
             ft.Container(content=self._mode_row, padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm)),
-            self._similarity_config,
             self._folder_container,
             ft.Container(
-                content=self._quick_add_wrap,
+                content=ft.Column([self._recent_wrap, self._quick_add_wrap], spacing=s.sm),
                 padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
             ),
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
@@ -444,45 +493,49 @@ class DashboardPage(ft.Column):
             (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", f"{self._stats.get('dupes', 0):,}"),
             (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
         ]
-        self._stats_row.controls = [
-            ft.GestureDetector(
-                content=ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Container(
-                                content=ft.Icon(icon, size=20, color=accent),
-                                bgcolor=ft.Colors.with_opacity(0.18, accent),
-                                border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent)),
-                                border_radius=8,
-                                padding=8,
-                            ),
-                            ft.Text(
-                                value,
-                                size=t.typography.size_xxl,
-                                weight=ft.FontWeight.W_700,
-                                color=accent,
-                                text_align=ft.TextAlign.CENTER,
-                            ),
-                            ft.Text(
-                                label,
-                                size=t.typography.size_base,
-                                color=t.colors.fg2,
-                                weight=ft.FontWeight.W_600,
-                                text_align=ft.TextAlign.CENTER,
-                            ),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=8,
-                    ),
-                    padding=ft.padding.symmetric(horizontal=28, vertical=18),
-                    **self._get_glass_style(0.06),
-                    ink=True,
+        controls: list[ft.Control] = []
+        for icon, accent, label, value in cards:
+            tile = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Container(
+                            content=ft.Icon(icon, size=20, color=accent),
+                            bgcolor=ft.Colors.with_opacity(0.18, accent),
+                            border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent)),
+                            border_radius=8,
+                            padding=8,
+                        ),
+                        ft.Text(
+                            value,
+                            size=t.typography.size_xxl,
+                            weight=ft.FontWeight.W_700,
+                            color=accent,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Text(
+                            label,
+                            size=t.typography.size_base,
+                            color=t.colors.fg2,
+                            weight=ft.FontWeight.W_600,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=8,
                 ),
-                on_tap=lambda _e: self._bridge.navigate("history"),
-                mouse_cursor=ft.MouseCursor.CLICK,
+                padding=ft.padding.symmetric(horizontal=28, vertical=18),
+                **self._get_glass_style(0.06),
+                ink=True,
             )
-            for icon, accent, label, value in cards
-        ]
+            tile.on_hover = lambda e, c=tile: self._set_container_glow(c, e.data == "true", variant="secondary")
+            controls.append(
+                ft.GestureDetector(
+                    content=tile,
+                    on_tap=lambda _e: self._bridge.navigate("history"),
+                    mouse_cursor=ft.MouseCursor.CLICK,
+                )
+            )
+        self._stats_row.controls = controls
         DashboardPage._safe_update(self._stats_row)
 
     def _update_modes_ui(self) -> None:
@@ -493,19 +546,21 @@ class DashboardPage(ft.Column):
         cards = []
         for m in SCAN_MODES:
             is_active = m["key"] == self._selected_mode
+            raw_icon = str(m.get("icon", "") or "").lower()
+            icon_name = _SCAN_MODE_ICON_MAP.get(raw_icon, ft.icons.Icons.CATEGORY)
 
             icon_bg = ft.Colors.with_opacity(0.20 if is_active else 0.08, TEAL if is_active else ft.Colors.WHITE)
             icon_color = TEAL if is_active else t.colors.fg_muted
-            label_color = t.colors.fg if is_active else t.colors.fg2
-            border_color = TEAL if is_active else ft.Colors.with_opacity(0.12, ft.Colors.WHITE)
-            bg_color = ft.Colors.with_opacity(0.12 if is_active else 0.04, TEAL if is_active else ft.Colors.WHITE)
+            label_color = "#F8FEFF" if is_active else t.colors.fg2
+            border_color = "#22D3EE" if is_active else ft.Colors.with_opacity(0.12, ft.Colors.WHITE)
+            bg_color = ft.Colors.with_opacity(0.24 if is_active else 0.04, TEAL if is_active else ft.Colors.WHITE)
 
             card_content = ft.Column(
                 [
                     ft.Row(
                         [
                             ft.Container(
-                                content=ft.Icon(m["icon"], size=20, color=icon_color),
+                                content=ft.Icon(icon_name, size=20, color=icon_color),
                                 bgcolor=icon_bg,
                                 border_radius=8,
                                 padding=8,
@@ -517,19 +572,37 @@ class DashboardPage(ft.Column):
                                 size=14,
                                 color=TEAL if is_active else ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
                             ),
+                            ft.Container(
+                                content=ft.Text(
+                                    "SELECTED",
+                                    size=8,
+                                    weight=ft.FontWeight.W_700,
+                                    color="#081018",
+                                ),
+                                bgcolor="#22D3EE",
+                                border_radius=999,
+                                padding=ft.padding.symmetric(horizontal=7, vertical=2),
+                                visible=is_active,
+                            ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.START,
                     ),
                     ft.Text(
                         m["label"],
-                        size=t.typography.size_md,
-                        weight=ft.FontWeight.W_600,
+                        size=t.typography.size_lg,
+                        weight=ft.FontWeight.W_700,
                         color=label_color,
                     ),
                     ft.Text(
                         m.get("desc", ""),
-                        size=t.typography.size_xs,
+                        size=t.typography.size_sm,
                         color=t.colors.fg_muted,
+                    ),
+                    ft.Text(
+                        "Click to select",
+                        size=t.typography.size_xs,
+                        color="#A5F3FC" if is_active else t.colors.fg_muted,
+                        italic=True,
                     ),
                 ],
                 spacing=s.sm,
@@ -539,24 +612,43 @@ class DashboardPage(ft.Column):
             card_kwargs: dict = dict(
                 content=card_content,
                 width=160,
+                height=154,
                 padding=ft.padding.all(s.md),
-                border=ft.border.all(2 if is_active else 1, border_color),
+                border=ft.border.all(3 if is_active else 1, border_color),
                 border_radius=12,
                 bgcolor=bg_color,
+                alignment=ft.Alignment(-1, -1),
                 ink=True,
                 on_click=lambda e, k=m["key"]: self._select_mode(k),
             )
             if is_active:
                 card_kwargs["shadow"] = ft.BoxShadow(
-                    blur_radius=16,
+                    blur_radius=28,
                     spread_radius=0,
-                    color=ft.Colors.with_opacity(0.28, TEAL),
-                    offset=ft.Offset(0, 2),
+                    color=ft.Colors.with_opacity(0.48, TEAL),
+                    offset=ft.Offset(0, 4),
                 )
-            cards.append(ft.Container(**card_kwargs))
+            card = ft.Container(**card_kwargs)
+            card.on_hover = lambda e, c=card, active=is_active: self._on_mode_card_hover(c, e.data == "true", active)
+            cards.append(card)
 
         self._mode_row.controls = cards
         DashboardPage._safe_update(self._mode_row)
+
+    def _on_mode_card_hover(self, card: ft.Container, hovering: bool, is_active: bool) -> None:
+        if hovering:
+            card.shadow = self._hover_shadow(self._hover_glow_color("primary"), strong=True)
+        else:
+            if is_active:
+                card.shadow = ft.BoxShadow(
+                    blur_radius=28,
+                    spread_radius=0,
+                    color=ft.Colors.with_opacity(0.48, "#00BFA5"),
+                    offset=ft.Offset(0, 4),
+                )
+            else:
+                card.shadow = None
+        DashboardPage._safe_update(card)
 
     def _open_last_session(self, e=None):
         try:
@@ -571,50 +663,185 @@ class DashboardPage(ft.Column):
         if self._selected_mode == key:
             return
         self._selected_mode = key
-        self._similarity_config.visible = key in ("similar_photos", "photos")
-        DashboardPage._safe_update(self._similarity_config)
         self._update_modes_ui()
-
-    def _on_similarity_change(self, e: ft.ControlEvent) -> None:
-        val = int(getattr(e.control, "value", 90))
-        self._similarity_pct.value = f"{val}% Match"
-        DashboardPage._safe_update(self._similarity_pct)
 
     def _refresh_quick_add_bar(self) -> None:
         """Populate one-tap smart suggestions based on scan history + recency."""
         t = self._t
         paths = self._discover_smart_quick_paths(limit=8)
         self._quick_add_title.color = t.colors.fg_muted
+        hidden_count = len(self._get_hidden_quick_suggestions() | set(self._session_hidden_quick_add))
+        self._quick_reset_btn.visible = hidden_count > 0
         if not paths:
             self._quick_add_wrap.visible = False
             if self._is_mounted():
                 self._quick_add_wrap.update()
             return
         self._quick_add_wrap.visible = True
-        self._quick_paths_row.controls = [
+        self._quick_add_body.visible = self._quick_add_expanded
+        self._quick_toggle_btn.text = "Hide suggestions" if self._quick_add_expanded else "Show suggestions"
+        self._quick_toggle_btn.icon = ft.icons.Icons.EXPAND_LESS if self._quick_add_expanded else ft.icons.Icons.EXPAND_MORE
+        self._quick_paths_row.controls = []
+        for label, p in paths:
+            remove_btn = ft.TextButton(
+                "X",
+                tooltip="Remove suggestion",
+                on_click=lambda _e, pp=p: self._dismiss_quick_suggestion(pp),
+                style=ft.ButtonStyle(
+                    color=t.colors.fg_muted,
+                    text_style=ft.TextStyle(size=t.typography.size_xs, weight=ft.FontWeight.W_700),
+                    padding=ft.padding.symmetric(horizontal=6, vertical=4),
+                    shape=ft.RoundedRectangleBorder(radius=6),
+                ),
+            )
+            quick_item = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.TextButton(
+                            label,
+                            icon=ft.icons.Icons.FOLDER_SPECIAL,
+                            on_click=lambda _e, pp=p: self._add_folder(pp),
+                            style=ft.ButtonStyle(
+                                color=t.colors.fg2,
+                                padding=ft.padding.symmetric(horizontal=8, vertical=6),
+                                shape=ft.RoundedRectangleBorder(radius=8),
+                            ),
+                        ),
+                        remove_btn,
+                    ],
+                    spacing=2,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                bgcolor=ft.Colors.with_opacity(0.10, t.colors.primary),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.16, t.colors.primary)),
+                border_radius=10,
+                padding=ft.padding.only(left=2, right=2),
+            )
+            quick_item.on_hover = lambda e, c=quick_item: self._set_container_glow(c, e.data == "true", variant="secondary")
+            self._quick_paths_row.controls.append(quick_item)
+        if self._is_mounted():
+            self._quick_paths_row.update()
+            self._quick_add_body.update()
+            self._quick_toggle_btn.update()
+            self._quick_reset_btn.update()
+            self._quick_add_wrap.update()
+
+    def _refresh_recent_paths_bar(self) -> None:
+        t = self._t
+        recents = self._discover_recent_scan_paths(limit=6)
+        if not recents:
+            self._recent_wrap.visible = False
+            if self._is_mounted():
+                self._recent_wrap.update()
+            return
+        self._recent_wrap.visible = True
+        self._recent_paths_row.controls = [
             ft.Chip(
                 label=ft.Text(label, size=t.typography.size_sm),
-                leading=ft.Icon(ft.icons.Icons.FOLDER_SPECIAL, size=14, color=t.colors.fg2),
+                leading=ft.Icon(ft.icons.Icons.HISTORY, size=14, color=t.colors.fg2),
                 bgcolor=ft.Colors.with_opacity(0.10, t.colors.primary),
                 shape=ft.RoundedRectangleBorder(radius=10),
                 on_click=lambda _e, pp=p: self._add_folder(pp),
-                on_delete=lambda _e, pp=p: self._dismiss_quick_suggestion(pp),
             )
-            for label, p in paths
+            for label, p in recents
         ]
         if self._is_mounted():
-            self._quick_paths_row.update()
-            self._quick_add_wrap.update()
+            self._recent_paths_row.update()
+            self._recent_wrap.update()
+
+    def _discover_recent_scan_paths(self, limit: int = 6) -> list[tuple[str, Path]]:
+        try:
+            from cerebro.v2.core.scan_history_db import get_scan_history_db
+
+            seen: set[str] = set()
+            out: list[tuple[str, Path]] = []
+
+            for p in self._session_recent_scan_paths:
+                try:
+                    rp = Path(str(p)).resolve()
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if not rp.is_dir():
+                    continue
+                key = str(rp).lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((rp.name or str(rp), rp))
+                if len(out) >= max(1, limit):
+                    return out
+
+            for entry in get_scan_history_db().get_recent(250):
+                for raw in (entry.folders or []):
+                    try:
+                        p = Path(str(raw)).resolve()
+                    except (OSError, RuntimeError, ValueError):
+                        continue
+                    if not p.is_dir():
+                        continue
+                    key = str(p).lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append((p.name or str(p), p))
+                    if len(out) >= max(1, limit):
+                        return out
+            return out
+        except Exception:
+            _log.exception("Failed loading recent scan paths")
+            return []
+
+    def _load_quick_add_ui_preferences(self) -> None:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            self._quick_add_expanded = False
+            return
+        dashboard = settings.get("dashboard")
+        if not isinstance(dashboard, dict):
+            self._quick_add_expanded = False
+            return
+        self._quick_add_expanded = bool(dashboard.get("quick_add_expanded", False))
+
+    def _persist_quick_add_ui_preferences(self) -> None:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            settings = {}
+        dashboard = settings.get("dashboard")
+        if not isinstance(dashboard, dict):
+            dashboard = {}
+        dashboard["quick_add_expanded"] = bool(self._quick_add_expanded)
+        settings["dashboard"] = dashboard
+        self._bridge.save_settings(settings)
+
+    def _toggle_quick_add(self, _e: ft.ControlEvent | None = None) -> None:
+        self._quick_add_expanded = not self._quick_add_expanded
+        self._persist_quick_add_ui_preferences()
+        self._refresh_quick_add_bar()
 
     def _discover_smart_quick_paths(self, limit: int = 8) -> list[tuple[str, Path]]:
+        hidden = self._get_hidden_quick_suggestions() | set(self._session_hidden_quick_add)
         try:
             from cerebro.v2.core.scan_history_db import get_scan_history_db
             import time
 
-            hidden = self._get_hidden_quick_suggestions()
             now = time.time()
             scores: dict[str, float] = {}
             pretty: dict[str, Path] = {}
+
+            # Prioritize folders scanned in this session so suggestions feel live.
+            for rank, p in enumerate(self._session_recent_scan_paths):
+                try:
+                    rp = Path(str(p)).resolve()
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if not rp.is_dir():
+                    continue
+                key = str(rp).lower()
+                if key in hidden:
+                    continue
+                scores[key] = scores.get(key, 0.0) + 20.0 - float(rank)
+                pretty[key] = rp
+
             entries = get_scan_history_db().get_recent(300)
             for i, entry in enumerate(entries):
                 # Recency + frequency weighted score.
@@ -643,8 +870,19 @@ class DashboardPage(ft.Column):
                 return out
         except Exception:
             _log.exception("Failed building smart quick-add suggestions")
-        # Fallback for brand-new users.
-        return _discover_existing_popular_paths()[: max(1, limit)]
+        # Fallback for brand-new users, still honoring hidden dismissals.
+        fallback: list[tuple[str, Path]] = []
+        for label, p in _discover_existing_popular_paths():
+            try:
+                key = str(p.resolve()).lower()
+            except (OSError, RuntimeError, ValueError):
+                key = str(p).lower()
+            if key in hidden:
+                continue
+            fallback.append((label, p))
+            if len(fallback) >= max(1, limit):
+                break
+        return fallback
 
     def _get_hidden_quick_suggestions(self) -> set[str]:
         settings = self._bridge.get_settings()
@@ -659,6 +897,11 @@ class DashboardPage(ft.Column):
         return {str(x).lower() for x in hidden}
 
     def _dismiss_quick_suggestion(self, path: Path) -> None:
+        try:
+            key = str(Path(str(path)).resolve()).lower()
+        except (OSError, RuntimeError, ValueError):
+            key = str(path).lower()
+        self._session_hidden_quick_add.add(key)
         settings = self._bridge.get_settings()
         if not isinstance(settings, dict):
             settings = {}
@@ -668,11 +911,24 @@ class DashboardPage(ft.Column):
         hidden = dashboard.get("quick_add_hidden")
         if not isinstance(hidden, list):
             hidden = []
-        key = str(path).lower()
         if key not in [str(x).lower() for x in hidden]:
             hidden.append(str(path))
         dashboard["quick_add_hidden"] = hidden
         settings["dashboard"] = dashboard
+        self._bridge.save_settings(settings)
+        self._refresh_quick_add_bar()
+        self._bridge.show_snackbar("Suggestion removed.", info=True)
+
+    def _reset_hidden_quick_suggestions(self, _e: ft.ControlEvent | None = None) -> None:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            settings = {}
+        dashboard = settings.get("dashboard")
+        if not isinstance(dashboard, dict):
+            dashboard = {}
+        dashboard["quick_add_hidden"] = []
+        settings["dashboard"] = dashboard
+        self._session_hidden_quick_add.clear()
         self._bridge.save_settings(settings)
         self._refresh_quick_add_bar()
 
@@ -794,9 +1050,20 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
-        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
         DashboardPage._safe_update(self)
+        # Refresh quick suggestions immediately with latest scanned folders.
+        seen_recent: set[str] = set()
+        recents: list[Path] = []
+        for p in self._folders:
+            key = str(p).lower()
+            if key in seen_recent:
+                continue
+            seen_recent.add(key)
+            recents.append(p)
+        self._session_recent_scan_paths = recents
+        self._refresh_recent_paths_bar()
+        self._refresh_quick_add_bar()
         
         self._bridge.dispatch_scan_complete(results, mode)
         try:
@@ -815,7 +1082,6 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
-        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = f"Scan error: {msg}"
         DashboardPage._safe_update(self)
         self._bridge.play_sound("error")
@@ -830,7 +1096,6 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
-        self._similarity_config.visible = self._selected_mode in ("similar_photos", "photos")
         self._status.value = "Cancelling scan..."
         DashboardPage._safe_update(self)
 
@@ -856,6 +1121,8 @@ class DashboardPage(ft.Column):
 
     def on_show(self) -> None:
         self._fetch_dashboard_data()
+        self._refresh_recent_paths_bar()
+        self._refresh_quick_add_bar()
         # Do not call super().update() here unnecessarily if _fetch handled updates
 
     def apply_theme(self, mode: str) -> None:

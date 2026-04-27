@@ -1,6 +1,8 @@
-# UI Overhaul Audit
+# UI Overhaul Audit (Historical)
 
-> **Archival:** Written before the AppShell migration. Section titles below describe the **removed** monolithic host; the live app entry is `main.py` → `cerebro.v2.ui.app_shell.run_app()` → `AppShell` in `app_shell.py`.
+> **Archival:** Written before the Flet shell migration.
+> It documents a removed monolithic/AppShell path and is kept for historical
+> reference only. For the active UI structure, see `docs/UI_ARCHITECTURE.md`.
 
 ## 1. Top-level window class and file (historical)
 

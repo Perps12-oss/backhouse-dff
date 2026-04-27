@@ -46,6 +46,9 @@ _FILTER_ACCENT = {
 _LIST_BUILD_ASYNC_THRESHOLD = 72
 _LIST_FIRST_SYNC_GROUPS = 28
 _LIST_ASYNC_BATCH = 36
+_GRID_BUILD_ASYNC_THRESHOLD = 36
+_GRID_FIRST_SYNC_GROUPS = 10
+_GRID_ASYNC_BATCH = 14
 
 _SMART_SELECT_OPTIONS = [
     ("keep_largest", "Keep Largest"),
@@ -77,6 +80,8 @@ class ResultsPage(ft.Stack):
         self._view_mode: str = "list"
         self._thumb_slots: Dict[str, ft.Container] = {}
         self._tile_cache_grid: Dict[str, ft.Container] = {}
+        self._inspector_file = None  # currently inspected DuplicateFile
+        self._rendering_generation = 0
 
         # UI References
         self._summary: ft.Text
@@ -92,8 +97,17 @@ class ResultsPage(ft.Stack):
         self._empty: ft.Container
         self._loading_state: ft.Container
         self._results_grid: ft.ListView
+        self._rendering_badge: ft.Container
         self._grid_btn: ft.IconButton
         self._list_btn: ft.IconButton
+        self._inspector_panel: ft.Container
+        self._inspector_wrapper: ft.Container
+        self._inspector_thumb: ft.Container
+        self._inspector_name: ft.Text
+        self._inspector_size: ft.Text
+        self._inspector_date: ft.Text
+        self._inspector_dims: ft.Text
+        self._inspector_path: ft.Text
 
         self._build_ui()
 
@@ -275,6 +289,25 @@ class ResultsPage(ft.Stack):
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
         self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
+        self._rendering_badge = ft.Container(
+            alignment=ft.Alignment(-1, -1),
+            margin=ft.margin.only(top=t.spacing.sm, right=t.spacing.md),
+            visible=False,
+            content=ft.Container(
+                content=ft.Row(
+                    [
+                        ft.ProgressRing(width=14, height=14, stroke_width=2, color="#22D3EE"),
+                        ft.Text("View ready - filling items...", size=t.typography.size_xs, color="#9FDDF7"),
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                bgcolor=ft.Colors.with_opacity(0.82, "#09111D"),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.25, "#22D3EE")),
+                border_radius=999,
+                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            ),
+        )
 
         self._empty = ft.Container(
             content=ft.Column(
@@ -339,6 +372,7 @@ class ResultsPage(ft.Stack):
             [ft.Container(expand=True), self._sticky_bar],
             expand=True,
             spacing=0,
+            visible=False,
         )
 
         self._scroll_col.controls = [
@@ -358,7 +392,71 @@ class ResultsPage(ft.Stack):
             ),
             self._empty,
         ]
-        self.controls = [self._scroll_col, self._sticky_overlay]
+        # Inspector panel (right side overlay)
+        self._inspector_thumb = ft.Container(
+            width=220, height=160,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+            alignment=ft.Alignment(0, 0),
+            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE)),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        self._inspector_name = ft.Text("", size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg, text_align=ft.TextAlign.CENTER, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+        self._inspector_size = ft.Text("", size=t.typography.size_sm, color="#4ADE80", weight=ft.FontWeight.W_600)
+        self._inspector_date = ft.Text("", size=t.typography.size_xs, color="#BFD5FF")
+        self._inspector_dims = ft.Text("", size=t.typography.size_xs, color="#C084FC")
+        self._inspector_path = ft.Text("", size=t.typography.size_xs, color=t.colors.fg_muted, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS)
+
+        def _meta_row_insp(icon_name: str, text_ctrl: ft.Text) -> ft.Row:
+            return ft.Row(
+                [ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.WHITE)), text_ctrl],
+                spacing=6, vertical_alignment=ft.CrossAxisAlignment.START,
+            )
+
+        self._inspector_panel = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text("Inspector", size=t.typography.size_sm, weight=ft.FontWeight.W_700, color=t.colors.fg, expand=True),
+                            ft.IconButton(
+                                icon=ft.icons.Icons.CLOSE,
+                                icon_size=16,
+                                icon_color=t.colors.fg_muted,
+                                on_click=lambda e: self._close_inspector(),
+                                tooltip="Close",
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Divider(height=1, color=ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                    self._inspector_thumb,
+                    self._inspector_name,
+                    _meta_row_insp(ft.icons.Icons.STORAGE, self._inspector_size),
+                    _meta_row_insp(ft.icons.Icons.SCHEDULE, self._inspector_date),
+                    _meta_row_insp(ft.icons.Icons.ASPECT_RATIO, self._inspector_dims),
+                    _meta_row_insp(ft.icons.Icons.FOLDER_OPEN, self._inspector_path),
+                ],
+                spacing=t.spacing.sm,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            width=280,
+            padding=t.spacing.lg,
+            bgcolor=ft.Colors.with_opacity(0.92, "#0B1220"),
+            border=ft.border.only(left=ft.BorderSide(1, ft.Colors.with_opacity(0.18, ft.Colors.WHITE))),
+            shadow=ft.BoxShadow(blur_radius=24, offset=ft.Offset(-4, 0), color=ft.Colors.with_opacity(0.35, ft.Colors.BLACK)),
+            visible=False,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        self._inspector_wrapper = ft.Container(
+            content=self._inspector_panel,
+            alignment=ft.Alignment(1, 0),
+            expand=True,
+            visible=False,
+        )
+
+        self.controls = [self._scroll_col, self._sticky_overlay, self._inspector_wrapper, self._rendering_badge]
 
     # ------------------------------------------------------------------
     # Public API
@@ -399,6 +497,24 @@ class ResultsPage(ft.Stack):
                 ctrl.update()
         except RuntimeError:
             pass
+
+    def _set_rendering(self, value: bool) -> None:
+        self._rendering_generation += 1
+        gen = self._rendering_generation
+        self._rendering_badge.visible = value
+        self._safe_update(self._rendering_badge)
+        if value:
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._rendering_failsafe_async, gen)
+
+    async def _rendering_failsafe_async(self, gen: int) -> None:
+        await asyncio.sleep(1.6)
+        if gen != self._rendering_generation:
+            return
+        if self._rendering_badge.visible:
+            self._set_rendering(False)
+            self._safe_update(self._rendering_badge)
 
     # ------------------------------------------------------------------
     # Selection and smart select
@@ -466,7 +582,9 @@ class ResultsPage(ft.Stack):
         else:
             self._selection_label.value = ""
         self._sticky_bar.visible = has_selection
+        self._sticky_overlay.visible = has_selection
         ResultsPage._safe_update(self._sticky_bar)
+        ResultsPage._safe_update(self._sticky_overlay)
 
     # ------------------------------------------------------------------
     # Delete
@@ -649,6 +767,7 @@ class ResultsPage(ft.Stack):
             sc.remove(self._loading_state)
 
         if not filtered:
+            self._rendering_badge.visible = False
             if self._empty not in sc:
                 sc.append(self._empty)
             if self._group_list in sc:
@@ -668,12 +787,41 @@ class ResultsPage(ft.Stack):
                 sc.append(self._results_grid)
             self._thumb_slots.clear()
             self._tile_cache_grid.clear()
-            self._results_grid.controls = [
-                self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
-            ]
+            n = len(filtered)
+            if n <= _GRID_BUILD_ASYNC_THRESHOLD:
+                self._results_grid.controls = [
+                    self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
+                ]
+                self._loading = False
+                self._set_rendering(False)
+                self._safe_update(self._scroll_col)
+                page = self._bridge.flet_page
+                if self._thumb_slots and hasattr(page, "run_task"):
+                    page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
+                return
+
+            self._list_build_generation += 1
+            gen = self._list_build_generation
+            self._set_rendering(True)
+            head_n = min(_GRID_FIRST_SYNC_GROUPS, n)
+            head = filtered[:head_n]
+            tail = filtered[head_n:]
+            self._results_grid.controls = [self._build_group_grid_section(g, i) for i, g in enumerate(head)]
             self._loading = False
             self._safe_update(self._scroll_col)
+            try:
+                self._bridge.flet_page.update()
+            except Exception:
+                pass
             page = self._bridge.flet_page
+            if tail and hasattr(page, "run_task"):
+                page.run_task(self._append_grid_sections_async, tail, head_n, gen)
+            elif tail:
+                self._results_grid.controls.extend(
+                    [self._build_group_grid_section(g, head_n + i) for i, g in enumerate(tail)]
+                )
+                self._safe_update(self._scroll_col)
+                self._set_rendering(False)
             if self._thumb_slots and hasattr(page, "run_task"):
                 page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
             return
@@ -687,6 +835,7 @@ class ResultsPage(ft.Stack):
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
             self._group_list.controls = [self._build_group_card(g) for g in filtered]
             self._loading = False
+            self._set_rendering(False)
             self._safe_update(self._scroll_col)
             if n > 80:
                 try:
@@ -697,6 +846,7 @@ class ResultsPage(ft.Stack):
 
         self._list_build_generation += 1
         gen = self._list_build_generation
+        self._set_rendering(True)
         head_n = min(_LIST_FIRST_SYNC_GROUPS, n)
         head = filtered[:head_n]
         tail = filtered[head_n:]
@@ -721,6 +871,7 @@ class ResultsPage(ft.Stack):
     async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int) -> None:
         for i in range(0, len(tail), _LIST_ASYNC_BATCH):
             if gen != self._list_build_generation:
+                self._set_rendering(False)
                 return
             chunk = tail[i : i + _LIST_ASYNC_BATCH]
             self._group_list.controls.extend([self._build_group_card(g) for g in chunk])
@@ -731,8 +882,28 @@ class ResultsPage(ft.Stack):
                 pass
             await asyncio.sleep(0)
         if gen == self._list_build_generation:
+            self._set_rendering(False)
             self._loading = False
             self._refresh()
+
+    async def _append_grid_sections_async(self, tail: List[DuplicateGroup], start_idx: int, gen: int) -> None:
+        for i in range(0, len(tail), _GRID_ASYNC_BATCH):
+            if gen != self._list_build_generation:
+                self._set_rendering(False)
+                return
+            chunk = tail[i : i + _GRID_ASYNC_BATCH]
+            offset = start_idx + i
+            self._results_grid.controls.extend(
+                [self._build_group_grid_section(g, offset + j) for j, g in enumerate(chunk)]
+            )
+            self._safe_update(self._scroll_col)
+            try:
+                self._bridge.flet_page.update()
+            except Exception:
+                pass
+            await asyncio.sleep(0)
+        if gen == self._list_build_generation:
+            self._set_rendering(False)
 
     async def _finish_loading_async(self) -> None:
         await asyncio.sleep(0)
@@ -891,13 +1062,58 @@ class ResultsPage(ft.Stack):
                 spacing=t.spacing.xs,
             ),
             padding=t.spacing.md,
-            ink=True,
             **self._get_glass_style(0.06),
         )
 
     # ------------------------------------------------------------------
     # View toggle
     # ------------------------------------------------------------------
+    def _open_inspector(self, f) -> None:
+        from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
+        self._inspector_file = f
+        p = Path(str(getattr(f, "path", "")))
+        self._inspector_name.value = p.name
+        self._inspector_size.value = fmt_size(f.size)
+        try:
+            import datetime
+            ts = float(getattr(f, "mtime", 0) or 0)
+            self._inspector_date.value = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts > 0 else ""
+        except Exception:
+            self._inspector_date.value = ""
+        self._inspector_dims.value = ""
+        if is_image_path(p):
+            try:
+                from PIL import Image as _Img
+                with _Img.open(p) as img:
+                    self._inspector_dims.value = f"{img.width} × {img.height}"
+            except Exception:
+                pass
+        self._inspector_path.value = str(p.parent)
+        self._inspector_thumb.content = ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE))
+        if is_image_path(p):
+            try:
+                b64 = get_thumbnail_cache().get_base64(p)
+                if b64:
+                    self._inspector_thumb.content = ft.Image(
+                        src=f"data:image/jpeg;base64,{b64}",
+                        width=220, height=160,
+                        fit=ft.BoxFit.CONTAIN,
+                        border_radius=8,
+                    )
+            except Exception:
+                pass
+        self._inspector_panel.visible = True
+        self._inspector_wrapper.visible = True
+        ResultsPage._safe_update(self._inspector_panel)
+        ResultsPage._safe_update(self._inspector_wrapper)
+
+    def _close_inspector(self) -> None:
+        self._inspector_file = None
+        self._inspector_panel.visible = False
+        self._inspector_wrapper.visible = False
+        ResultsPage._safe_update(self._inspector_panel)
+        ResultsPage._safe_update(self._inspector_wrapper)
+
     def _toggle_view(self, mode: str) -> None:
         if self._view_mode == mode:
             return
@@ -929,7 +1145,7 @@ class ResultsPage(ft.Stack):
             ),
             bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
             padding=ft.padding.symmetric(horizontal=4, vertical=3),
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment(0, 0),
         )
 
         placeholder = ft.Container(
@@ -971,6 +1187,8 @@ class ResultsPage(ft.Stack):
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
             tooltip=p.name,
+            ink=True,
+            on_click=lambda e, _f=f: self._open_inspector(_f),
         )
         self._tile_cache_grid[key] = tile
         return tile
