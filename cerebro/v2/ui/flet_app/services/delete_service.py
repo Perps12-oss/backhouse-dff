@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 import shutil
+import threading
 from typing import Callable, List, Optional
 
 from cerebro.core.deletion import DeletionEngine, DeletionPolicy, DeletionRequest
@@ -27,7 +28,8 @@ class TrashUndoTransaction:
     created_at: float
 
 
-_LAST_TRASH_TX: TrashUndoTransaction | None = None
+_TRASH_HISTORY: list[TrashUndoTransaction] = []
+_MAX_TRASH_HISTORY = 5
 
 
 class DeleteService:
@@ -93,11 +95,49 @@ class DeleteService:
         new_groups = prune_paths_from_groups(groups, deleted_paths)
         return new_groups, deleted_n, failed_n, bytes_reclaimed
 
+    def delete_and_prune_async(
+        self,
+        paths: List[str],
+        groups: List[DuplicateGroup],
+        policy: DeletionPolicy,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        done_callback: Optional[Callable[[List[DuplicateGroup], int, int, int, Optional[Exception]], None]] = None,
+    ) -> None:
+        """Run deletion on a worker thread and report progress/completion callbacks."""
+        total = len(paths)
+
+        def _worker() -> None:
+            try:
+                last_reported = 0
+                min_step = max(10, int(total * 0.05)) if total > 0 else 1
+
+                def _progress(i: int, t: int, name: str) -> None:
+                    nonlocal last_reported
+                    if progress_callback is None:
+                        return
+                    if i >= t or (i - last_reported) >= min_step:
+                        last_reported = i
+                        progress_callback(i, t, name)
+
+                deleted_n, failed_n, bytes_reclaimed, deleted_paths = self.delete_files(
+                    paths,
+                    policy,
+                    progress_cb=_progress,
+                )
+                new_groups = prune_paths_from_groups(groups, deleted_paths)
+                if done_callback:
+                    done_callback(new_groups, deleted_n, failed_n, bytes_reclaimed, None)
+            except Exception as exc:  # pragma: no cover - defensive
+                _log.exception("delete_and_prune_async failed")
+                if done_callback:
+                    done_callback(groups, 0, 0, 0, exc)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     @classmethod
     def undo_last_trash_delete(cls) -> tuple[bool, int]:
         """Restore files from the last managed-trash transaction."""
-        global _LAST_TRASH_TX
-        tx = _LAST_TRASH_TX
+        tx = _TRASH_HISTORY[-1] if _TRASH_HISTORY else None
         if tx is None or not tx.moved:
             return False, 0
 
@@ -115,7 +155,10 @@ class DeleteService:
                 ok = False
 
         if ok:
-            _LAST_TRASH_TX = None
+            try:
+                _TRASH_HISTORY.pop()
+            except Exception:
+                pass
         return ok, restored
 
     def _delete_to_managed_trash(
@@ -124,8 +167,6 @@ class DeleteService:
         sizes_by_path: dict[str, int],
         progress_cb: Optional[Callable[[int, int, str], None]],
     ) -> list[str]:
-        global _LAST_TRASH_TX
-
         trash_root = Path.home() / ".cerebro" / "trash" / "managed"
         trash_root.mkdir(parents=True, exist_ok=True)
         tx_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -134,6 +175,7 @@ class DeleteService:
 
         moved: list[tuple[str, str]] = []
         deleted_paths: list[str] = []
+        events_to_log: list[tuple[str, int, str]] = []
         total = len(paths)
         for i, raw in enumerate(paths):
             src = Path(raw)
@@ -154,16 +196,21 @@ class DeleteService:
                 shutil.move(str(src), str(dst))
                 moved.append((str(src), str(dst)))
                 deleted_paths.append(str(src))
-                log_deletion_event(str(src), sizes_by_path.get(str(src), 0), DeletionPolicy.TRASH.value)
+                events_to_log.append((str(src), sizes_by_path.get(str(src), 0), DeletionPolicy.TRASH.value))
             except (OSError, shutil.Error):
                 _log.exception("Managed trash move failed for %s", src)
 
         if moved:
-            _LAST_TRASH_TX = TrashUndoTransaction(
+            _TRASH_HISTORY.append(TrashUndoTransaction(
                 tx_id=tx_id,
                 moved=moved,
                 created_at=datetime.now().timestamp(),
-            )
-        else:
-            _LAST_TRASH_TX = None
+            ))
+            while len(_TRASH_HISTORY) > _MAX_TRASH_HISTORY:
+                _TRASH_HISTORY.pop(0)
+        for path, size, mode_tag in events_to_log:
+            try:
+                log_deletion_event(path, size, mode_tag)
+            except Exception:
+                _log.debug("Failed to log deletion event for %s", path, exc_info=True)
         return deleted_paths

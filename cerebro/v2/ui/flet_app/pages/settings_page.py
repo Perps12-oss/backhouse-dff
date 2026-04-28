@@ -70,6 +70,7 @@ class SettingsPage(ft.Column):
         self._general_hidden: ft.Checkbox
         self._general_reduce_motion: ft.Checkbox
         self._general_sound: ft.Checkbox
+        self._general_skip_results: ft.Checkbox
 
         # Control References (Appearance)
         self._appearance_font_slider: ft.Slider
@@ -240,6 +241,7 @@ class SettingsPage(ft.Column):
         self._general_hidden.value = self._settings["general"].get("show_hidden_files", False)
         self._general_reduce_motion.value = self._settings["accessibility"].get("reduce_motion", False)
         self._general_sound.value = self._settings["notifications"].get("sound_enabled", False)
+        self._general_skip_results.value = bool(self._settings["general"].get("skip_results_after_scan", False))
 
         # Appearance
         self._appearance_font_slider.value = self._settings["appearance"].get("font_size", 13)
@@ -310,6 +312,10 @@ class SettingsPage(ft.Column):
             label="Enable sound effects",
             value=self._settings["notifications"].get("sound_enabled", False),
         )
+        self._general_skip_results = ft.Checkbox(
+            label="Skip Results page after scan (open Review directly)",
+            value=bool(self._settings["general"].get("skip_results_after_scan", False)),
+        )
         for cb in [
             self._general_confirm,
             self._general_remember,
@@ -317,6 +323,7 @@ class SettingsPage(ft.Column):
             self._general_hidden,
             self._general_reduce_motion,
             self._general_sound,
+            self._general_skip_results,
         ]:
             content.controls.append(cb)
 
@@ -652,6 +659,7 @@ class SettingsPage(ft.Column):
         self._settings["general"]["show_hidden_files"] = self._general_hidden.value
         self._settings["accessibility"]["reduce_motion"] = bool(self._general_reduce_motion.value)
         self._settings["notifications"]["sound_enabled"] = bool(self._general_sound.value)
+        self._settings["general"]["skip_results_after_scan"] = bool(self._general_skip_results.value)
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
         self._settings["appearance"]["ui_theme_preset"] = str(

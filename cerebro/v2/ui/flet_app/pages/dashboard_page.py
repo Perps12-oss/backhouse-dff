@@ -69,6 +69,8 @@ class DashboardPage(ft.Column):
         self._folders: list[Path] = []  # Enforce Path objects
         self._selected_mode = "files"
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
+        self._initial_load_done = False
+        self._stats_fetch_generation = 0
         self._session_hidden_quick_add: set[str] = set()
         self._session_recent_scan_paths: list[Path] = []
         self._quick_add_expanded: bool = False
@@ -239,6 +241,7 @@ class DashboardPage(ft.Column):
 
         self._quick_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
         self._recent_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
+        self._recent_paths_generation = 0
         self._recent_wrap = ft.Column(
             [
                 ft.Text(
@@ -432,8 +435,8 @@ class DashboardPage(ft.Column):
         self._main_panels = list(self.controls)  # snapshot for hide/show swap
         self.controls.append(self._scan_view)     # scan view always last, starts hidden
         
-        # Initial data fetch
-        self._fetch_dashboard_data()
+        # Initial data fetch (async so first layout is not blocked)
+        self._schedule_dashboard_data_fetch()
 
     # ------------------------------------------------------------------
     # Theme Helpers
@@ -481,15 +484,36 @@ class DashboardPage(ft.Column):
     # ------------------------------------------------------------------
     # Data & UI Updates (No Rebuild)
     # ------------------------------------------------------------------
-    def _fetch_dashboard_data(self):
+    def _schedule_dashboard_data_fetch(self) -> None:
+        self._stats_fetch_generation += 1
+        gen = self._stats_fetch_generation
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._fetch_dashboard_data_async, gen)
+        else:
+            self._fetch_dashboard_data_sync()
+
+    def _fetch_dashboard_data_sync(self) -> None:
         try:
             stats = self._bridge.get_stats()
             if stats:
                 self._stats = stats
-            
-        except Exception as e:
+        except Exception:
             _log.error("Failed to fetch dashboard data", exc_info=True)
+        self._update_stats_ui()
 
+    async def _fetch_dashboard_data_async(self, gen: int) -> None:
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        try:
+            stats = await loop.run_in_executor(None, self._bridge.get_stats)
+            if gen != self._stats_fetch_generation:
+                return
+            if stats:
+                self._stats = stats
+        except Exception:
+            _log.error("Failed to fetch dashboard data", exc_info=True)
         self._update_stats_ui()
 
     def _update_stats_ui(self):
@@ -731,8 +755,26 @@ class DashboardPage(ft.Column):
             self._quick_add_wrap.update()
 
     def _refresh_recent_paths_bar(self) -> None:
-        t = self._t
+        self._recent_paths_generation += 1
+        gen = self._recent_paths_generation
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._refresh_recent_paths_bar_async, gen)
+            return
         recents = self._discover_recent_scan_paths(limit=6)
+        self._apply_recent_paths(recents)
+
+    async def _refresh_recent_paths_bar_async(self, gen: int) -> None:
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        recents = await loop.run_in_executor(None, lambda: self._discover_recent_scan_paths(limit=6))
+        if gen != self._recent_paths_generation:
+            return
+        self._apply_recent_paths(recents)
+
+    def _apply_recent_paths(self, recents: list[tuple[str, Path]]) -> None:
+        t = self._t
         if not recents:
             self._recent_wrap.visible = False
             if self._is_mounted():
@@ -1134,9 +1176,12 @@ class DashboardPage(ft.Column):
         return f"Current: {p[:head]}...{p[-tail:]}"
 
     def on_show(self) -> None:
-        self._fetch_dashboard_data()
+        # F11: avoid repeated heavy refresh; first show does full async load,
+        # later shows only schedule lightweight cache-backed refresh.
+        self._schedule_dashboard_data_fetch()
         self._refresh_recent_paths_bar()
         self._refresh_quick_add_bar()
+        self._initial_load_done = True
         # Do not call super().update() here unnecessarily if _fetch handled updates
 
     def apply_theme(self, mode: str) -> None:

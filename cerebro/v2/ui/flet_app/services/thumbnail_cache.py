@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import io
 import logging
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Iterable, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class ThumbnailCache:
     def __init__(self, max_entries: int = _MAX_CACHE) -> None:
         self._max = max_entries
         self._data: OrderedDict[str, Optional[str]] = OrderedDict()
+        self._pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="thumb-cache")
 
     def get_base64(self, path: Path) -> Optional[str]:
         """Return base64-encoded JPEG or None if not an image / unreadable."""
@@ -78,6 +81,30 @@ class ThumbnailCache:
         self._data.move_to_end(key)
         while len(self._data) > self._max:
             self._data.popitem(last=False)
+
+    def _load_one(self, path: Path) -> tuple[Path, Optional[str]]:
+        return path, self.get_base64(path)
+
+    async def load_batch_async(
+        self,
+        paths: Iterable[Path],
+        on_thumbnail_ready: Callable[[Path, Optional[str]], Awaitable[None] | None],
+    ) -> None:
+        """Load thumbnails in parallel and call callback as each one completes."""
+        loop = asyncio.get_event_loop()
+        tasks = [
+            asyncio.ensure_future(loop.run_in_executor(self._pool, self._load_one, Path(p)))
+            for p in paths
+            if is_image_path(Path(p))
+        ]
+        for done in asyncio.as_completed(tasks):
+            try:
+                p, b64 = await done
+            except Exception:  # pragma: no cover - defensive
+                continue
+            out = on_thumbnail_ready(p, b64)
+            if asyncio.iscoroutine(out):
+                await out
 
 
 _DEFAULT_CACHE: Optional[ThumbnailCache] = None

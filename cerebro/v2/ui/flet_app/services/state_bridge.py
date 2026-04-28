@@ -22,6 +22,7 @@ from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.state import StateStore
 from cerebro.v2.state.actions import ThemeChanged
 from cerebro.v2.state.app_state import AppState
+from cerebro.v2.ui.flet_app.services.stats_service import get_stats_service
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.backend_service import BackendService
@@ -56,6 +57,12 @@ class StateBridge:
         self._visual_theme: str = "light"
         self._scan_session: Dict[str, Any] = {}
         self._suppress_page_update: bool = False
+        self._last_page_update_ts: float = 0.0  # B3: throttle progress-tick updates
+        self._progress_controls: list[ft.Control] = []
+        self._action_controls: dict[str, list[ft.Control]] = {}
+        self._structural_actions: set[str] = {"SetActiveTab", "ScanCompleted"}
+        self._stats_service = get_stats_service()
+        self._stats_service.set_on_refresh(self._on_stats_refreshed)
 
     @property
     def app_theme(self) -> str:
@@ -108,18 +115,85 @@ class StateBridge:
         """Register a callback fired when the user switches light/dark mode."""
         self._on_theme_change = cb
 
+    def register_progress_control(self, ctrl: ft.Control) -> None:
+        """Register a control to update on scan-progress actions."""
+        if ctrl not in self._progress_controls:
+            self._progress_controls.append(ctrl)
+
+    def register_action_control(self, action_type_name: str, ctrl: ft.Control) -> None:
+        """Register a control to update for a specific action type name."""
+        bucket = self._action_controls.setdefault(str(action_type_name), [])
+        if ctrl not in bucket:
+            bucket.append(ctrl)
+
+    def register_structural_action(self, action_type_name: str) -> None:
+        self._structural_actions.add(str(action_type_name))
+
     def _on_store_change(self, new: AppState, old: AppState, action: object) -> None:
-        """Store listener: triggers UI refresh via page.update()."""
+        """Store listener: triggers UI refresh. Progress events are throttled."""
+        from cerebro.v2.state.actions import ScanProgressSnapshot
+        is_progress = isinstance(action, ScanProgressSnapshot)
+        action_name = type(action).__name__
+
         if self._on_state_change:
             try:
                 self._on_state_change(new, old, action)
             except Exception:
                 _log.exception("State change callback failed")
-        if not self._suppress_page_update:
+
+        if self._suppress_page_update:
+            return
+
+        if is_progress:
+            # B3/F1: throttle scan progress to ≤4 page updates/second
+            import time as _t
+            now = _t.monotonic()
+            if (now - self._last_page_update_ts) < 0.25:
+                return
+            self._last_page_update_ts = now
+            updated = False
+            for ctrl in list(self._progress_controls):
+                try:
+                    if ctrl is not None and ctrl.page is not None:
+                        ctrl.update()
+                        updated = True
+                except Exception:
+                    continue
+            if updated:
+                return
+
+        dirty_controls = self._action_controls.get(action_name, [])
+        dirty_updated = False
+        for ctrl in list(dirty_controls):
             try:
-                self._page.update()
+                if ctrl is not None and ctrl.page is not None:
+                    ctrl.update()
+                    dirty_updated = True
             except Exception:
-                pass
+                continue
+        if dirty_updated and action_name not in self._structural_actions:
+            return
+
+        try:
+            self._page.update()
+        except Exception:
+            pass
+
+    def _on_stats_refreshed(self, _stats: Dict[str, Any]) -> None:
+        """Refresh UI when background stats cache finishes recomputing."""
+        try:
+            if hasattr(self._page, "run_thread"):
+                self._page.run_thread(self._safe_page_update)
+            else:
+                self._safe_page_update()
+        except Exception:
+            pass
+
+    def _safe_page_update(self) -> None:
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     # -- Convenience dispatchers -----------------------------------------------
 
@@ -213,20 +287,11 @@ class StateBridge:
             _log.exception("Persist scan history failed")
 
     def get_stats(self) -> Dict[str, Any]:
-        """Aggregate stats for the dashboard cards."""
-        from cerebro.v2.core.deletion_history_db import get_default_history_manager
-        from cerebro.v2.core.scan_history_db import get_scan_history_db
+        """Aggregate stats for the dashboard cards (cached + background refresh)."""
+        return self._stats_service.get_stats()
 
-        entries = get_scan_history_db().get_recent(100_000)
-        scans = len(entries)
-        dupes = sum(max(0, e.files_found - e.groups_found) for e in entries)
-        bytes_reclaimed = 0
-        for row in get_default_history_manager().get_recent_history(100_000):
-            try:
-                bytes_reclaimed += int(row[3])
-            except (IndexError, TypeError, ValueError):
-                continue
-        return {"scans": scans, "dupes": dupes, "bytes_reclaimed": bytes_reclaimed}
+    def invalidate_stats_cache(self) -> None:
+        self._stats_service.invalidate()
 
     def get_recent_scans(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Recent scans for the home page list (same shape as dashboard rows)."""

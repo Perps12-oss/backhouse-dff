@@ -40,6 +40,7 @@ class AppLayout(ft.Row):
         # switcher often failed to replace visible content while the rail updated.
         # Clip so wide / overflowing results subtree cannot sit on top of the rail in hit-testing.
         self._content_host = ft.Container(expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
+        self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
         nav_destinations = [
             ft.NavigationRailDestination(
@@ -122,13 +123,16 @@ class AppLayout(ft.Row):
         inner = None
         if builder:
             inner = builder()
-            # Per-tab key forces a distinct subtree so Flet remounts singleton pages.
-            self._content_host.content = ft.Container(
-                expand=True,
-                content=inner,
-                key=f"cerebro-tab-{key}",
-                clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            )
+            # F2: reuse the same wrapper container per tab to avoid remount overhead.
+            if key not in self._tab_containers:
+                self._tab_containers[key] = ft.Container(
+                    expand=True,
+                    content=inner,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                )
+            else:
+                self._tab_containers[key].content = inner
+            self._content_host.content = self._tab_containers[key]
         else:
             self._content_host.content = ft.Container(
                 expand=True,
@@ -166,10 +170,17 @@ class AppLayout(ft.Row):
                     _log.exception("Deferred apply_theme failed for route key %s", key)
 
     def refresh_current(self) -> None:
-        """Rebuild the current page (e.g., after theme or state change)."""
+        """Refresh the current page without a full navigation cycle (F10)."""
         key = self._current_key or "dashboard"
-        self._current_key = ""
-        self.navigate_to(key)
+        builder = self._builders.get(key)
+        if builder:
+            inner = builder()
+            if inner is not None and hasattr(inner, "on_show"):
+                try:
+                    inner.on_show()
+                except Exception:
+                    _log.exception("on_show failed in refresh_current for %s", key)
+        self._content_host.update()
 
     @property
     def current_key(self) -> str:

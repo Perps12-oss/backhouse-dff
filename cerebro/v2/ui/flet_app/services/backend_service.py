@@ -34,6 +34,7 @@ class BackendService:
         self._on_progress: Optional[Callable[[Dict[str, Any]], None]] = None
         self._on_complete: Optional[Callable[[List[DuplicateGroup], str], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
+        self._last_progress_time: float = 0.0  # throttle: emit at most 4×/s
 
     @property
     def orchestrator(self) -> ScanOrchestrator:
@@ -125,22 +126,28 @@ class BackendService:
             fn(*args)
 
     def _handle_progress(self, progress: ScanProgress) -> None:
+        import time as _time
         if self._cancel_event.is_set():
             return
+        is_terminal = progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR)
         if self._on_progress:
-            data = {
-                "state": progress.state.value if progress.state else "",
-                "files_scanned": progress.files_scanned,
-                "files_total": progress.files_total,
-                "duplicates_found": progress.duplicates_found,
-                "groups_found": progress.groups_found,
-                "bytes_reclaimable": progress.bytes_reclaimable,
-                "elapsed_seconds": progress.elapsed_seconds,
-                "current_file": progress.current_file or "",
-                "stage": progress.stage or "",
-            }
-            self._on_progress(data)
-        if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
+            # Throttle intermediate progress to ≤4 updates/second; always deliver terminal events.
+            now = _time.monotonic()
+            if is_terminal or (now - self._last_progress_time) >= 0.25:
+                self._last_progress_time = now
+                data = {
+                    "state": progress.state.value if progress.state else "",
+                    "files_scanned": progress.files_scanned,
+                    "files_total": progress.files_total,
+                    "duplicates_found": progress.duplicates_found,
+                    "groups_found": progress.groups_found,
+                    "bytes_reclaimable": progress.bytes_reclaimable,
+                    "elapsed_seconds": progress.elapsed_seconds,
+                    "current_file": progress.current_file or "",
+                    "stage": progress.stage or "",
+                }
+                self._on_progress(data)
+        if is_terminal:
             with self._scan_lock:
                 self._scanning = False
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import math
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Set
@@ -46,11 +47,11 @@ _FILTER_ACCENT = {
 # Above this many duplicate *groups*, build the ListView in chunks so the UI thread
 # can still process NavigationRail taps (see debug-4176e4: multi-second sync build).
 _LIST_BUILD_ASYNC_THRESHOLD = 72
-_LIST_FIRST_SYNC_GROUPS = 28
-_LIST_ASYNC_BATCH = 36
+_LIST_FIRST_SYNC_GROUPS = 4   # F3: show 4 cards before first frame, rest async
+_LIST_ASYNC_BATCH = 16
 _GRID_BUILD_ASYNC_THRESHOLD = 36
-_GRID_FIRST_SYNC_GROUPS = 10
-_GRID_ASYNC_BATCH = 14
+_GRID_FIRST_SYNC_GROUPS = 4   # F3: same for grid
+_GRID_ASYNC_BATCH = 8
 
 _SMART_SELECT_OPTIONS = [
     ("keep_largest", "Keep Largest"),
@@ -83,14 +84,26 @@ class ResultsPage(ft.Stack):
         self._view_mode_by_filter: Dict[str, str] = {"all": "list"}
         self._grouping_mode: str = "groups"
         self._folder_cross_only: bool = False
-        self._min_reclaimable_bytes: int = 100 * 1024
+        self._min_reclaimable_bytes: int = 0
         self._thumb_slots: Dict[str, ft.Container] = {}
         self._tile_cache_grid: Dict[str, ft.Container] = {}
+        self._all_group_cards: Dict[int, ft.Container] = {}
         self._inspector_file = None  # currently inspected DuplicateFile
+        self._inspector_dims_generation = 0
         self._rendering_generation = 0
+        self._pending_deferred_render: bool = False
 
         # UI References
         self._summary: ft.Text
+        self._last_scan: ft.Text
+        self._hero_card: ft.Container
+        self._hero_primary: ft.Text
+        self._hero_secondary: ft.Text
+        self._type_strip: ft.Row
+        self._folder_col: ft.Column
+        self._group_col: ft.Column
+        self._age_col: ft.Column
+        self._mult_col: ft.Column
         self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
         self._selection_label: ft.Text
@@ -199,6 +212,7 @@ class ResultsPage(ft.Stack):
         t = self._t
 
         self._summary = ft.Text("", size=t.typography.size_md, color="#BFD5FF", weight=ft.FontWeight.W_600)
+        self._last_scan = ft.Text("Last scan: -", size=t.typography.size_sm, color=t.colors.fg_muted)
 
         # Smart select row
         self._smart_seg = ft.SegmentedButton(
@@ -290,7 +304,13 @@ class ResultsPage(ft.Stack):
         )
         self._header = ft.Row(
             [
-                ft.Text("Scan Results", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
+                ft.Column(
+                    [
+                        ft.Text("Scan Results", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
+                        self._last_scan,
+                    ],
+                    spacing=2,
+                ),
                 ft.Row([self._summary, self._grid_btn, self._list_btn], spacing=t.spacing.xs, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -334,7 +354,7 @@ class ResultsPage(ft.Stack):
         )
         self._min_group_filter = ft.Dropdown(
             width=220,
-            value="102400",
+            value="0",
             dense=True,
             text_size=12,
             label="Minimum group reclaimable",
@@ -349,6 +369,87 @@ class ResultsPage(ft.Stack):
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
         self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
+        self._hero_primary = ft.Text("0 B", size=t.typography.size_xxxl, weight=ft.FontWeight.BOLD, color="#22D3EE")
+        self._hero_secondary = ft.Text("", size=t.typography.size_base, color=t.colors.fg2)
+        self._hero_card = ft.Container(
+            content=ft.Column(
+                [
+                    self._hero_primary,
+                    ft.Text("can be reclaimed", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
+                    self._hero_secondary,
+                    ft.FilledButton(
+                        "Review duplicates →",
+                        on_click=lambda e: self._bridge.navigate("review"),
+                        style=ft.ButtonStyle(bgcolor="#22D3EE", color="#0B1220"),
+                    ),
+                ],
+                spacing=t.spacing.sm,
+            ),
+            padding=t.spacing.xl,
+            **self._get_glass_style(0.06),
+        )
+        self._type_strip = ft.Row(wrap=True, spacing=t.spacing.sm)
+        self._folder_col = ft.Column(spacing=t.spacing.xs)
+        self._group_col = ft.Column(spacing=t.spacing.xs)
+        self._age_col = ft.Column(spacing=t.spacing.xs)
+        self._mult_col = ft.Column(spacing=t.spacing.xs)
+        self._dashboard = ft.Column(
+            [
+                self._hero_card,
+                ft.Text("By type", size=t.typography.size_md, weight=ft.FontWeight.W_700, color=t.colors.fg),
+                self._type_strip,
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Column(
+                                [ft.Text("Top folders", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._folder_col],
+                                spacing=t.spacing.xs,
+                            ),
+                            padding=t.spacing.md,
+                            **self._get_glass_style(0.05),
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Column(
+                                [ft.Text("Top groups", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._group_col],
+                                spacing=t.spacing.xs,
+                            ),
+                            padding=t.spacing.md,
+                            **self._get_glass_style(0.05),
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Column(
+                                [ft.Text("By age", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._age_col],
+                                spacing=t.spacing.xs,
+                            ),
+                            padding=t.spacing.md,
+                            **self._get_glass_style(0.05),
+                        ),
+                        ft.Container(
+                            col={"sm": 12, "md": 6},
+                            content=ft.Column(
+                                [ft.Text("Highest multiplicity", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._mult_col],
+                                spacing=t.spacing.xs,
+                            ),
+                            padding=t.spacing.md,
+                            **self._get_glass_style(0.05),
+                        ),
+                    ],
+                    run_spacing=t.spacing.sm,
+                    spacing=t.spacing.sm,
+                ),
+                ft.Row(
+                    [
+                        ft.FilledButton("Browse all groups (grid)", on_click=lambda e: self._toggle_view("grid")),
+                        ft.OutlinedButton("Browse all groups (list)", on_click=lambda e: self._toggle_view("list")),
+                    ],
+                    spacing=t.spacing.sm,
+                ),
+            ],
+            spacing=t.spacing.md,
+        )
         self._rendering_badge = ft.Container(
             alignment=ft.Alignment(-1, -1),
             margin=ft.margin.only(top=t.spacing.sm, right=t.spacing.md),
@@ -441,26 +542,7 @@ class ResultsPage(ft.Stack):
                 padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
                 **self._get_glass_style(0.04),
             ),
-            ft.Container(
-                content=self._smart_row,
-                padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.xs),
-            ),
-            ft.Container(
-                content=ft.Row(
-                    [self._grouping_seg, self._folder_cross_toggle],
-                    spacing=t.spacing.md,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.xs),
-            ),
-            ft.Container(
-                content=ft.Row(
-                    [self._filter_seg, ft.Container(expand=True), self._min_group_filter],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
-                **self._get_glass_style(0.03),
-            ),
+            ft.Container(content=self._dashboard, padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.md)),
             self._empty,
         ]
         # Inspector panel (right side overlay)
@@ -532,11 +614,17 @@ class ResultsPage(ft.Stack):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def load_results(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
+    def load_results(self, groups: List[DuplicateGroup], mode: str = "files", *, defer_render: bool = False) -> None:
         self._groups = sorted(list(groups), key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)
         self._scan_mode = mode or "files"
         self._selected_paths.clear()
+        self._all_group_cards = {}
         self._recompute_filter_counts()
+        if defer_render:
+            # Data is fresh; grid will build when on_show() fires (user navigates to Results tab)
+            self._pending_deferred_render = True
+            return
+        self._pending_deferred_render = False
         self._loading = True
         self._refresh()
         page = self._bridge.flet_page
@@ -550,6 +638,15 @@ class ResultsPage(ft.Stack):
         return list(self._groups)
 
     def on_show(self) -> None:
+        if self._pending_deferred_render:
+            self._pending_deferred_render = False
+            self._loading = True
+            self._refresh()
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._finish_loading_async)
+            else:
+                self._loading = False
         self._refresh()
 
     def _is_mounted(self) -> bool:
@@ -672,20 +769,14 @@ class ResultsPage(ft.Stack):
         self._refresh()
 
     def _update_selection_ui(self) -> None:
-        count = len(self._selected_paths)
-        has_selection = count > 0
-        has_groups = len(self._groups) > 0
-        self._smart_row.visible = has_groups
+        # Results is read-only intelligence surface; decisions happen on Review.
+        self._smart_row.visible = False
+        self._delete_btn.visible = False
+        self._permanent_btn.visible = False
+        self._selection_label.value = ""
+        self._sticky_bar.visible = False
+        self._sticky_overlay.visible = False
         ResultsPage._safe_update(self._smart_row)
-        self._delete_btn.visible = has_selection
-        self._permanent_btn.visible = has_selection
-        if has_selection:
-            total_bytes = self._current_marked_bytes()
-            self._selection_label.value = f"{count:,} files selected · {fmt_size(total_bytes)} to be freed"
-        else:
-            self._selection_label.value = ""
-        self._sticky_bar.visible = has_selection
-        self._sticky_overlay.visible = has_selection
         ResultsPage._safe_update(self._sticky_bar)
         ResultsPage._safe_update(self._sticky_overlay)
         self._update_summary_line()
@@ -702,13 +793,24 @@ class ResultsPage(ft.Stack):
     def _update_summary_line(self) -> None:
         filtered = self._filtered_groups()
         recoverable = sum(g.reclaimable for g in filtered)
-        marked_bytes = self._current_marked_bytes()
-        remaining = max(0, recoverable - marked_bytes)
-        if marked_bytes > 0:
-            self._summary.value = f"{fmt_size(marked_bytes)} marked for deletion · {fmt_size(remaining)} remaining"
-        else:
-            self._summary.value = f"{fmt_size(recoverable)} can be reclaimed across {len(filtered):,} duplicate groups"
+        total_files = sum(len(g.files) for g in filtered)
+        eta_minutes = max(1, int(math.ceil((len(filtered) * 1.3) / 60.0)))
+        self._summary.value = f"{len(filtered):,} groups · {total_files:,} files · ~{eta_minutes} min to review"
         self._safe_update(self._summary)
+
+    def _refresh_dashboard(self, filtered: List[DuplicateGroup]) -> None:
+        total_bytes = sum(int(getattr(g, "reclaimable", 0) or 0) for g in filtered)
+        total_files = sum(len(g.files) for g in filtered)
+        eta_minutes = max(1, int(math.ceil((len(filtered) * 1.3) / 60.0)))
+        self._hero_primary.value = fmt_size(total_bytes)
+        self._hero_secondary.value = f"{len(filtered):,} duplicate groups · {total_files:,} files · ~{eta_minutes} min to review"
+        recent = self._bridge.get_scan_history_table_rows(limit=1)
+        self._last_scan.value = f"Last scan: {recent[0]['date']}" if recent else "Last scan: -"
+        self._type_strip.controls = self._build_type_tiles(filtered, total_bytes)
+        self._folder_col.controls = self._build_top_folders(filtered)
+        self._group_col.controls = self._build_top_groups(filtered)
+        self._age_col.controls = self._build_age_buckets(filtered)
+        self._mult_col.controls = self._build_multiplicity(filtered)
 
     # ------------------------------------------------------------------
     # Delete
@@ -746,19 +848,63 @@ class ResultsPage(ft.Stack):
     def _execute_delete(self, policy: DeletionPolicy) -> None:
         from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
         paths = list(self._selected_paths)
+        if not paths:
+            return
         service = DeleteService()
-        new_groups, deleted, failed, bytes_reclaimed = service.delete_and_prune(paths, self._groups, policy)
-        self._selected_paths.clear()
-        self._groups = new_groups
-        self._bridge.coordinator.results_files_removed(paths)
-        self._refresh()
-        if deleted > 0:
-            self._show_success_modal(deleted, bytes_reclaimed, policy)
-        if failed > 0:
-            self._bridge.show_snackbar(
-                f"{failed:,} files could not be deleted.",
-                error=True,
-            )
+        progress_text = ft.Text("Preparing deletion...", size=self._t.typography.size_sm)
+        progress_bar = ft.ProgressBar(value=0)
+        progress_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Deleting files"),
+            content=ft.Column([progress_text, progress_bar], tight=True, spacing=10),
+        )
+        self._bridge.show_modal_dialog(progress_dialog)
+
+        page = self._bridge.flet_page
+
+        def _ui_progress(done: int, total: int, name: str) -> None:
+            t = max(1, int(total or 1))
+            progress_bar.value = min(1.0, done / t)
+            progress_text.value = f"{done:,}/{t:,} processed · {name}"
+            ResultsPage._safe_update(progress_bar)
+            ResultsPage._safe_update(progress_text)
+
+        def _ui_done(new_groups, deleted: int, failed: int, bytes_reclaimed: int, err: Exception | None) -> None:
+            self._bridge.dismiss_top_dialog()
+            if err is not None:
+                self._bridge.show_snackbar(f"Deletion failed: {err}", error=True)
+                return
+            self._selected_paths.clear()
+            self._groups = list(new_groups)
+            self._bridge.coordinator.results_files_removed(paths)
+            self._refresh()
+            if deleted > 0:
+                self._show_success_modal(deleted, bytes_reclaimed, policy)
+            if failed > 0:
+                self._bridge.show_snackbar(
+                    f"{failed:,} files could not be deleted.",
+                    error=True,
+                )
+
+        def _progress(done: int, total: int, name: str) -> None:
+            if hasattr(page, "run_thread"):
+                page.run_thread(_ui_progress, done, total, name)
+            else:
+                _ui_progress(done, total, name)
+
+        def _done(new_groups, deleted: int, failed: int, bytes_reclaimed: int, err: Exception | None) -> None:
+            if hasattr(page, "run_thread"):
+                page.run_thread(_ui_done, new_groups, deleted, failed, bytes_reclaimed, err)
+            else:
+                _ui_done(new_groups, deleted, failed, bytes_reclaimed, err)
+
+        service.delete_and_prune_async(
+            paths=paths,
+            groups=self._groups,
+            policy=policy,
+            progress_callback=_progress,
+            done_callback=_done,
+        )
 
     def _show_success_modal(self, deleted: int, bytes_reclaimed: int, policy: DeletionPolicy) -> None:
         t = self._t
@@ -910,6 +1056,126 @@ class ResultsPage(ft.Stack):
                 count += 1
         return count
 
+    def _build_type_tiles(self, groups: List[DuplicateGroup], total_bytes: int) -> List[ft.Control]:
+        buckets: Dict[str, Dict[str, int]] = {k: {"bytes": 0, "files": 0} for k, _ in _FILTER_TABS}
+        for g in groups:
+            for f in g.files:
+                kind = classify_file(getattr(f, "extension", ""))
+                if kind not in buckets:
+                    kind = "other"
+                buckets[kind]["bytes"] += int(getattr(f, "size", 0) or 0)
+                buckets[kind]["files"] += 1
+        ranked = sorted(
+            [k for k, _ in _FILTER_TABS if k != "all"],
+            key=lambda k: buckets[k]["bytes"],
+            reverse=True,
+        )
+        out: List[ft.Control] = []
+        for key in ranked:
+            label = next((v for k, v in _FILTER_TABS if k == key), key.title())
+            b = buckets[key]["bytes"]
+            pct = 0.0 if total_bytes <= 0 else min(1.0, b / total_bytes)
+            out.append(
+                ft.Container(
+                    width=140,
+                    padding=ft.padding.all(10),
+                    border_radius=10,
+                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                    border=ft.border.all(1, ft.Colors.with_opacity(0.14, ft.Colors.WHITE)),
+                    content=ft.Column(
+                        [
+                            ft.Text(label, size=self._t.typography.size_sm, weight=ft.FontWeight.W_700, color=self._t.colors.fg),
+                            ft.Text(fmt_size(b), size=self._t.typography.size_sm, color="#BFD5FF"),
+                            ft.Text(f"{buckets[key]['files']:,} files", size=self._t.typography.size_xs, color=self._t.colors.fg_muted),
+                            ft.ProgressBar(value=pct, color=_FILTER_ACCENT.get(key, "#93C5FD"), bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                        ],
+                        spacing=4,
+                    ),
+                )
+            )
+        return out
+
+    def _build_top_folders(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
+        buckets: Dict[str, Dict[str, int]] = {}
+        for g in groups:
+            folder = str(Path(str(g.files[0].path)).parent) if g.files else "(unknown)"
+            if folder not in buckets:
+                buckets[folder] = {"bytes": 0, "groups": 0}
+            buckets[folder]["bytes"] += int(getattr(g, "reclaimable", 0) or 0)
+            buckets[folder]["groups"] += 1
+        ranked = sorted(buckets.items(), key=lambda kv: kv[1]["bytes"], reverse=True)[:5]
+        return [
+            ft.Row(
+                [
+                    ft.Text(Path(folder).name or folder, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Text(f"{fmt_size(meta['bytes'])} · {meta['groups']} groups", color="#BFD5FF", size=self._t.typography.size_sm),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            )
+            for folder, meta in ranked
+        ] or [ft.Text("No data yet", color=self._t.colors.fg_muted)]
+
+    def _build_top_groups(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
+        ranked = sorted(groups, key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)[:5]
+        out: List[ft.Control] = []
+        for g in ranked:
+            sample = Path(str(g.files[0].path)).name if g.files else "Group"
+            out.append(
+                ft.Text(
+                    f"{fmt_size(g.reclaimable)} · {len(g.files)} copies · {sample}",
+                    size=self._t.typography.size_sm,
+                    color="#BFD5FF",
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                )
+            )
+        return out or [ft.Text("No data yet", color=self._t.colors.fg_muted)]
+
+    def _build_age_buckets(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
+        now = datetime.datetime.now().timestamp()
+        buckets = [
+            ("< 1 week", 0, 7 * 86400),
+            ("< 1 month", 7 * 86400, 30 * 86400),
+            ("< 1 year", 30 * 86400, 365 * 86400),
+            ("> 1 year", 365 * 86400, 10_000 * 86400),
+        ]
+        totals = {name: 0 for name, _, _ in buckets}
+        for g in groups:
+            for f in g.files:
+                ts = float(getattr(f, "mtime", 0) or 0)
+                if ts <= 0:
+                    continue
+                age = max(0, now - ts)
+                for name, lo, hi in buckets:
+                    if lo <= age < hi:
+                        totals[name] += int(getattr(f, "size", 0) or 0)
+                        break
+        max_v = max(totals.values()) if totals else 0
+        return [
+            ft.Row(
+                [
+                    ft.Text(name, width=86, size=self._t.typography.size_sm),
+                    ft.Text(fmt_size(v), width=80, size=self._t.typography.size_sm, color="#BFD5FF"),
+                    ft.ProgressBar(value=(0 if max_v <= 0 else v / max_v), expand=True, color="#22D3EE"),
+                ],
+                spacing=8,
+            )
+            for name, v in totals.items()
+        ]
+
+    def _build_multiplicity(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
+        ranked = sorted(groups, key=lambda g: len(g.files), reverse=True)[:5]
+        return [
+            ft.Text(
+                f"{len(g.files)} copies · {Path(str(g.files[0].path)).name if g.files else 'Group'}",
+                size=self._t.typography.size_sm,
+                color="#BFD5FF",
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+            for g in ranked
+        ] or [ft.Text("No data yet", color=self._t.colors.fg_muted)]
+
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
@@ -921,6 +1187,7 @@ class ResultsPage(ft.Stack):
         self._folder_cross_toggle.label = f"Cross-folder only ({cross_count:,})"
         ResultsPage._safe_update(self._folder_cross_toggle)
         self._update_summary_line()
+        self._refresh_dashboard(filtered)
         self._update_selection_ui()
         self._refresh_filter_labels()
         sc = self._scroll_col.controls
@@ -980,7 +1247,7 @@ class ResultsPage(ft.Stack):
             self._loading = False
             self._safe_update(self._scroll_col)
             try:
-                self._bridge.flet_page.update()
+                self._results_grid.update()
             except Exception:
                 pass
             page = self._bridge.flet_page
@@ -1010,13 +1277,15 @@ class ResultsPage(ft.Stack):
 
         n = len(filtered)
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
-            self._group_list.controls = [self._build_group_card(g) for g in filtered]
+            filtered_ids = {g.group_id for g in filtered}
+            self._group_list.controls = [self._build_or_get_group_card(g) for g in self._groups]
+            self._apply_group_visibility(filtered_ids)
             self._loading = False
             self._set_rendering(False)
             self._safe_update(self._scroll_col)
             if n > 80:
                 try:
-                    self._bridge.flet_page.update()
+                    self._group_list.update()
                 except Exception:
                     pass
             return
@@ -1024,44 +1293,49 @@ class ResultsPage(ft.Stack):
         self._list_build_generation += 1
         gen = self._list_build_generation
         self._set_rendering(True)
-        head_n = min(_LIST_FIRST_SYNC_GROUPS, n)
-        head = filtered[:head_n]
-        tail = filtered[head_n:]
-        self._group_list.controls = [self._build_group_card(g) for g in head]
+        all_n = len(self._groups)
+        filtered_ids = {g.group_id for g in filtered}
+        head_n = min(_LIST_FIRST_SYNC_GROUPS, all_n)
+        head = self._groups[:head_n]
+        tail = self._groups[head_n:]
+        self._group_list.controls = [self._build_or_get_group_card(g) for g in head]
+        self._apply_group_visibility(filtered_ids)
         self._safe_update(self._scroll_col)
         try:
-            self._bridge.flet_page.update()
+            self._group_list.update()
         except Exception:
             pass
         if tail:
             page = self._bridge.flet_page
             if hasattr(page, "run_task"):
-                page.run_task(self._append_group_cards_async, tail, gen)
+                page.run_task(self._append_group_cards_async, tail, gen, filtered_ids)
             else:
-                self._group_list.controls.extend([self._build_group_card(g) for g in tail])
+                self._group_list.controls.extend([self._build_or_get_group_card(g) for g in tail])
+                self._apply_group_visibility(filtered_ids)
                 self._safe_update(self._scroll_col)
                 try:
-                    page.update()
+                    self._group_list.update()
                 except Exception:
                     pass
 
-    async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int) -> None:
+    async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int, filtered_ids: Set[int]) -> None:
         for i in range(0, len(tail), _LIST_ASYNC_BATCH):
             if gen != self._list_build_generation:
                 self._set_rendering(False)
                 return
             chunk = tail[i : i + _LIST_ASYNC_BATCH]
-            self._group_list.controls.extend([self._build_group_card(g) for g in chunk])
-            self._safe_update(self._scroll_col)
+            self._group_list.controls.extend([self._build_or_get_group_card(g) for g in chunk])
+            self._apply_group_visibility(filtered_ids)
+            # F4: update only the list, not the full page, to avoid O(n²) layout cost
             try:
-                self._bridge.flet_page.update()
+                self._group_list.update()
             except Exception:
                 pass
             await asyncio.sleep(0)
         if gen == self._list_build_generation:
             self._set_rendering(False)
             self._loading = False
-            self._refresh()
+            self._safe_update(self._scroll_col)
 
     async def _append_grid_sections_async(self, tail: List[DuplicateGroup], start_idx: int, gen: int) -> None:
         for i in range(0, len(tail), _GRID_ASYNC_BATCH):
@@ -1073,9 +1347,9 @@ class ResultsPage(ft.Stack):
             self._results_grid.controls.extend(
                 [self._build_group_grid_section(g, offset + j) for j, g in enumerate(chunk)]
             )
-            self._safe_update(self._scroll_col)
+            # F4: update only the grid, not the full page
             try:
-                self._bridge.flet_page.update()
+                self._results_grid.update()
             except Exception:
                 pass
             await asyncio.sleep(0)
@@ -1139,15 +1413,14 @@ class ResultsPage(ft.Stack):
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Checkbox(
-                                    label=str(Path(str(f.path)).name),
-                                    value=str(f.path) in self._selected_paths,
-                                    on_change=lambda e, p=str(f.path): self._on_file_checkbox(e, p),
-                                    label_style=ft.TextStyle(
-                                        size=t.typography.size_base,
-                                        color=t.colors.fg,
-                                        weight=ft.FontWeight.W_500,
-                                    ),
+                                ft.Text(
+                                    str(Path(str(f.path)).name),
+                                    size=t.typography.size_base,
+                                    color=t.colors.fg,
+                                    weight=ft.FontWeight.W_500,
+                                    expand=True,
+                                    max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
                                 ),
                                 ft.Text(
                                     fmt_size(f.size),
@@ -1175,22 +1448,6 @@ class ResultsPage(ft.Stack):
             on_click=_toggle_expand,
             style=ft.ButtonStyle(
                 color=t.colors.fg2,
-                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
-            ),
-        )
-        select_group_btn = ft.TextButton(
-            "Select Group",
-            on_click=lambda _e, g=group: self._set_group_selection(g, True),
-            style=ft.ButtonStyle(
-                color="#22D3EE",
-                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
-            ),
-        )
-        clear_group_btn = ft.TextButton(
-            "Clear Group",
-            on_click=lambda _e, g=group: self._set_group_selection(g, False),
-            style=ft.ButtonStyle(
-                color=t.colors.fg_muted,
                 text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
             ),
         )
@@ -1262,8 +1519,6 @@ class ResultsPage(ft.Stack):
                                 expand=True,
                             ),
                             ft.Text(fmt_size(group.reclaimable), weight=ft.FontWeight.BOLD, color="#22D3EE", size=t.typography.size_md),
-                            select_group_btn,
-                            clear_group_btn,
                             expand_btn,
                             ft.IconButton(
                                 icon=ft.icons.Icons.VISIBILITY,
@@ -1285,6 +1540,22 @@ class ResultsPage(ft.Stack):
             ink=True,
         )
         return card
+
+    def _build_or_get_group_card(self, group: DuplicateGroup) -> ft.Container:
+        gid = int(getattr(group, "group_id", 0))
+        cached = self._all_group_cards.get(gid)
+        if cached is not None:
+            return cached
+        card = self._build_group_card(group)
+        self._all_group_cards[gid] = card
+        return card
+
+    def _apply_group_visibility(self, filtered_ids: Set[int]) -> None:
+        for g in self._groups:
+            gid = int(getattr(g, "group_id", 0))
+            card = self._all_group_cards.get(gid)
+            if card is not None:
+                card.visible = gid in filtered_ids
 
     def _build_folder_sections(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
         buckets: Dict[str, Dict[str, object]] = {}
@@ -1388,14 +1659,17 @@ class ResultsPage(ft.Stack):
             self._inspector_date.value = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M") if ts > 0 else ""
         except Exception:
             self._inspector_date.value = ""
-        self._inspector_dims.value = ""
+        self._inspector_dims_generation += 1
+        dims_gen = self._inspector_dims_generation
+        self._inspector_dims.value = "Loading..."
         if is_image_path(p):
-            try:
-                from PIL import Image as _Img
-                with _Img.open(p) as img:
-                    self._inspector_dims.value = f"{img.width} × {img.height}"
-            except Exception:
-                pass
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._load_inspector_dims_async, p, dims_gen)
+            else:
+                self._inspector_dims.value = ""
+        else:
+            self._inspector_dims.value = ""
         self._inspector_path.value = str(p.parent)
         self._inspector_thumb.content = ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE))
         if is_image_path(p):
@@ -1414,6 +1688,24 @@ class ResultsPage(ft.Stack):
         self._inspector_wrapper.visible = True
         ResultsPage._safe_update(self._inspector_panel)
         ResultsPage._safe_update(self._inspector_wrapper)
+
+    async def _load_inspector_dims_async(self, p: Path, gen: int) -> None:
+        import asyncio as _aio
+        loop = _aio.get_event_loop()
+
+        def _read_dims() -> str:
+            try:
+                from PIL import Image as _Img
+                with _Img.open(p) as img:
+                    return f"{img.width} × {img.height}"
+            except Exception:
+                return ""
+
+        dims = await loop.run_in_executor(None, _read_dims)
+        if gen != self._inspector_dims_generation:
+            return
+        self._inspector_dims.value = dims
+        ResultsPage._safe_update(self._inspector_dims)
 
     def _close_inspector(self) -> None:
         self._inspector_file = None
@@ -1448,12 +1740,6 @@ class ResultsPage(ft.Stack):
                 modified = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
         except Exception:
             modified = ""
-
-        cb = ft.Checkbox(
-            value=key in self._selected_paths,
-            on_change=lambda e, path=key: self._on_file_checkbox(e, path),
-            active_color="#2563EB",
-        )
 
         size_bar = ft.Container(
             content=ft.Text(
@@ -1500,22 +1786,16 @@ class ResultsPage(ft.Stack):
         stack = ft.Stack(
             [
                 ft.Column([thumb_slot, metadata_bar], expand=True, spacing=0),
-                ft.Container(content=cb, padding=ft.padding.only(left=2, top=2)),
                 ft.Container(content=size_bar, alignment=ft.Alignment(1, -1), padding=ft.padding.only(top=2, right=2)),
             ],
             expand=True,
         )
-
-        is_sel = key in self._selected_paths
         tile = ft.Container(
             content=stack,
             width=170,
             height=160,
             border_radius=8,
-            border=ft.border.all(
-                2 if is_sel else 1,
-                "#2563EB" if is_sel else ft.Colors.with_opacity(0.15, ft.Colors.WHITE),
-            ),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.15, ft.Colors.WHITE)),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
             tooltip=str(p),
@@ -1566,36 +1846,48 @@ class ResultsPage(ft.Stack):
 
     async def _load_grid_thumbnails_async(self, slots: Dict[str, ft.Container]) -> None:
         import asyncio as _aio
-        loop = _aio.get_event_loop()
-        for i, (key, slot) in enumerate(slots.items()):
-            p = Path(key)
-            if not is_image_path(p):
-                continue
-            try:
-                b64 = await loop.run_in_executor(
-                    None,
-                    lambda fp=p: get_thumbnail_cache().get_base64(fp),
-                )
-            except Exception:
-                continue
+
+        pending: list[tuple[ft.Container, str]] = []
+
+        async def _on_ready(path: Path, b64: str | None) -> None:
             if not b64:
-                continue
-            slot.content = ft.Image(
-                src=f"data:image/jpeg;base64,{b64}",
-                width=120,
-                height=120,
-                fit=ft.BoxFit.COVER,
-                border_radius=6,
-            )
-            ResultsPage._safe_update(slot)
-            if i % 8 == 0:
+                return
+            slot = slots.get(str(path))
+            if slot is None:
+                return
+            pending.append((slot, b64))
+            if len(pending) >= 20:
+                for thumb_slot, thumb_b64 in pending:
+                    thumb_slot.content = ft.Image(
+                        src=f"data:image/jpeg;base64,{thumb_b64}",
+                        width=120,
+                        height=120,
+                        fit=ft.BoxFit.COVER,
+                        border_radius=6,
+                    )
+                pending.clear()
+                ResultsPage._safe_update(self._results_grid)
                 await _aio.sleep(0)
+
+        paths = [Path(k) for k in slots.keys()]
+        await get_thumbnail_cache().load_batch_async(paths, _on_ready)
+        if pending:
+            for thumb_slot, thumb_b64 in pending:
+                thumb_slot.content = ft.Image(
+                    src=f"data:image/jpeg;base64,{thumb_b64}",
+                    width=120,
+                    height=120,
+                    fit=ft.BoxFit.COVER,
+                    border_radius=6,
+                )
+            ResultsPage._safe_update(self._results_grid)
 
     def _recompute_filter_counts(self) -> None:
         counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        for g in self._groups:
+        # F9: count only what _filtered_groups() actually displays (respects min reclaimable)
+        for g in self._filtered_groups():
             files = list(g.files)
             counts["all"] += len(files)
             group_counts["all"] += 1

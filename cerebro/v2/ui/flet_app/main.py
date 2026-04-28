@@ -137,6 +137,18 @@ def _main(page: ft.Page) -> None:
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
     exclude_page = ExcludeListPage(bridge)
+    try:
+        if hasattr(dashboard_page, "_progress"):
+            bridge.register_progress_control(dashboard_page._progress)  # type: ignore[attr-defined]
+    except Exception:
+        _log.debug("Could not register dashboard progress control", exc_info=True)
+    try:
+        bridge.register_action_control("ResultsFilesRemoved", results_page._group_list)  # type: ignore[attr-defined]
+        bridge.register_action_control("ScanCompleted", results_page._group_list)  # type: ignore[attr-defined]
+        bridge.register_action_control("ResultsFilesRemoved", review_page._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ScanCompleted", review_page._grid)  # type: ignore[attr-defined]
+    except Exception:
+        _log.debug("Could not register action-scoped controls", exc_info=True)
 
     builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
@@ -517,19 +529,28 @@ def _main(page: ft.Page) -> None:
     def _sync_groups_from_state(s: AppState) -> None:
         groups = list(s.groups)
         mode = s.scan_mode or "files"
+        active = layout.current_key
         if not groups:
-            results_page.load_results([], mode)
-            review_page.load_results([], mode, defer_render=(layout.current_key != "review"))
+            results_page.load_results([], mode, defer_render=(active != "duplicates"))
+            review_page.load_results([], mode, defer_render=(active != "review"))
             return
-        results_page.load_results(groups, mode)
-        if layout.current_key == "review":
+        # Only build the heavy card/grid list if the page is currently visible.
+        results_page.load_results(groups, mode, defer_render=(active != "duplicates"))
+        if active == "review":
             review_page.apply_pruned_groups(groups, mode)
         else:
-            # Avoid expensive review-grid construction when user is not on Review.
             review_page.load_results(groups, mode, defer_render=True)
 
     def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
         tab = new_state.active_tab
+        if isinstance(action, ScanCompleted):
+            try:
+                settings = bridge.get_settings()
+                skip_results = bool((settings.get("general") or {}).get("skip_results_after_scan", False))
+            except Exception:
+                skip_results = False
+            if skip_results and new_state.groups:
+                tab = "review"
         # Only tab-changing actions should drive the shell; other dispatches still
         # carry active_tab (e.g. duplicates) and would otherwise yank the user back
         # from Review/Settings while the rail already matched the new selection.
@@ -543,6 +564,7 @@ def _main(page: ft.Page) -> None:
             layout.navigate_to(tab)
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
             _sync_groups_from_state(new_state)
+            bridge.invalidate_stats_cache()
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
