@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Set
 
@@ -78,6 +80,10 @@ class ResultsPage(ft.Stack):
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._glass_cache: dict = {}
         self._view_mode: str = "list"
+        self._view_mode_by_filter: Dict[str, str] = {"all": "list"}
+        self._grouping_mode: str = "groups"
+        self._folder_cross_only: bool = False
+        self._min_reclaimable_bytes: int = 100 * 1024
         self._thumb_slots: Dict[str, ft.Container] = {}
         self._tile_cache_grid: Dict[str, ft.Container] = {}
         self._inspector_file = None  # currently inspected DuplicateFile
@@ -93,6 +99,9 @@ class ResultsPage(ft.Stack):
         self._action_bar: ft.Row
         self._header: ft.Row
         self._filter_seg: ft.SegmentedButton
+        self._min_group_filter: ft.Dropdown
+        self._grouping_seg: ft.SegmentedButton
+        self._folder_cross_toggle: ft.Switch
         self._group_list: ft.ListView
         self._empty: ft.Container
         self._loading_state: ft.Container
@@ -172,13 +181,24 @@ class ResultsPage(ft.Stack):
         }
         return _map.get(ext, (ft.icons.Icons.INSERT_DRIVE_FILE, "#6E7681"))
 
+    @staticmethod
+    def _is_machine_generated_name(name: str) -> bool:
+        stem = Path(name).stem
+        if len(stem) <= 40:
+            return False
+        # Only digits count toward the heuristic; separators alone should not
+        # make a name look machine-generated.
+        digits = sum(1 for ch in stem if ch.isdigit())
+        ratio = digits / max(1, len(stem))
+        return ratio > 0.60 and bool(re.search(r"\d{8,}", stem))
+
     # ------------------------------------------------------------------
     # Build (Runs Once)
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         t = self._t
 
-        self._summary = ft.Text("", size=t.typography.size_base, color="#BFD5FF", weight=ft.FontWeight.W_500)
+        self._summary = ft.Text("", size=t.typography.size_md, color="#BFD5FF", weight=ft.FontWeight.W_600)
 
         # Smart select row
         self._smart_seg = ft.SegmentedButton(
@@ -190,13 +210,13 @@ class ResultsPage(ft.Stack):
                 for val, label in _SMART_SELECT_OPTIONS
             ],
         )
-        self._auto_mark_btn = ft.FilledButton(
+        self._auto_mark_btn = ft.OutlinedButton(
             "Auto Mark",
             icon=ft.icons.Icons.AUTO_FIX_HIGH,
             on_click=self._apply_smart_select,
             style=ft.ButtonStyle(
-                bgcolor="#00BFA5",
-                color="#0A0E14",
+                color="#22D3EE",
+                side=ft.BorderSide(1, "#22D3EE"),
                 shape=ft.RoundedRectangleBorder(radius=8),
                 text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_700),
             ),
@@ -211,8 +231,19 @@ class ResultsPage(ft.Stack):
                 shape=ft.RoundedRectangleBorder(radius=8),
             ),
         )
+        self._rule_label = ft.Text(
+            "Active rule: Keep Largest",
+            size=t.typography.size_sm,
+            color=t.colors.fg_muted,
+            weight=ft.FontWeight.W_500,
+        )
         self._smart_row = ft.Row(
-            [self._auto_mark_btn, self._smart_seg, self._unmark_all_btn],
+            [
+                ft.Container(content=self._rule_label, margin=ft.margin.only(right=t.spacing.sm)),
+                self._smart_seg,
+                self._auto_mark_btn,
+                self._unmark_all_btn,
+            ],
             spacing=t.spacing.sm,
             visible=False,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -264,6 +295,21 @@ class ResultsPage(ft.Stack):
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
+        self._grouping_seg = ft.SegmentedButton(
+            selected=["groups"],
+            allow_multiple_selection=False,
+            on_change=self._on_grouping_change,
+            segments=[
+                ft.Segment(value="groups", label=ft.Text("By Group", size=11)),
+                ft.Segment(value="folders", label=ft.Text("By Folder", size=11)),
+            ],
+        )
+        self._folder_cross_toggle = ft.Switch(
+            label="Cross-folder only (0)",
+            value=False,
+            on_change=self._on_folder_cross_only_change,
+            visible=False,
+        )
 
         self._filter_seg = ft.SegmentedButton(
             selected=["all"],
@@ -286,6 +332,20 @@ class ResultsPage(ft.Stack):
                 for key, label in _FILTER_TABS
             ],
         )
+        self._min_group_filter = ft.Dropdown(
+            width=220,
+            value="102400",
+            dense=True,
+            text_size=12,
+            label="Minimum group reclaimable",
+            options=[
+                ft.dropdown.Option("0", "Show all"),
+                ft.dropdown.Option(str(100 * 1024), "100 KB+"),
+                ft.dropdown.Option(str(1024 * 1024), "1 MB+"),
+                ft.dropdown.Option(str(10 * 1024 * 1024), "10 MB+"),
+            ],
+        )
+        self._min_group_filter.on_change = self._on_min_group_filter_change
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
         self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
@@ -386,7 +446,18 @@ class ResultsPage(ft.Stack):
                 padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.xs),
             ),
             ft.Container(
-                content=self._filter_seg,
+                content=ft.Row(
+                    [self._grouping_seg, self._folder_cross_toggle],
+                    spacing=t.spacing.md,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.xs),
+            ),
+            ft.Container(
+                content=ft.Row(
+                    [self._filter_seg, ft.Container(expand=True), self._min_group_filter],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
                 padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm),
                 **self._get_glass_style(0.03),
             ),
@@ -462,7 +533,7 @@ class ResultsPage(ft.Stack):
     # Public API
     # ------------------------------------------------------------------
     def load_results(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
-        self._groups = list(groups)
+        self._groups = sorted(list(groups), key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)
         self._scan_mode = mode or "files"
         self._selected_paths.clear()
         self._recompute_filter_counts()
@@ -537,6 +608,22 @@ class ResultsPage(ft.Stack):
     def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"keep_largest"}
         self._smart_rule = next(iter(sel), "keep_largest")
+        label = dict(_SMART_SELECT_OPTIONS).get(self._smart_rule, "Keep Largest")
+        self._rule_label.value = f"Active rule: {label}"
+        ResultsPage._safe_update(self._rule_label)
+
+    def _pick_keeper(self, group: DuplicateGroup):
+        if not group.files:
+            return None
+        if self._smart_rule == "keep_largest":
+            return max(group.files, key=lambda f: f.size)
+        if self._smart_rule == "keep_smallest":
+            return min(group.files, key=lambda f: f.size)
+        if self._smart_rule == "keep_newest":
+            return max(group.files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        if self._smart_rule == "keep_oldest":
+            return min(group.files, key=lambda f: getattr(f, "mtime", 0) or 0)
+        return max(group.files, key=lambda f: f.size)
 
     def _unmark_all(self, e=None) -> None:
         self._selected_paths.clear()
@@ -563,6 +650,27 @@ class ResultsPage(ft.Stack):
                     self._selected_paths.add(str(f.path))
         self._refresh()
 
+    def _apply_group_selection_to_set(self, group: DuplicateGroup, selected: bool) -> None:
+        keeper = self._pick_keeper(group) if selected else None
+        for f in group.files:
+            fp = str(f.path)
+            if selected:
+                if keeper is not None and f is keeper:
+                    self._selected_paths.discard(fp)
+                else:
+                    self._selected_paths.add(fp)
+            else:
+                self._selected_paths.discard(fp)
+
+    def _set_group_selection(self, group: DuplicateGroup, selected: bool) -> None:
+        self._apply_group_selection_to_set(group, selected)
+        self._refresh()
+
+    def _set_folder_selection(self, groups: List[DuplicateGroup], selected: bool) -> None:
+        for g in groups:
+            self._apply_group_selection_to_set(g, selected)
+        self._refresh()
+
     def _update_selection_ui(self) -> None:
         count = len(self._selected_paths)
         has_selection = count > 0
@@ -572,12 +680,7 @@ class ResultsPage(ft.Stack):
         self._delete_btn.visible = has_selection
         self._permanent_btn.visible = has_selection
         if has_selection:
-            total_bytes = 0
-            selected_set = self._selected_paths
-            for g in self._groups:
-                for f in g.files:
-                    if str(f.path) in selected_set:
-                        total_bytes += f.size
+            total_bytes = self._current_marked_bytes()
             self._selection_label.value = f"{count:,} files selected · {fmt_size(total_bytes)} to be freed"
         else:
             self._selection_label.value = ""
@@ -585,6 +688,27 @@ class ResultsPage(ft.Stack):
         self._sticky_overlay.visible = has_selection
         ResultsPage._safe_update(self._sticky_bar)
         ResultsPage._safe_update(self._sticky_overlay)
+        self._update_summary_line()
+
+    def _current_marked_bytes(self) -> int:
+        total_bytes = 0
+        selected_set = self._selected_paths
+        for g in self._groups:
+            for f in g.files:
+                if str(f.path) in selected_set:
+                    total_bytes += f.size
+        return total_bytes
+
+    def _update_summary_line(self) -> None:
+        filtered = self._filtered_groups()
+        recoverable = sum(g.reclaimable for g in filtered)
+        marked_bytes = self._current_marked_bytes()
+        remaining = max(0, recoverable - marked_bytes)
+        if marked_bytes > 0:
+            self._summary.value = f"{fmt_size(marked_bytes)} marked for deletion · {fmt_size(remaining)} remaining"
+        else:
+            self._summary.value = f"{fmt_size(recoverable)} can be reclaimed across {len(filtered):,} duplicate groups"
+        self._safe_update(self._summary)
 
     # ------------------------------------------------------------------
     # Delete
@@ -731,15 +855,60 @@ class ResultsPage(ft.Stack):
     def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"all"}
         self._filter_key = next(iter(sel), "all")
+        if self._filter_key not in self._view_mode_by_filter:
+            self._view_mode_by_filter[self._filter_key] = "grid" if self._filter_key == "pictures" else "list"
+        self._view_mode = self._view_mode_by_filter[self._filter_key]
+        self._grid_btn.icon_color = "#22D3EE" if self._view_mode == "grid" else self._t.colors.fg_muted
+        self._list_btn.icon_color = "#22D3EE" if self._view_mode == "list" else self._t.colors.fg_muted
+        ResultsPage._safe_update(self._grid_btn)
+        ResultsPage._safe_update(self._list_btn)
         self._refresh()
 
+    def _on_min_group_filter_change(self, e: ft.ControlEvent) -> None:
+        try:
+            self._min_reclaimable_bytes = max(0, int(getattr(e.control, "value", "0") or 0))
+        except (TypeError, ValueError):
+            self._min_reclaimable_bytes = 0
+        self._refresh()
+
+    def _on_grouping_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"groups"}
+        self._grouping_mode = next(iter(sel), "groups")
+        self._folder_cross_toggle.visible = self._grouping_mode == "folders"
+        ResultsPage._safe_update(self._folder_cross_toggle)
+        if self._grouping_mode == "folders":
+            self._view_mode = "list"
+            self._view_mode_by_filter[self._filter_key] = "list"
+            self._grid_btn.icon_color = self._t.colors.fg_muted
+            self._list_btn.icon_color = "#22D3EE"
+            ResultsPage._safe_update(self._grid_btn)
+            ResultsPage._safe_update(self._list_btn)
+        self._refresh()
+
+    def _on_folder_cross_only_change(self, e: ft.ControlEvent) -> None:
+        self._folder_cross_only = bool(getattr(e.control, "value", False))
+        if self._grouping_mode == "folders":
+            self._refresh()
+
     def _filtered_groups(self) -> List[DuplicateGroup]:
+        groups = [
+            g for g in self._groups
+            if int(getattr(g, "reclaimable", 0) or 0) >= self._min_reclaimable_bytes
+        ]
         if self._filter_key == "all":
-            return self._groups
+            return groups
         exts = FILTER_EXTS.get(self._filter_key)
         if exts is None:
-            return [g for g in self._groups if all(classify_file(getattr(f, "extension", "")) == "other" for f in g.files)]
-        return [g for g in self._groups if any(getattr(f, "extension", "").lower() in exts for f in g.files)]
+            return [g for g in groups if all(classify_file(getattr(f, "extension", "")) == "other" for f in g.files)]
+        return [g for g in groups if any(getattr(f, "extension", "").lower() in exts for f in g.files)]
+
+    def _count_cross_folder_groups(self, groups: List[DuplicateGroup]) -> int:
+        count = 0
+        for g in groups:
+            folders = {str(Path(str(f.path)).parent) for f in g.files}
+            if len(folders) > 1:
+                count += 1
+        return count
 
     # ------------------------------------------------------------------
     # Rendering
@@ -748,9 +917,10 @@ class ResultsPage(ft.Stack):
         filtered = self._filtered_groups()
         t = self._t
         total_files = sum(len(g.files) for g in filtered)
-        recoverable = sum(g.reclaimable for g in filtered)
-        self._summary.value = f"{len(filtered):,} groups · {total_files:,} files · {fmt_size(recoverable)} recoverable"
-        self._safe_update(self._summary)
+        cross_count = self._count_cross_folder_groups(filtered)
+        self._folder_cross_toggle.label = f"Cross-folder only ({cross_count:,})"
+        ResultsPage._safe_update(self._folder_cross_toggle)
+        self._update_summary_line()
         self._update_selection_ui()
         self._refresh_filter_labels()
         sc = self._scroll_col.controls
@@ -830,6 +1000,13 @@ class ResultsPage(ft.Stack):
             sc.remove(self._results_grid)
         if self._group_list not in sc:
             sc.append(self._group_list)
+
+        if self._grouping_mode == "folders":
+            self._group_list.controls = self._build_folder_sections(filtered)
+            self._loading = False
+            self._set_rendering(False)
+            self._safe_update(self._scroll_col)
+            return
 
         n = len(filtered)
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
@@ -941,12 +1118,14 @@ class ResultsPage(ft.Stack):
             **self._get_glass_style(0.04),
         )
 
-    def _build_group_card(self, group: DuplicateGroup) -> ft.Container:
+    def _build_group_card(self, group: DuplicateGroup, extra_badge: str | None = None) -> ft.Container:
         t = self._t
         sample = group.files[0].path if group.files else ""
         sample_path = Path(str(sample))
         name = sample_path.name if sample else "Group"
         parent = str(sample_path.parent) if sample else ""
+        parent_leaf = sample_path.parent.name if sample else ""
+        machine_name = self._is_machine_generated_name(name)
         ext = sample_path.suffix if sample else ""
         icon_name, accent = self._file_type_icon(ext)
 
@@ -954,7 +1133,7 @@ class ResultsPage(ft.Stack):
         file_checks = ft.Column([], spacing=2, visible=False)
         details_built = {"value": False}
 
-        def _toggle_expand(e):
+        def _toggle_expand(e=None):
             if not details_built["value"]:
                 file_checks.controls = [
                     ft.Container(
@@ -999,8 +1178,24 @@ class ResultsPage(ft.Stack):
                 text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
             ),
         )
+        select_group_btn = ft.TextButton(
+            "Select Group",
+            on_click=lambda _e, g=group: self._set_group_selection(g, True),
+            style=ft.ButtonStyle(
+                color="#22D3EE",
+                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
+            ),
+        )
+        clear_group_btn = ft.TextButton(
+            "Clear Group",
+            on_click=lambda _e, g=group: self._set_group_selection(g, False),
+            style=ft.ButtonStyle(
+                color=t.colors.fg_muted,
+                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
+            ),
+        )
 
-        return ft.Container(
+        card = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -1013,7 +1208,22 @@ class ResultsPage(ft.Stack):
                             ),
                             ft.Column(
                                 [
-                                    ft.Text(name, weight=ft.FontWeight.W_600, color=t.colors.fg, size=t.typography.size_md, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
+                                    ft.Text(
+                                        f"Folder: {parent_leaf}" if machine_name and parent_leaf else name,
+                                        weight=ft.FontWeight.W_700 if machine_name else ft.FontWeight.W_600,
+                                        color="#E2F3FF" if machine_name else t.colors.fg,
+                                        size=t.typography.size_md,
+                                        no_wrap=True,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                    ft.Text(
+                                        name if machine_name else parent,
+                                        size=t.typography.size_sm,
+                                        color=t.colors.fg_muted,
+                                        no_wrap=True,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        visible=bool(machine_name or parent),
+                                    ),
                                     ft.Row(
                                         [
                                             ft.Text(
@@ -1038,6 +1248,12 @@ class ResultsPage(ft.Stack):
                                                 overflow=ft.TextOverflow.ELLIPSIS,
                                                 expand=True,
                                             ),
+                                            ft.Text(
+                                                extra_badge or "",
+                                                size=t.typography.size_sm,
+                                                color="#FBBF24",
+                                                visible=bool(extra_badge),
+                                            ),
                                         ],
                                         spacing=4,
                                     ),
@@ -1046,10 +1262,12 @@ class ResultsPage(ft.Stack):
                                 expand=True,
                             ),
                             ft.Text(fmt_size(group.reclaimable), weight=ft.FontWeight.BOLD, color="#22D3EE", size=t.typography.size_md),
+                            select_group_btn,
+                            clear_group_btn,
                             expand_btn,
                             ft.IconButton(
                                 icon=ft.icons.Icons.VISIBILITY,
-                                tooltip="Review group",
+                                tooltip="Open group in Review",
                                 icon_color=t.colors.fg2,
                                 on_click=lambda e, g=group: self._open_group(g),
                             ),
@@ -1063,7 +1281,97 @@ class ResultsPage(ft.Stack):
             ),
             padding=t.spacing.md,
             **self._get_glass_style(0.06),
+            on_click=lambda e: _toggle_expand(),
+            ink=True,
         )
+        return card
+
+    def _build_folder_sections(self, groups: List[DuplicateGroup]) -> List[ft.Control]:
+        buckets: Dict[str, Dict[str, object]] = {}
+        for g in groups:
+            keeper = self._pick_keeper(g)
+            if keeper is None:
+                continue
+            owner_folder = str(Path(str(keeper.path)).parent)
+            unique_folders = {str(Path(str(f.path)).parent) for f in g.files}
+            cross_count = max(0, len(unique_folders) - 1)
+            if self._folder_cross_only and cross_count <= 0:
+                continue
+            if owner_folder not in buckets:
+                buckets[owner_folder] = {"groups": [], "reclaimable": 0, "files": 0}
+            bucket = buckets[owner_folder]
+            cast_groups = bucket["groups"]
+            if isinstance(cast_groups, list):
+                cast_groups.append((g, cross_count))
+            bucket["reclaimable"] = int(bucket["reclaimable"]) + int(getattr(g, "reclaimable", 0) or 0)
+            bucket["files"] = int(bucket["files"]) + len(getattr(g, "files", []) or [])
+
+        ordered = sorted(
+            buckets.items(),
+            key=lambda kv: int(kv[1]["reclaimable"]),  # type: ignore[index]
+            reverse=True,
+        )
+        out: List[ft.Control] = []
+        for folder, meta in ordered:
+            folder_name = Path(folder).name or folder
+            folder_groups = [x[0] for x in meta["groups"]]  # type: ignore[index]
+            body = ft.Column(
+                [
+                    self._build_group_card(
+                        g,
+                        f"Also in {n} folder(s)" if n > 0 else None,
+                    )
+                    for g, n in meta["groups"]  # type: ignore[index]
+                ],
+                spacing=self._t.spacing.sm,
+                visible=True,
+            )
+            expanded = {"value": True}
+            icon_btn = ft.IconButton(
+                icon=ft.icons.Icons.EXPAND_LESS,
+                tooltip="Collapse/expand folder section",
+            )
+
+            def _toggle(_e=None, c=body, st=expanded, icon=icon_btn):
+                st["value"] = not st["value"]
+                c.visible = st["value"]
+                icon.icon = ft.icons.Icons.EXPAND_LESS if st["value"] else ft.icons.Icons.EXPAND_MORE
+                ResultsPage._safe_update(c)
+                ResultsPage._safe_update(icon)
+
+            icon_btn.on_click = _toggle
+            header = ft.Row(
+                [
+                    ft.Text(f"📁 {folder_name}", size=self._t.typography.size_md, weight=ft.FontWeight.W_700, color="#E2F3FF"),
+                    ft.Text(
+                        f"{len(folder_groups):,} groups · {int(meta['files']):,} files · {fmt_size(int(meta['reclaimable']))} reclaimable",
+                        size=self._t.typography.size_sm,
+                        color=self._t.colors.fg_muted,
+                    ),
+                    ft.Container(expand=True),
+                    ft.TextButton(
+                        "Mark folder by rule",
+                        on_click=lambda _e, gs=folder_groups: self._set_folder_selection(gs, True),
+                        style=ft.ButtonStyle(color="#22D3EE"),
+                    ),
+                    ft.TextButton(
+                        "Clear folder marks",
+                        on_click=lambda _e, gs=folder_groups: self._set_folder_selection(gs, False),
+                        style=ft.ButtonStyle(color=self._t.colors.fg_muted),
+                    ),
+                    icon_btn,
+                ],
+                spacing=self._t.spacing.sm,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            out.append(
+                ft.Container(
+                    content=ft.Column([header, body], spacing=self._t.spacing.sm),
+                    padding=self._t.spacing.md,
+                    **self._get_glass_style(0.05),
+                )
+            )
+        return out
 
     # ------------------------------------------------------------------
     # View toggle
@@ -1115,9 +1423,12 @@ class ResultsPage(ft.Stack):
         ResultsPage._safe_update(self._inspector_wrapper)
 
     def _toggle_view(self, mode: str) -> None:
+        if self._grouping_mode == "folders" and mode == "grid":
+            return
         if self._view_mode == mode:
             return
         self._view_mode = mode
+        self._view_mode_by_filter[self._filter_key] = mode
         self._grid_btn.icon_color = "#22D3EE" if mode == "grid" else self._t.colors.fg_muted
         self._list_btn.icon_color = "#22D3EE" if mode == "list" else self._t.colors.fg_muted
         ResultsPage._safe_update(self._grid_btn)
@@ -1129,6 +1440,14 @@ class ResultsPage(ft.Stack):
         t = self._t
         key = str(getattr(f, "path", ""))
         p = Path(key)
+        icon_name, accent = self._file_type_icon(p.suffix)
+        modified = ""
+        try:
+            ts = float(getattr(f, "mtime", 0) or 0)
+            if ts > 0:
+                modified = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        except Exception:
+            modified = ""
 
         cb = ft.Checkbox(
             value=key in self._selected_paths,
@@ -1150,9 +1469,9 @@ class ResultsPage(ft.Stack):
 
         placeholder = ft.Container(
             content=ft.Icon(
-                ft.icons.Icons.INSERT_DRIVE_FILE,
+                icon_name,
                 size=36,
-                color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE),
+                color=ft.Colors.with_opacity(0.9, accent),
             ),
             expand=True,
             alignment=ft.Alignment(0, 0),
@@ -1165,11 +1484,24 @@ class ResultsPage(ft.Stack):
         )
         self._thumb_slots[key] = thumb_slot
 
+        metadata_bar = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(p.name, size=9, color="#FFFFFF", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                    ft.Text(str(p.parent), size=8, color="#B9CAE6", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                    ft.Text(modified, size=8, color="#9FB0D0", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                ],
+                spacing=1,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.82, "#0A0E14"),
+            padding=ft.padding.symmetric(horizontal=4, vertical=4),
+        )
         stack = ft.Stack(
             [
-                thumb_slot,
-                ft.Column([ft.Container(expand=True), size_bar], expand=True, spacing=0),
+                ft.Column([thumb_slot, metadata_bar], expand=True, spacing=0),
                 ft.Container(content=cb, padding=ft.padding.only(left=2, top=2)),
+                ft.Container(content=size_bar, alignment=ft.Alignment(1, -1), padding=ft.padding.only(top=2, right=2)),
             ],
             expand=True,
         )
@@ -1177,8 +1509,8 @@ class ResultsPage(ft.Stack):
         is_sel = key in self._selected_paths
         tile = ft.Container(
             content=stack,
-            width=120,
-            height=120,
+            width=170,
+            height=160,
             border_radius=8,
             border=ft.border.all(
                 2 if is_sel else 1,
@@ -1186,7 +1518,7 @@ class ResultsPage(ft.Stack):
             ),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            tooltip=p.name,
+            tooltip=str(p),
             ink=True,
             on_click=lambda e, _f=f: self._open_inspector(_f),
         )
@@ -1214,6 +1546,11 @@ class ResultsPage(ft.Stack):
                     f"{len(group.files)} files · {fmt_size(group.reclaimable)} reclaimable",
                     size=t.typography.size_sm,
                     color=t.colors.fg_muted,
+                ),
+                ft.TextButton(
+                    "Select Group",
+                    on_click=lambda _e, g=group: self._set_group_selection(g, True),
+                    style=ft.ButtonStyle(color="#22D3EE"),
                 ),
             ],
             spacing=t.spacing.sm,
@@ -1290,11 +1627,14 @@ class ResultsPage(ft.Stack):
                 col.controls[0].value = base
                 col.controls[0].color = "#FFFFFF" if is_active else "#DDE8FF"
                 col.controls[0].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
-                col.controls[1].value = f"{files_n:,}"
-                col.controls[1].color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
+                col.controls[1].value = f"{files_n:,} files"
+                if files_n == 0:
+                    col.controls[1].color = "#6C7C98"
+                else:
+                    col.controls[1].color = accent if is_active else ft.Colors.with_opacity(0.72, accent)
                 col.controls[1].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[2].value = fmt_size(size_n)
-                col.controls[2].color = "#B7C6E6" if is_active else "#9FB0D0"
+                col.controls[2].color = "#7D8EAB" if files_n == 0 else ("#B7C6E6" if is_active else "#9FB0D0")
 
     def _open_group(self, group: DuplicateGroup) -> None:
         self._bridge.coordinator.review_open_group(group.group_id, self._groups)

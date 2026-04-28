@@ -23,12 +23,13 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 try:
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
     from imagehash import phash, dhash
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
     Image = None
+    UnidentifiedImageError = OSError
     phash = None
     dhash = None
 
@@ -62,6 +63,21 @@ IMAGE_EXTENSIONS = {
 # Hash sizes for perceptual hashing
 PHASH_SIZE = 8  # 8x8 grid for pHash
 DHASH_SIZE = 8  # 8x8 grid for dHash
+
+
+def _normalize_pillow_image(img: Image.Image) -> Image.Image:
+    """Normalize tricky Pillow modes before hashing/conversion.
+
+    Palette images can embed transparency as bytes; converting those directly to RGB
+    triggers a noisy Pillow warning. Promote to RGBA first when needed.
+    """
+    try:
+        transparency = img.info.get("transparency")
+    except Exception:
+        transparency = None
+    if img.mode == "P" and isinstance(transparency, (bytes, bytearray)):
+        return img.convert("RGBA")
+    return img
 
 
 @dataclasses.dataclass
@@ -113,6 +129,7 @@ def compute_perceptual_hashes(
     image_path = Path(path)
     if HAS_PIL and image_path.exists():
         with Image.open(image_path) as img:
+            img = _normalize_pillow_image(img)
             ph = phash(img, hash_size=PHASH_SIZE)
             dh = dhash(img, hash_size=DHASH_SIZE)
         ph_hex = str(ph)
@@ -175,6 +192,9 @@ class ImageDedupEngine(BaseEngine):
         self._start_time: float = 0
         self._worker_pool: Optional[ThreadPoolExecutor] = None
         self._callback: Optional[Callable[[ScanProgress], None]] = None
+        self._hash_failure_lock = threading.Lock()
+        self._hash_fail_count: int = 0
+        self._hash_fail_samples: list[str] = []
 
         # Default options
         self._default_options = {
@@ -281,6 +301,8 @@ class ImageDedupEngine(BaseEngine):
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._results = []
         self._start_time = time.time()
+        self._hash_fail_count = 0
+        self._hash_fail_samples = []
 
         # Create worker pool
         max_workers = min(32, (os.cpu_count() or 4) * 2)
@@ -426,6 +448,7 @@ class ImageDedupEngine(BaseEngine):
         try:
             if HAS_PIL:
                 with Image.open(image_path) as img:
+                    img = _normalize_pillow_image(img)
                     width, height = img.size
                     # Compute pHash (perceptual hash)
                     phash_val = phash(img, hash_size=PHASH_SIZE)
@@ -441,8 +464,12 @@ class ImageDedupEngine(BaseEngine):
             phash_hex = digest[:16]
             dhash_hex = digest[16:32]
             return (phash_hex, dhash_hex, int(phash_hex, 16), int(dhash_hex, 16), 0, 0)
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
-            logger.warning(f"Failed to compute hashes for {image_path}: {e}")
+        except (UnidentifiedImageError, OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
+            with self._hash_failure_lock:
+                self._hash_fail_count += 1
+                if len(self._hash_fail_samples) < 6:
+                    self._hash_fail_samples.append(str(image_path))
+            logger.debug("Skipped unreadable image during hash pass: %s (%s)", image_path, e)
             return None
 
     def _group_images(self, image_files: List[Path]) -> List[DuplicateGroup]:
@@ -549,6 +576,17 @@ class ImageDedupEngine(BaseEngine):
             for path_str, sig, phash_hex, dhash_hex in cache_entries:
                 self._cache.set_quick(path_str, sig, phash_hex, algo="phash")
                 self._cache.set_full(path_str, sig, dhash_hex, algo="dhash")
+        if self._hash_fail_count > 0:
+            sample_preview = ", ".join(self._hash_fail_samples[:3])
+            extra = ""
+            if self._hash_fail_count > len(self._hash_fail_samples[:3]):
+                extra = f" (+{self._hash_fail_count - len(self._hash_fail_samples[:3])} more)"
+            logger.warning(
+                "Skipped %d unreadable image(s) during photo hashing. Sample(s): %s%s",
+                self._hash_fail_count,
+                sample_preview or "-",
+                extra,
+            )
 
         records: list[dict] = [r for r in records_by_idx if r is not None]
         if not records:

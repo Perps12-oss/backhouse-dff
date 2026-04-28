@@ -42,6 +42,17 @@ IMAGE_EXTENSIONS = {
 _EXIF_DATETIME_TAG = 36867  # DateTimeOriginal
 
 
+def _normalize_for_safe_convert(img):
+    """Avoid Pillow warning for palette transparency stored as bytes."""
+    try:
+        transparency = img.info.get("transparency")
+    except Exception:
+        transparency = None
+    if img.mode == "P" and isinstance(transparency, (bytes, bytearray)):
+        return img.convert("RGBA")
+    return img
+
+
 def _read_exif_timestamp(path: Path) -> Optional[float]:
     """Return EXIF DateTimeOriginal as a Unix timestamp, or None."""
     try:
@@ -64,6 +75,7 @@ def _laplacian_variance(path: Path) -> float:
         from PIL import Image, ImageFilter
         import statistics
         with Image.open(path) as img:
+            img = _normalize_for_safe_convert(img)
             gray = img.convert("L").resize((256, 256))
             lap = list(gray.filter(ImageFilter.FIND_EDGES).getdata())
             mean = sum(lap) / len(lap)

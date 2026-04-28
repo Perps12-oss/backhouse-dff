@@ -84,6 +84,16 @@ class HashCache:
         if not self._open:
             raise RuntimeError("HashCache is not open()")
         conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1")
+            except sqlite3.Error:
+                # Stale/closed connection can remain in thread-local state after
+                # cross-thread cleanup; discard and recreate safely.
+                with self._conn_lock:
+                    self._connections.discard(conn)
+                conn = None
+                self._local.conn = None
         if conn is None:
             conn = sqlite3.connect(str(self.db_path), timeout=10.0, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL;")

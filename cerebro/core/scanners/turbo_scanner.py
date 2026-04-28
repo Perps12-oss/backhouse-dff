@@ -40,6 +40,7 @@ from cerebro.core.root_dedup import dedupe_roots
 from cerebro.core.group_invariants import _assert_no_self_duplicates
 
 logger = get_logger(__name__)
+_LAST_PROCESS_RSS_MB: Optional[float] = None
 
 
 # ============================================================================
@@ -514,6 +515,18 @@ class TurboScanner:
         Uses aggressive parallelization and caching for maximum speed.
         """
         start_time = time.time()
+        self.stats.update(
+            {
+                "files_scanned": 0,
+                "files_skipped_cache": 0,
+                "files_skipped_unchanged": 0,
+                "directories_skipped": 0,
+                "hash_cache_hits": 0,
+                "hash_cache_misses": 0,
+                "total_bytes": 0,
+                "elapsed_time": 0,
+            }
+        )
 
         def _emit(stage: str, processed: int, total: int) -> None:
             cb = self.config.progress_callback
@@ -685,8 +698,17 @@ class TurboScanner:
         try:
             import psutil
 
+            global _LAST_PROCESS_RSS_MB
             rss_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
-            logger.info("Process RSS after scan: %.1f MiB", rss_mb)
+            if _LAST_PROCESS_RSS_MB is None:
+                logger.info("Process RSS after scan: %.1f MiB", rss_mb)
+            else:
+                logger.info(
+                    "Process RSS after scan: %.1f MiB (delta %+,.1f MiB vs previous scan)",
+                    rss_mb,
+                    rss_mb - _LAST_PROCESS_RSS_MB,
+                )
+            _LAST_PROCESS_RSS_MB = rss_mb
         except (OSError, ValueError, RuntimeError, AttributeError, ImportError, TypeError):
             pass
         _emit("complete", discovered_count, discovered_count)
@@ -829,22 +851,32 @@ class TurboScanner:
             
             return path, mtime, hash_val
         
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(hash_worker, pm) for pm in files_to_hash]
-            total = len(futures)
-            processed = 0
-            
-            for future in as_completed(futures):
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(hash_worker, pm) for pm in files_to_hash]
+                total = len(futures)
+                processed = 0
+                
+                for future in as_completed(futures):
+                    try:
+                        path, mtime, hash_val = future.result()
+                        if hash_val:
+                            hash_groups[hash_val].append((path, mtime))
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                        continue
+                    finally:
+                        processed += 1
+                        if emit and (processed % 50 == 0 or processed == total):
+                            emit(stage_name, processed, total)
+        finally:
+            # Hashing uses short-lived worker thread pools; each worker may create a
+            # dedicated SQLite connection in HashCache. Proactively close those
+            # connections after every hash phase so rescans do not accumulate them.
+            if self.hash_cache is not None:
                 try:
-                    path, mtime, hash_val = future.result()
-                    if hash_val:
-                        hash_groups[hash_val].append((path, mtime))
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                    continue
-                finally:
-                    processed += 1
-                    if emit and (processed % 50 == 0 or processed == total):
-                        emit(stage_name, processed, total)
+                    self.hash_cache.close_all_connections()
+                except (sqlite3.Error, OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                    pass
         
         # Filter out groups with only one file
         return {k: v for k, v in hash_groups.items() if len(v) >= 2}

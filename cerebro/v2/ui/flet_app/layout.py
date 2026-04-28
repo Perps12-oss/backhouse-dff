@@ -86,8 +86,8 @@ class AppLayout(ft.Row):
             bgcolor="#080C11",
             indicator_color=ft.Colors.with_opacity(0.28, "#22D3EE"),
             indicator_shape=ft.RoundedRectangleBorder(radius=8),
-            selected_label_text_style=ft.TextStyle(color="#EAF2FF", size=12, weight=ft.FontWeight.W_700),
-            unselected_label_text_style=ft.TextStyle(color="#C2D5F5", size=11, weight=ft.FontWeight.W_500),
+            selected_label_text_style=ft.TextStyle(color="#22D3EE", size=12, weight=ft.FontWeight.W_700),
+            unselected_label_text_style=ft.TextStyle(color="#9FB4D6", size=11, weight=ft.FontWeight.W_500),
             leading=_wordmark,
             trailing=_version_badge,
         )

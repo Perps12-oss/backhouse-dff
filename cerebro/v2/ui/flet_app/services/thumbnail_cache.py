@@ -25,6 +25,17 @@ def is_image_path(path: Path) -> bool:
     return path.suffix.lower() in _IMAGE_SUFFIXES
 
 
+def _normalize_for_safe_convert(im):
+    """Avoid Pillow warning for palette transparency stored as bytes."""
+    try:
+        transparency = im.info.get("transparency")
+    except Exception:
+        transparency = None
+    if im.mode == "P" and isinstance(transparency, (bytes, bytearray)):
+        return im.convert("RGBA")
+    return im
+
+
 class ThumbnailCache:
     """Thread-safe enough for UI: single-threaded Flet main; worker may call get()."""
 
@@ -48,6 +59,7 @@ class ThumbnailCache:
             from PIL import Image
 
             with Image.open(p) as im:
+                im = _normalize_for_safe_convert(im)
                 im = im.convert("RGB")
                 im.thumbnail((_MAX_EDGE, _MAX_EDGE), Image.Resampling.LANCZOS)
                 buf = io.BytesIO()

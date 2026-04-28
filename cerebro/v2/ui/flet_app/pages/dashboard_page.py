@@ -162,12 +162,13 @@ class DashboardPage(ft.Column):
         s = t.spacing
 
         # Compact greeting strip (replaces wasteful hero)
+        username = Path.home().name
         self._hero = ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=20, color="#22D3EE"),
                     ft.Text(
-                        "Welcome back — find and reclaim wasted disk space.",
+                        f"Welcome back, {username} - configure your scan and reclaim disk space.",
                         size=t.typography.size_md,
                         color=t.colors.fg2,
                         expand=True,
@@ -327,15 +328,20 @@ class DashboardPage(ft.Column):
         browse_wrap.on_hover = lambda e, c=browse_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
         start_wrap.on_hover = lambda e, c=start_wrap: self._set_container_glow(c, e.data == "true", variant="primary", strong=True)
         last_wrap.on_hover = lambda e, c=last_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
-        self._actions = ft.Row(
+        secondary_actions = ft.Row(
+            [browse_wrap, last_wrap],
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=s.md,
+            wrap=True,
+        )
+        self._actions = ft.Column(
             [
-                browse_wrap,
                 start_wrap,
-                last_wrap,
+                secondary_actions,
                 self._stop_btn,
             ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            spacing=s.lg,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=s.sm,
         )
 
         self._progress = ft.ProgressBar(width=400, bar_height=6, visible=False, color=t.colors.primary, bgcolor=t.colors.bg3)
@@ -496,7 +502,7 @@ class DashboardPage(ft.Column):
         controls: list[ft.Control] = []
         for icon, accent, label, value in cards:
             tile = ft.Container(
-                content=ft.Column(
+                content=ft.Row(
                     [
                         ft.Container(
                             content=ft.Icon(icon, size=20, color=accent),
@@ -505,25 +511,29 @@ class DashboardPage(ft.Column):
                             border_radius=8,
                             padding=8,
                         ),
-                        ft.Text(
-                            value,
-                            size=t.typography.size_xxl,
-                            weight=ft.FontWeight.W_700,
-                            color=accent,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                        ft.Text(
-                            label,
-                            size=t.typography.size_base,
-                            color=t.colors.fg2,
-                            weight=ft.FontWeight.W_600,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    value,
+                                    size=t.typography.size_lg,
+                                    weight=ft.FontWeight.W_700,
+                                    color=accent,
+                                ),
+                                ft.Text(
+                                    label,
+                                    size=t.typography.size_sm,
+                                    color=t.colors.fg2,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        )
                     ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=10,
                 ),
-                padding=ft.padding.symmetric(horizontal=28, vertical=18),
+                padding=ft.padding.symmetric(horizontal=14, vertical=10),
                 **self._get_glass_style(0.06),
                 ink=True,
             )
@@ -598,12 +608,6 @@ class DashboardPage(ft.Column):
                         size=t.typography.size_sm,
                         color=t.colors.fg_muted,
                     ),
-                    ft.Text(
-                        "Click to select",
-                        size=t.typography.size_xs,
-                        color="#A5F3FC" if is_active else t.colors.fg_muted,
-                        italic=True,
-                    ),
                 ],
                 spacing=s.sm,
                 tight=True,
@@ -612,7 +616,7 @@ class DashboardPage(ft.Column):
             card_kwargs: dict = dict(
                 content=card_content,
                 width=160,
-                height=154,
+                height=142,
                 padding=ft.padding.all(s.md),
                 border=ft.border.all(3 if is_active else 1, border_color),
                 border_radius=12,
@@ -735,16 +739,18 @@ class DashboardPage(ft.Column):
                 self._recent_wrap.update()
             return
         self._recent_wrap.visible = True
-        self._recent_paths_row.controls = [
-            ft.Chip(
+        self._recent_paths_row.controls = []
+        for label, p in recents:
+            recent_chip = ft.Chip(
                 label=ft.Text(label, size=t.typography.size_sm),
                 leading=ft.Icon(ft.icons.Icons.HISTORY, size=14, color=t.colors.fg2),
-                bgcolor=ft.Colors.with_opacity(0.10, t.colors.primary),
                 shape=ft.RoundedRectangleBorder(radius=10),
                 on_click=lambda _e, pp=p: self._add_folder(pp),
             )
-            for label, p in recents
-        ]
+            recent_chip.bgcolor = ft.Colors.with_opacity(0.03, t.colors.primary)
+            recent_chip.side = ft.BorderSide(1, ft.Colors.with_opacity(0.30, t.colors.primary))
+            recent_chip.tooltip = str(p)
+            self._recent_paths_row.controls.append(recent_chip)
         if self._is_mounted():
             self._recent_paths_row.update()
             self._recent_wrap.update()
@@ -976,10 +982,11 @@ class DashboardPage(ft.Column):
         else:
             self._folder_chips_row.controls = [
                 ft.Chip(
-                    label=ft.Text(str(f), size=t.typography.size_sm),
+                    label=ft.Text(self._format_folder_chip_label(f), size=t.typography.size_sm),
                     on_delete=lambda e, p=f: self._remove_folder(p),
                     shape=ft.RoundedRectangleBorder(radius=8),
                     bgcolor=ft.Colors.with_opacity(0.1, t.colors.primary),
+                    tooltip=str(f),
                 )
                 for f in self._folders
             ]
@@ -1109,6 +1116,13 @@ class DashboardPage(ft.Column):
         if m > 0:
             return f"{m}m {s}s"
         return f"{s}s"
+
+    @staticmethod
+    def _format_folder_chip_label(path: Path) -> str:
+        parts = list(path.parts)
+        if len(parts) >= 3:
+            return f"{parts[0]}\\...\\{parts[-1]}"
+        return str(path)
 
     @staticmethod
     def _shorten_path(path: str, max_len: int = 88) -> str:

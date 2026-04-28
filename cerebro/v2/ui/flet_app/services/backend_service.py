@@ -69,10 +69,11 @@ class BackendService:
                 return False
             self._scanning = True
             self._cancel_event.clear()
+        engine_mode = self._resolve_engine_mode(mode)
 
         def _worker() -> None:
             try:
-                self._orchestrator.set_mode(mode)
+                self._orchestrator.set_mode(engine_mode)
                 self._orchestrator.start_scan(
                     folders=folders,
                     protected=protected or [],
@@ -142,3 +143,21 @@ class BackendService:
         if progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR):
             with self._scan_lock:
                 self._scanning = False
+
+    def _resolve_engine_mode(self, mode: str) -> str:
+        """Map UI-facing mode keys to available orchestrator engine keys."""
+        normalized = (mode or "files").strip().lower()
+        aliases = {
+            # UI card exists, but backend currently only supports exact photo dedup.
+            "similar_photos": "photos",
+        }
+        resolved = aliases.get(normalized, normalized)
+        available = set(self._orchestrator.get_available_modes())
+        if resolved in available:
+            if resolved != normalized:
+                _log.info("Mode alias applied: %s -> %s", normalized, resolved)
+            return resolved
+        if "files" in available:
+            _log.warning("Unknown mode '%s', falling back to 'files'", mode)
+            return "files"
+        return resolved
