@@ -27,6 +27,7 @@ from cerebro.v2.state import (
     ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
+    GroupsPruned,
     ResultsGroupGridSortChanged,
     SetDryRun,
     ScanCompleted,
@@ -180,3 +181,6 @@ class CerebroCoordinator:
 
     def results_files_removed(self, paths: Iterable[str]) -> None:
         self._store.dispatch(ResultsFilesRemoved(tuple(str(p) for p in paths)))
+
+    def results_groups_pruned(self, groups: Iterable[DuplicateGroup]) -> None:
+        self._store.dispatch(GroupsPruned(tuple(groups)))

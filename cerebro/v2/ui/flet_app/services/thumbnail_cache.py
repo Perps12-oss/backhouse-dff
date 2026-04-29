@@ -14,7 +14,7 @@ from typing import Awaitable, Callable, Iterable, Optional
 _log = logging.getLogger(__name__)
 
 _MAX_CACHE = 256
-_MAX_EDGE = 160
+_MAX_EDGE = 112
 _JPEG_QUALITY = 82
 
 _IMAGE_SUFFIXES = {

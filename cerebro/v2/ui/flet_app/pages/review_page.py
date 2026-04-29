@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -52,6 +53,7 @@ _SMART_RULES = [
 _GRID_BUILD_ASYNC_THRESHOLD = 220
 _GRID_FIRST_SYNC_FILES = 20   # F5: 20 tiles sync, rest async
 _GRID_ASYNC_BATCH = 30
+_UI_SLOW_MS = 80.0
 
 
 class ReviewPage(ft.Column):
@@ -71,7 +73,7 @@ class ReviewPage(ft.Column):
         self._marked_paths: set[str] = set()
         self._reviewed_group_ids: set[int] = set()
         self._smart_rule = "keep_largest"
-        self._grid_extent = 200  # tile max_extent: S=140 M=200 L=260
+        self._grid_extent = 160  # tile max_extent: S=120 M=160 L=210
         self._loading = False
         self._tile_cache: Dict[str, ft.Container] = {}
         self._thumb_slots: Dict[str, ft.Container] = {}
@@ -83,6 +85,14 @@ class ReviewPage(ft.Column):
         self._grid_build_generation = 0
         self._rendering_generation = 0
         self._pending_deferred_render: bool = False
+        self._compare_render_generation = 0
+        self._compare_thumb_slots: Dict[str, ft.Container] = {}
+        self._compare_dims_labels: Dict[str, ft.Text] = {}
+        self._group_list_items: Dict[int, ft.Container] = {}
+        self._group_list_order: List[int] = []
+        self._active_group_row_id: Optional[int] = None
+        self._compare_nav_in_flight = False
+        self._thumb_load_generation = 0
 
         # UI References
         self._title_lbl: ft.Text
@@ -107,12 +117,14 @@ class ReviewPage(ft.Column):
         self._compare_panel_a: ft.Container
         self._compare_panel_b: ft.Container
         self._group_list_panel: ft.ListView
+        self._group_list_scroll_host: ft.Container
         self._compare_columns: ft.Row
+        self._compare_main_row: ft.Row
         self._progress_lbl: ft.Text
         self._progress_bar: ft.ProgressBar
         self._marked_bar: ft.Container
         self._marked_lbl: ft.Text
-        self._compare_view: ft.Row
+        self._compare_view: ft.Column
 
         self._build_ui()
 
@@ -146,11 +158,11 @@ class ReviewPage(ft.Column):
         return ft.Row(
             [
                 ft.Text("Size:", size=9, color=self._t.colors.fg_muted),
-                ft.TextButton("S", on_click=lambda e: _set_size(140),
+                ft.TextButton("S", on_click=lambda e: _set_size(120),
                     style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
-                ft.TextButton("M", on_click=lambda e: _set_size(200),
+                ft.TextButton("M", on_click=lambda e: _set_size(160),
                     style=ft.ButtonStyle(color="#22D3EE", padding=ft.padding.symmetric(horizontal=6, vertical=2))),
-                ft.TextButton("L", on_click=lambda e: _set_size(260),
+                ft.TextButton("L", on_click=lambda e: _set_size(210),
                     style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
             ],
             spacing=0,
@@ -261,8 +273,6 @@ class ReviewPage(ft.Column):
                             self._cmp_smart_seg,
                             self._keep_btn,
                             self._delete_btn,
-                            ft.OutlinedButton("Open A", on_click=lambda e: self._open_side("a")),
-                            ft.OutlinedButton("Open B", on_click=lambda e: self._open_side("b")),
                         ],
                         wrap=True,
                         spacing=t.spacing.xs,
@@ -382,14 +392,26 @@ class ReviewPage(ft.Column):
         )
 
         # Compare view (left list + right multi-copy viewer)
-        self._group_list_panel = ft.ListView(expand=True, spacing=6, padding=ft.padding.all(8))
+        # The group list must live in a height-bounded area so it scrolls internally; otherwise the
+        # Row grows to thousands of px and default cross-axis CENTER places A/B mid-scroll (~"group 237").
+        self._group_list_panel = ft.ListView(
+            expand=True,
+            spacing=6,
+            padding=ft.padding.all(8),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        self._group_list_scroll_host = ft.Container(
+            content=self._group_list_panel,
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
         left_panel = ft.Container(
             width=320,
             padding=t.spacing.sm,
             content=ft.Column(
                 [
                     ft.Text("Groups", size=t.typography.size_md, weight=ft.FontWeight.W_700),
-                    self._group_list_panel,
+                    self._group_list_scroll_host,
                 ],
                 spacing=t.spacing.xs,
                 expand=True,
@@ -399,12 +421,16 @@ class ReviewPage(ft.Column):
         self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._get_glass_style(0.04))
         self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._get_glass_style(0.04))
         self._compare_columns = ft.Row(scroll=ft.ScrollMode.AUTO, spacing=t.spacing.sm)
-        right_view = ft.Column(
-            [
-                ft.Container(content=self._compare_columns, expand=True),
-            ],
+        right_view = ft.Container(
+            content=ft.Row(
+                [
+                    self._compare_panel_a,
+                    ft.VerticalDivider(width=1, color="#30363D", thickness=1),
+                    self._compare_panel_b,
+                ],
+                expand=True,
+            ),
             expand=True,
-            spacing=t.spacing.sm,
         )
         self._progress_bar = ft.ProgressBar(value=0, color="#22D3EE", bgcolor=ft.Colors.with_opacity(0.14, ft.Colors.WHITE))
         self._progress_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
@@ -417,14 +443,25 @@ class ReviewPage(ft.Column):
             content=ft.Row(
                 [
                     self._marked_lbl,
+                    ft.FilledButton(
+                        "Delete side B",
+                        on_click=lambda _e: self._delete_compare_side("b"),
+                        style=ft.ButtonStyle(bgcolor="#DC2626", color="#FFFFFF"),
+                    ),
                     ft.FilledButton("Delete marked files", on_click=self._delete_marked_files, style=ft.ButtonStyle(bgcolor="#EF4444", color="#FFFFFF")),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
         )
+        self._compare_main_row = ft.Row(
+            [left_panel, right_view],
+            expand=True,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            spacing=t.spacing.sm,
+        )
         self._compare_view = ft.Column(
             [
-                ft.Row([left_panel, right_view], expand=True),
+                ft.Container(content=self._compare_main_row, expand=True),
                 ft.Container(content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6), padding=ft.padding.symmetric(horizontal=t.spacing.sm)),
                 self._marked_bar,
             ],
@@ -447,6 +484,9 @@ class ReviewPage(ft.Column):
     def load_group(self, groups: List[DuplicateGroup], group_id: int, mode: Optional[str] = None) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._group_list_items.clear()
+        self._group_list_order = []
+        self._active_group_row_id = None
         self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
@@ -468,6 +508,9 @@ class ReviewPage(ft.Column):
     ) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._group_list_items.clear()
+        self._group_list_order = []
+        self._active_group_row_id = None
         self._rebuild_filter_index()
         if defer_render:
             # Keep data fresh, but do not build the heavy grid until this page is shown.
@@ -491,6 +534,9 @@ class ReviewPage(ft.Column):
     def apply_pruned_groups(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._group_list_items.clear()
+        self._group_list_order = []
+        self._active_group_row_id = None
         self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
@@ -563,6 +609,12 @@ class ReviewPage(ft.Column):
         except RuntimeError:
             pass
 
+    @staticmethod
+    def _log_if_slow(label: str, started_at: float) -> None:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if elapsed_ms > _UI_SLOW_MS:
+            _log.warning("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
+
     def _set_rendering(self, value: bool) -> None:
         self._rendering_generation += 1
         gen = self._rendering_generation
@@ -588,6 +640,12 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     def _enter_mode(self, mode: str) -> None:
         self._mode = mode
+        # Compare layout needs a bounded viewport: page-level scroll + unbounded ListView made the
+        # compare Row as tall as all groups and vertically centered A/B (~mid-list).
+        self.scroll = None if mode == "compare" else ft.ScrollMode.AUTO
+        if mode != "grid":
+            # Cancel any stale grid thumbnail jobs when leaving grid mode.
+            self._thumb_load_generation += 1
         if mode != "compare":
             # Unbind keys if not in compare mode to save resources/events
             if hasattr(self._bridge, 'flet_page') and self._bridge.flet_page:
@@ -596,6 +654,7 @@ class ReviewPage(ft.Column):
         self._content.controls.clear()
         if mode != "grid":
             self._set_rendering(False)
+        self._compare_view.visible = mode == "compare"
         if mode == "empty":
             self._filter_seg.visible = False
             self._cmp_bar.visible = False
@@ -652,6 +711,9 @@ class ReviewPage(ft.Column):
     # Grid
     # ------------------------------------------------------------------
     def _refresh_grid(self) -> None:
+        _t0 = time.perf_counter()
+        self._thumb_load_generation += 1
+        load_gen = self._thumb_load_generation
         files = self._files_by_filter.get(self._filter_key, [])
         self._refresh_filter_labels()
         n = len(files)
@@ -662,7 +724,8 @@ class ReviewPage(ft.Column):
             self._safe_update(self._grid)
             page = self._bridge.flet_page
             if files and hasattr(page, "run_task"):
-                page.run_task(self._load_thumbnails_async, list(files))
+                page.run_task(self._load_thumbnails_async, list(files), load_gen)
+            self._log_if_slow("review:grid_refresh", _t0)
             return
 
         self._grid_build_generation += 1
@@ -685,7 +748,8 @@ class ReviewPage(ft.Column):
             self._safe_update(self._grid)
             self._set_rendering(False)
             if files and hasattr(page, "run_task"):
-                page.run_task(self._load_thumbnails_async, list(files))
+                page.run_task(self._load_thumbnails_async, list(files), load_gen)
+        self._log_if_slow("review:grid_refresh", _t0)
 
     async def _append_grid_tiles_async(self, tail: List[DuplicateFile], gen: int, all_files: List[DuplicateFile]) -> None:
         import asyncio
@@ -706,7 +770,7 @@ class ReviewPage(ft.Column):
             self._set_rendering(False)
             page = self._bridge.flet_page
             if all_files and hasattr(page, "run_task"):
-                page.run_task(self._load_thumbnails_async, list(all_files))
+                page.run_task(self._load_thumbnails_async, list(all_files), self._thumb_load_generation)
 
     def _tile_for_file(self, f: DuplicateFile) -> ft.Container:
         key = str(getattr(f, "path", ""))
@@ -756,6 +820,15 @@ class ReviewPage(ft.Column):
             [
                 thumb_slot,
                 ft.Column([ft.Container(expand=True), info_bar], expand=True, spacing=0),
+                ft.Container(
+                    alignment=ft.Alignment(-1, -1),
+                    padding=ft.padding.only(left=6, top=6),
+                    content=ft.Checkbox(
+                        value=key in self._marked_paths,
+                        on_change=lambda e, file=f: self._toggle_mark_file(file),
+                        active_color="#EF4444",
+                    ),
+                ),
             ],
             expand=True,
         )
@@ -782,12 +855,14 @@ class ReviewPage(ft.Column):
         self._tile_cache[key] = tile
         return tile
 
-    async def _load_thumbnails_async(self, files: List[DuplicateFile]) -> None:
+    async def _load_thumbnails_async(self, files: List[DuplicateFile], load_gen: int) -> None:
         import asyncio
 
         pending: list[tuple[ft.Container, str]] = []
 
         async def _on_ready(path: Path, b64: str | None) -> None:
+            if load_gen != self._thumb_load_generation or self._mode != "grid":
+                return
             if not b64:
                 return
             key = str(path)
@@ -797,31 +872,39 @@ class ReviewPage(ft.Column):
             if thumb_slot is None:
                 return
             pending.append((thumb_slot, b64))
-            if len(pending) >= 20:
+            if len(pending) >= 8:
+                _apply_t0 = time.perf_counter()
                 for slot, thumb_b64 in pending:
                     slot.content = ft.Image(
                         src=f"data:image/jpeg;base64,{thumb_b64}",
-                        width=120,
-                        height=120,
+                        width=96,
+                        height=96,
                         fit=ft.BoxFit.CONTAIN,
                         border_radius=8,
                     )
                 pending.clear()
-                self._safe_update(self._grid)
+                if load_gen == self._thumb_load_generation and self._mode == "grid":
+                    self._safe_update(self._grid)
+                self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
                 await asyncio.sleep(0)
 
         paths = [Path(str(f.path)) for f in files]
         await get_thumbnail_cache().load_batch_async(paths, _on_ready)
+        if load_gen != self._thumb_load_generation or self._mode != "grid":
+            return
         if pending:
+            _apply_t0 = time.perf_counter()
             for slot, thumb_b64 in pending:
                 slot.content = ft.Image(
                     src=f"data:image/jpeg;base64,{thumb_b64}",
-                    width=120,
-                    height=120,
+                    width=96,
+                    height=96,
                     fit=ft.BoxFit.CONTAIN,
                     border_radius=8,
                 )
-            self._safe_update(self._grid)
+            if load_gen == self._thumb_load_generation and self._mode == "grid":
+                self._safe_update(self._grid)
+            self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -939,7 +1022,11 @@ class ReviewPage(ft.Column):
         to_delete = [str(f.path) for f in files if f is not keep]
         if not to_delete:
             return
-        self._show_smart_delete_dialog(to_delete)
+        for p in to_delete:
+            self._marked_paths.add(str(p))
+        self._update_compare_panels()
+        self._refresh_grid()
+        self._bridge.show_snackbar(f"Rule applied: {len(to_delete):,} files marked in this group.", info=True)
 
     def _apply_smart_select_review(self, e=None):
         """Ask whether to apply the active rule in bulk or as per-group suggestion."""
@@ -986,6 +1073,10 @@ class ReviewPage(ft.Column):
         if not to_delete:
             return
         self._marked_paths = set(to_delete)
+        if self._mode == "grid":
+            self._refresh_grid()
+        else:
+            self._update_compare_panels()
         self._update_progress_and_marked_bar()
 
     def _apply_smart_select_compare_current(self, e=None) -> None:
@@ -1065,7 +1156,7 @@ class ReviewPage(ft.Column):
             self._group_files = {g.group_id: list(g.files) for g in self._groups}
             for p in paths:
                 self._marked_paths.discard(str(p))
-            self._bridge.coordinator.results_files_removed(paths)
+            self._bridge.coordinator.results_groups_pruned(self._groups)
             if deleted > 0:
                 if policy == DeletionPolicy.TRASH:
                     self._bridge.show_snackbar(
@@ -1116,29 +1207,39 @@ class ReviewPage(ft.Column):
     # Compare
     # ------------------------------------------------------------------
     def _enter_compare(self, gid: int) -> None:
-        files = self._group_files.get(gid) or []
-        if not files:
-            self._to_grid()
+        _t0 = time.perf_counter()
+        if self._compare_nav_in_flight:
             return
-        if self._compare_gid is not None:
-            self._reviewed_group_ids.add(self._compare_gid)
-        self._compare_gid = gid
-        self._compare_a = files[0]
-        self._compare_b = files[1] if len(files) > 1 else None
-        self._enter_mode("compare")
-        self._update_compare_panels()
-        self._update_compare_chrome()
+        self._compare_nav_in_flight = True
+        files = self._group_files.get(gid) or []
+        try:
+            if not files:
+                self._to_grid()
+                self._log_if_slow("review:on_click_group_nav", _t0)
+                return
+            if self._compare_gid is not None:
+                self._reviewed_group_ids.add(self._compare_gid)
+            self._compare_gid = gid
+            self._compare_a = files[0]
+            self._compare_b = files[1] if len(files) > 1 else None
+            self._enter_mode("compare")
+            self._refresh_group_list_panel()
+            self._update_compare_panels()
+            self._update_compare_chrome()
+            self._log_if_slow("review:on_click_group_nav", _t0)
+        finally:
+            self._compare_nav_in_flight = False
 
     def _update_compare_panels(self) -> None:
-        gid = self._compare_gid
-        files = self._group_files.get(gid, []) if gid is not None else []
-        cols: list[ft.Control] = []
-        for i, f in enumerate(files):
-            cols.append(self._build_compare_file_column(f, i))
-        self._compare_columns.controls = cols
-        self._safe_update(self._compare_columns)
-        self._refresh_group_list_panel()
+        _t0 = time.perf_counter()
+        self._compare_render_generation += 1
+        gen = self._compare_render_generation
+        self._compare_panel_a.content = self._build_compare_side(self._compare_a, "A", gen)
+        self._compare_panel_b.content = self._build_compare_side(self._compare_b, "B", gen)
+        self._safe_update(self._compare_panel_a)
+        self._safe_update(self._compare_panel_b)
         self._update_progress_and_marked_bar()
+        self._log_if_slow("review:compare_panel_update", _t0)
 
     def _build_compare_file_column(self, f: DuplicateFile, idx: int) -> ft.Container:
         p = Path(str(f.path))
@@ -1191,15 +1292,27 @@ class ReviewPage(ft.Column):
         self._update_compare_panels()
 
     def _refresh_group_list_panel(self) -> None:
-        controls: list[ft.Control] = []
-        for i, g in enumerate(self._groups):
-            active = g.group_id == self._compare_gid
-            controls.append(
-                ft.Container(
+        def _set_row_style(row: ft.Container, active: bool) -> None:
+            row.bgcolor = ft.Colors.with_opacity(0.10 if active else 0.04, "#22D3EE" if active else ft.Colors.WHITE)
+            row.border = ft.border.all(
+                1,
+                ft.Colors.with_opacity(0.28 if active else 0.10, "#22D3EE" if active else ft.Colors.WHITE),
+            )
+
+        current_order = [g.group_id for g in self._groups]
+        needs_full_build = (
+            not self._group_list_items
+            or current_order != self._group_list_order
+        )
+
+        if needs_full_build:
+            self._group_list_items.clear()
+            controls: list[ft.Control] = []
+            for i, g in enumerate(self._groups):
+                active = g.group_id == self._compare_gid
+                row = ft.Container(
                     padding=ft.padding.symmetric(horizontal=10, vertical=8),
                     border_radius=8,
-                    bgcolor=ft.Colors.with_opacity(0.10 if active else 0.04, "#22D3EE" if active else ft.Colors.WHITE),
-                    border=ft.border.all(1, ft.Colors.with_opacity(0.28 if active else 0.10, "#22D3EE" if active else ft.Colors.WHITE)),
                     ink=True,
                     on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
                     content=ft.Column(
@@ -1210,9 +1323,30 @@ class ReviewPage(ft.Column):
                         spacing=2,
                     ),
                 )
-            )
-        self._group_list_panel.controls = controls
-        self._safe_update(self._group_list_panel)
+                _set_row_style(row, active)
+                self._group_list_items[g.group_id] = row
+                controls.append(row)
+            self._group_list_order = current_order
+            self._group_list_panel.controls = controls
+            self._active_group_row_id = self._compare_gid
+            self._safe_update(self._group_list_panel)
+            return
+
+        prev_gid = self._active_group_row_id
+        curr_gid = self._compare_gid
+        if prev_gid == curr_gid:
+            return
+        if prev_gid is not None:
+            prev = self._group_list_items.get(prev_gid)
+            if prev is not None:
+                _set_row_style(prev, False)
+                self._safe_update(prev)
+        if curr_gid is not None:
+            curr = self._group_list_items.get(curr_gid)
+            if curr is not None:
+                _set_row_style(curr, True)
+                self._safe_update(curr)
+        self._active_group_row_id = curr_gid
 
     def _update_progress_and_marked_bar(self) -> None:
         reviewed = len(self._reviewed_group_ids)
@@ -1225,8 +1359,14 @@ class ReviewPage(ft.Column):
                     marked_bytes += int(getattr(f, "size", 0) or 0)
         remaining = max(0, sum(g.reclaimable for g in self._groups) - marked_bytes)
         self._progress_lbl.value = f"{reviewed} of {len(self._groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
-        self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked across {len(self._marked_paths)} files"
-        self._marked_bar.visible = bool(self._marked_paths)
+        if self._mode == "compare":
+            self._marked_lbl.value = (
+                f"Group action: keep side A and delete side B, or use smart rule. "
+                f"{fmt_size(marked_bytes)} marked across {len(self._marked_paths)} files."
+            )
+        else:
+            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked across {len(self._marked_paths)} files"
+        self._marked_bar.visible = bool(self._marked_paths) or self._mode == "compare"
         self._safe_update(self._progress_bar)
         self._safe_update(self._progress_lbl)
         self._safe_update(self._marked_lbl)
@@ -1259,7 +1399,7 @@ class ReviewPage(ft.Column):
         except Exception:
             return ""
 
-    def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
+    def _build_compare_side(self, f: Optional[DuplicateFile], label: str, gen: int) -> ft.Column:
         t = self._t
         label_color = "#22D3EE" if label == "A" else "#A78BFA"
         if not f:
@@ -1270,8 +1410,17 @@ class ReviewPage(ft.Column):
                 expand=True,
             )
         p = Path(str(f.path))
+        marked = str(f.path) in self._marked_paths
         name = p.name
-        thumb = self._thumb_widget(p, 200)
+        thumb_slot = ft.Container(
+            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
+            width=340,
+            height=260,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_radius=8,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
         label_badge = ft.Container(
             content=ft.Text(
                 f"Side {label}",
@@ -1311,9 +1460,17 @@ class ReviewPage(ft.Column):
         date_str = self._fmt_mtime(getattr(f, "mtime", None))
         if date_str:
             meta_rows.append(_meta_row(ft.icons.Icons.SCHEDULE, date_str, "#BFD5FF"))
-        dims = self._get_image_dimensions(p) if is_image_path(p) else ""
-        if dims:
-            meta_rows.append(_meta_row(ft.icons.Icons.ASPECT_RATIO, dims, "#C084FC"))
+        dims_txt = ft.Text("", size=t.typography.size_xs, color="#C084FC")
+        meta_rows.append(
+            ft.Row(
+                [
+                    ft.Icon(ft.icons.Icons.ASPECT_RATIO, size=12, color=ft.Colors.with_opacity(0.55, "#C084FC")),
+                    dims_txt,
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
         meta_rows.append(_meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), "#93C5FD"))
 
         meta_box = ft.Container(
@@ -1321,21 +1478,73 @@ class ReviewPage(ft.Column):
             padding=ft.padding.symmetric(horizontal=10, vertical=6),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             border_radius=6,
-            width=260,
+            width=340,
         )
+
+        key = f"{label}:{gen}"
+        self._compare_thumb_slots[key] = thumb_slot
+        self._compare_dims_labels[key] = dims_txt
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._populate_compare_media_async, f, p, key, gen)
 
         return ft.Column(
             [
                 label_badge,
-                thumb,
+                thumb_slot,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 size_badge,
                 meta_box,
+                ft.Checkbox(
+                    label="Mark for deletion",
+                    value=marked,
+                    active_color="#EF4444",
+                    on_change=lambda e, file=f: self._toggle_mark_file(file),
+                ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
             alignment=ft.MainAxisAlignment.CENTER,
         )
+
+    async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        def _read_dims() -> str:
+            if not is_image_path(p):
+                return ""
+            try:
+                from PIL import Image
+                with Image.open(p) as img:
+                    return f"{img.width} × {img.height}"
+            except Exception:
+                return ""
+
+        b64 = None
+        if is_image_path(p):
+            try:
+                b64 = await loop.run_in_executor(None, lambda: get_thumbnail_cache().get_base64(p))
+            except Exception:
+                b64 = None
+        dims = await loop.run_in_executor(None, _read_dims)
+
+        if gen != self._compare_render_generation:
+            return
+        slot = self._compare_thumb_slots.get(key)
+        dims_lbl = self._compare_dims_labels.get(key)
+        if slot is not None and b64:
+            slot.content = ft.Image(
+                src=f"data:image/jpeg;base64,{b64}",
+                width=340,
+                height=260,
+                fit=ft.BoxFit.CONTAIN,
+                border_radius=8,
+            )
+            self._safe_update(slot)
+        if dims_lbl is not None:
+            dims_lbl.value = dims
+            self._safe_update(dims_lbl)
 
     def _update_compare_chrome(self) -> None:
         gid = self._compare_gid
@@ -1383,10 +1592,20 @@ class ReviewPage(ft.Column):
     # Filter
     # ------------------------------------------------------------------
     def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
-        sel = getattr(e.control, "selected", None) or {"all"}
-        self._filter_key = next(iter(sel), "all")
+        ctrl = getattr(e, "control", None) or self._filter_seg
+        sel = getattr(ctrl, "selected", None)
+        if isinstance(sel, list):
+            self._filter_key = str(sel[0]) if sel else "all"
+        elif isinstance(sel, (set, frozenset)):
+            self._filter_key = str(next(iter(sel))) if sel else "all"
+        else:
+            self._filter_key = "all"
         if self._mode == "grid":
             self._refresh_grid()
+        elif self._mode == "compare":
+            self._refresh_filter_labels()
+            self._update_top_stats()
+            self._update_compare_panels()
 
     def _rebuild_filter_index(self) -> None:
         self._tile_cache = {}
@@ -1517,7 +1736,7 @@ class ReviewPage(ft.Column):
             new_groups, deleted, failed, bytes_reclaimed = service.delete_and_prune([path], self._groups, policy)
             self._groups = new_groups
             self._group_files = {g.group_id: list(g.files) for g in self._groups}
-            self._bridge.coordinator.results_files_removed([path])
+            self._bridge.coordinator.results_groups_pruned(self._groups)
             if deleted > 0:
                 if policy == DeletionPolicy.TRASH:
                     self._bridge.show_snackbar(

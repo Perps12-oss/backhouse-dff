@@ -18,6 +18,7 @@ from cerebro.v2.state.actions import (
     ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
+    GroupsPruned,
     ResultsGroupGridSortChanged,
     SetDryRun,
     ScanCompleted,
@@ -269,6 +270,9 @@ def reduce(state: AppState, action: Action) -> AppState:
             return state
         new_groups = prune_paths_from_groups(state.groups, action.paths)
         return replace(state, groups=new_groups, selected_files=set())
+
+    if isinstance(action, GroupsPruned):
+        return replace(state, groups=list(action.groups), selected_files=set())
 
     if isinstance(action, ReviewViewFilterChanged):
         fk = action.filter_key

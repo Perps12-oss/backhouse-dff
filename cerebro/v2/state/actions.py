@@ -1,6 +1,7 @@
+# -*- coding: utf-8 -*-
 """
 Declarative state transitions. UI and coordinator dispatch; reducer applies.
-(FINAL PLAN v2.0 §2.2: User Action -> Dispatch -> State Update -> Render)
+(FINAL PLAN v2.0 ?2.2: User Action -> Dispatch -> State Update -> Render)
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from cerebro.engines.base_engine import DuplicateGroup
 
 
 # ---------------------------------------------------------------------------
-# Global Advanced Toggle (FINAL PLAN §1.2)
+# Global Advanced Toggle (FINAL PLAN ?1.2)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class AdvancedModeToggled:
 
 
 # ---------------------------------------------------------------------------
-# Theme (FINAL PLAN §3)
+# Theme (FINAL PLAN ?3)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class ThemeChanged:
 
 
 # ---------------------------------------------------------------------------
-# Selection (FINAL PLAN §5.5)
+# Selection (FINAL PLAN ?5.5)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class FileSelectionCleared:
 
 
 # ---------------------------------------------------------------------------
-# Scan Lifecycle (FINAL PLAN §9)
+# Scan Lifecycle (FINAL PLAN ?9)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class ScanResumed:
 
 
 # ---------------------------------------------------------------------------
-# Scan Completed (FINAL PLAN §9)
+# Scan Completed (FINAL PLAN ?9)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -91,7 +92,7 @@ class ScanCompleted:
 
 
 # ---------------------------------------------------------------------------
-# Tab Navigation (FINAL PLAN §1.1)
+# Tab Navigation (FINAL PLAN ?1.1)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class SetActiveTab:
 
 
 # ---------------------------------------------------------------------------
-# Review (FINAL PLAN §5.8)
+# Review (FINAL PLAN ?5.8)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -118,7 +119,7 @@ class ReviewViewFilterChanged:
 
 
 # ---------------------------------------------------------------------------
-# History — scan history grid (FINAL PLAN §7)
+# History ??? scan history grid (FINAL PLAN ?7)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -157,7 +158,7 @@ class HistorySubTabChanged:
 
 
 # ---------------------------------------------------------------------------
-# Duplicates / Results (FINAL PLAN §5)
+# Duplicates / Results (FINAL PLAN ?5)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -180,7 +181,7 @@ class ResultsViewTextFilterChanged:
 
 
 # ---------------------------------------------------------------------------
-# Delete Flow (FINAL PLAN §6)
+# Delete Flow (FINAL PLAN ?6)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -193,6 +194,12 @@ class SetDryRun:
 class ResultsFilesRemoved:
     """Paths no longer present on disk (batch delete or move). Updates ``AppState.groups``."""
     paths: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GroupsPruned:
+    """Store-first prune action carrying already-pruned duplicate groups."""
+    groups: Tuple[DuplicateGroup, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -224,4 +231,5 @@ Action = Union[
     ResultsViewTextFilterChanged,
     SetDryRun,
     ResultsFilesRemoved,
+    GroupsPruned,
 ]

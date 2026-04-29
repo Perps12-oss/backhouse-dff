@@ -71,6 +71,7 @@ class DashboardPage(ft.Column):
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
         self._initial_load_done = False
         self._stats_fetch_generation = 0
+        self._last_on_show_ts = 0.0
         self._session_hidden_quick_add: set[str] = set()
         self._session_recent_scan_paths: list[Path] = []
         self._quick_add_expanded: bool = False
@@ -1176,11 +1177,17 @@ class DashboardPage(ft.Column):
         return f"Current: {p[:head]}...{p[-tail:]}"
 
     def on_show(self) -> None:
+        import time
+
         # F11: avoid repeated heavy refresh; first show does full async load,
-        # later shows only schedule lightweight cache-backed refresh.
+        # later shows lightweight cache-backed refresh and throttled UI refreshes.
         self._schedule_dashboard_data_fetch()
-        self._refresh_recent_paths_bar()
-        self._refresh_quick_add_bar()
+        now = time.monotonic()
+        should_refresh_lists = (not self._initial_load_done) or ((now - self._last_on_show_ts) > 1.5)
+        if should_refresh_lists:
+            self._refresh_recent_paths_bar()
+            self._refresh_quick_add_bar()
+            self._last_on_show_ts = now
         self._initial_load_done = True
         # Do not call super().update() here unnecessarily if _fetch handled updates
 

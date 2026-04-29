@@ -7,6 +7,7 @@ import datetime
 import logging
 import math
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Set
 
@@ -52,6 +53,7 @@ _LIST_ASYNC_BATCH = 16
 _GRID_BUILD_ASYNC_THRESHOLD = 36
 _GRID_FIRST_SYNC_GROUPS = 4   # F3: same for grid
 _GRID_ASYNC_BATCH = 8
+_UI_SLOW_MS = 80.0
 
 _SMART_SELECT_OPTIONS = [
     ("keep_largest", "Keep Largest"),
@@ -90,6 +92,7 @@ class ResultsPage(ft.Stack):
         self._all_group_cards: Dict[int, ft.Container] = {}
         self._inspector_file = None  # currently inspected DuplicateFile
         self._inspector_dims_generation = 0
+        self._inspector_preview_generation = 0
         self._rendering_generation = 0
         self._pending_deferred_render: bool = False
 
@@ -111,6 +114,7 @@ class ResultsPage(ft.Stack):
         self._permanent_btn: ft.OutlinedButton
         self._action_bar: ft.Row
         self._header: ft.Row
+        self._results_filters_bar: ft.Container
         self._filter_seg: ft.SegmentedButton
         self._min_group_filter: ft.Dropdown
         self._grouping_seg: ft.SegmentedButton
@@ -367,6 +371,28 @@ class ResultsPage(ft.Stack):
         )
         self._min_group_filter.on_change = self._on_min_group_filter_change
 
+        # Type / grouping / reclaim filters (must live under _scroll_col or clicks do nothing useful).
+        self._results_filters_bar = ft.Container(
+            content=ft.Column(
+                [
+                    self._filter_seg,
+                    ft.Row(
+                        [
+                            self._grouping_seg,
+                            self._folder_cross_toggle,
+                            self._min_group_filter,
+                        ],
+                        wrap=True,
+                        spacing=t.spacing.sm,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=t.spacing.sm,
+            ),
+            padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.sm),
+            **self._get_glass_style(0.03),
+        )
+
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
         self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
         self._hero_primary = ft.Text("0 B", size=t.typography.size_xxxl, weight=ft.FontWeight.BOLD, color="#22D3EE")
@@ -543,6 +569,7 @@ class ResultsPage(ft.Stack):
                 **self._get_glass_style(0.04),
             ),
             ft.Container(content=self._dashboard, padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.md)),
+            self._results_filters_bar,
             self._empty,
         ]
         # Inspector panel (right side overlay)
@@ -619,7 +646,6 @@ class ResultsPage(ft.Stack):
         self._scan_mode = mode or "files"
         self._selected_paths.clear()
         self._all_group_cards = {}
-        self._recompute_filter_counts()
         if defer_render:
             # Data is fresh; grid will build when on_show() fires (user navigates to Results tab)
             self._pending_deferred_render = True
@@ -665,6 +691,12 @@ class ResultsPage(ft.Stack):
                 ctrl.update()
         except RuntimeError:
             pass
+
+    @staticmethod
+    def _log_if_slow(label: str, started_at: float) -> None:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if elapsed_ms > _UI_SLOW_MS:
+            _log.warning("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
 
     def _set_rendering(self, value: bool) -> None:
         self._rendering_generation += 1
@@ -876,7 +908,7 @@ class ResultsPage(ft.Stack):
                 return
             self._selected_paths.clear()
             self._groups = list(new_groups)
-            self._bridge.coordinator.results_files_removed(paths)
+            self._bridge.coordinator.results_groups_pruned(self._groups)
             self._refresh()
             if deleted > 0:
                 self._show_success_modal(deleted, bytes_reclaimed, policy)
@@ -999,8 +1031,14 @@ class ResultsPage(ft.Stack):
     # Filtering
     # ------------------------------------------------------------------
     def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
-        sel = getattr(e.control, "selected", None) or {"all"}
-        self._filter_key = next(iter(sel), "all")
+        ctrl = getattr(e, "control", None) or self._filter_seg
+        sel = getattr(ctrl, "selected", None)
+        if isinstance(sel, list):
+            self._filter_key = str(sel[0]) if sel else "all"
+        elif isinstance(sel, (set, frozenset)):
+            self._filter_key = str(next(iter(sel))) if sel else "all"
+        else:
+            self._filter_key = "all"
         if self._filter_key not in self._view_mode_by_filter:
             self._view_mode_by_filter[self._filter_key] = "grid" if self._filter_key == "pictures" else "list"
         self._view_mode = self._view_mode_by_filter[self._filter_key]
@@ -1036,6 +1074,16 @@ class ResultsPage(ft.Stack):
         if self._grouping_mode == "folders":
             self._refresh()
 
+    @staticmethod
+    def _ext_for_filter(f) -> str:
+        """Normalize extension to dotted lower-case (matches FILTER_EXTS keys)."""
+        ext = (getattr(f, "extension", None) or "").strip().lower()
+        if not ext:
+            ext = Path(str(getattr(f, "path", ""))).suffix.lower()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+        return ext
+
     def _filtered_groups(self) -> List[DuplicateGroup]:
         groups = [
             g for g in self._groups
@@ -1045,8 +1093,11 @@ class ResultsPage(ft.Stack):
             return groups
         exts = FILTER_EXTS.get(self._filter_key)
         if exts is None:
-            return [g for g in groups if all(classify_file(getattr(f, "extension", "")) == "other" for f in g.files)]
-        return [g for g in groups if any(getattr(f, "extension", "").lower() in exts for f in g.files)]
+            return [
+                g for g in groups
+                if all(classify_file(ResultsPage._ext_for_filter(f)) == "other" for f in g.files)
+            ]
+        return [g for g in groups if any(ResultsPage._ext_for_filter(f) in exts for f in g.files)]
 
     def _count_cross_folder_groups(self, groups: List[DuplicateGroup]) -> int:
         count = 0
@@ -1180,6 +1231,8 @@ class ResultsPage(ft.Stack):
     # Rendering
     # ------------------------------------------------------------------
     def _refresh(self) -> None:
+        _t0 = time.perf_counter()
+        self._recompute_filter_counts()
         filtered = self._filtered_groups()
         t = self._t
         total_files = sum(len(g.files) for g in filtered)
@@ -1199,6 +1252,7 @@ class ResultsPage(ft.Stack):
             if self._loading_state not in sc:
                 sc.append(self._loading_state)
             self._safe_update(self._scroll_col)
+            self._log_if_slow("results:grid_list_refresh", _t0)
             return
         if self._loading_state in sc:
             sc.remove(self._loading_state)
@@ -1212,6 +1266,7 @@ class ResultsPage(ft.Stack):
             if self._results_grid in sc:
                 sc.remove(self._results_grid)
             self._safe_update(self._scroll_col)
+            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         if self._empty in sc:
@@ -1235,6 +1290,7 @@ class ResultsPage(ft.Stack):
                 page = self._bridge.flet_page
                 if self._thumb_slots and hasattr(page, "run_task"):
                     page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
+                self._log_if_slow("results:grid_list_refresh", _t0)
                 return
 
             self._list_build_generation += 1
@@ -1261,6 +1317,7 @@ class ResultsPage(ft.Stack):
                 self._set_rendering(False)
             if self._thumb_slots and hasattr(page, "run_task"):
                 page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
+            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         if self._results_grid in sc:
@@ -1273,6 +1330,7 @@ class ResultsPage(ft.Stack):
             self._loading = False
             self._set_rendering(False)
             self._safe_update(self._scroll_col)
+            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         n = len(filtered)
@@ -1288,6 +1346,7 @@ class ResultsPage(ft.Stack):
                     self._group_list.update()
                 except Exception:
                     pass
+            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         self._list_build_generation += 1
@@ -1317,6 +1376,7 @@ class ResultsPage(ft.Stack):
                     self._group_list.update()
                 except Exception:
                     pass
+        self._log_if_slow("results:grid_list_refresh", _t0)
 
     async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int, filtered_ids: Set[int]) -> None:
         for i in range(0, len(tail), _LIST_ASYNC_BATCH):
@@ -1648,7 +1708,7 @@ class ResultsPage(ft.Stack):
     # View toggle
     # ------------------------------------------------------------------
     def _open_inspector(self, f) -> None:
-        from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
+        from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
         self._inspector_file = f
         p = Path(str(getattr(f, "path", "")))
         self._inspector_name.value = p.name
@@ -1670,20 +1730,14 @@ class ResultsPage(ft.Stack):
                 self._inspector_dims.value = ""
         else:
             self._inspector_dims.value = ""
+        self._inspector_preview_generation += 1
+        preview_gen = self._inspector_preview_generation
         self._inspector_path.value = str(p.parent)
         self._inspector_thumb.content = ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE))
         if is_image_path(p):
-            try:
-                b64 = get_thumbnail_cache().get_base64(p)
-                if b64:
-                    self._inspector_thumb.content = ft.Image(
-                        src=f"data:image/jpeg;base64,{b64}",
-                        width=220, height=160,
-                        fit=ft.BoxFit.CONTAIN,
-                        border_radius=8,
-                    )
-            except Exception:
-                pass
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._load_inspector_preview_async, p, preview_gen)
         self._inspector_panel.visible = True
         self._inspector_wrapper.visible = True
         ResultsPage._safe_update(self._inspector_panel)
@@ -1707,6 +1761,39 @@ class ResultsPage(ft.Stack):
         self._inspector_dims.value = dims
         ResultsPage._safe_update(self._inspector_dims)
 
+    async def _load_inspector_preview_async(self, p: Path, gen: int) -> None:
+        import asyncio as _aio
+        import base64
+        import io
+
+        loop = _aio.get_event_loop()
+
+        def _read_preview() -> str | None:
+            try:
+                from PIL import Image as _Img
+                with _Img.open(p) as img:
+                    img = img.convert("RGB")
+                    # Higher-res preview for inspector detail; grid thumbs remain small.
+                    img.thumbnail((520, 360), _Img.Resampling.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=88, optimize=True)
+                    return base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                return None
+
+        b64 = await loop.run_in_executor(None, _read_preview)
+        if gen != self._inspector_preview_generation:
+            return
+        if b64:
+            self._inspector_thumb.content = ft.Image(
+                src=f"data:image/jpeg;base64,{b64}",
+                width=260,
+                height=190,
+                fit=ft.BoxFit.CONTAIN,
+                border_radius=8,
+            )
+            ResultsPage._safe_update(self._inspector_thumb)
+
     def _close_inspector(self) -> None:
         self._inspector_file = None
         self._inspector_panel.visible = False
@@ -1728,7 +1815,7 @@ class ResultsPage(ft.Stack):
         self._refresh()
 
     def _build_file_tile(self, f) -> ft.Container:
-        """Build a 120x120 thumbnail tile with checkbox and size overlay."""
+        """Build a compact thumbnail tile for fast browsing."""
         t = self._t
         key = str(getattr(f, "path", ""))
         p = Path(key)
@@ -1756,7 +1843,7 @@ class ResultsPage(ft.Stack):
         placeholder = ft.Container(
             content=ft.Icon(
                 icon_name,
-                size=36,
+                size=30,
                 color=ft.Colors.with_opacity(0.9, accent),
             ),
             expand=True,
@@ -1773,9 +1860,9 @@ class ResultsPage(ft.Stack):
         metadata_bar = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text(p.name, size=9, color="#FFFFFF", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
-                    ft.Text(str(p.parent), size=8, color="#B9CAE6", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
-                    ft.Text(modified, size=8, color="#9FB0D0", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                    ft.Text(p.name, size=8, color="#FFFFFF", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                    ft.Text(str(p.parent), size=7, color="#B9CAE6", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
+                    ft.Text(modified, size=7, color="#9FB0D0", max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, text_align=ft.TextAlign.CENTER),
                 ],
                 spacing=1,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1792,8 +1879,8 @@ class ResultsPage(ft.Stack):
         )
         tile = ft.Container(
             content=stack,
-            width=170,
-            height=160,
+            width=136,
+            height=128,
             border_radius=8,
             border=ft.border.all(1, ft.Colors.with_opacity(0.15, ft.Colors.WHITE)),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
@@ -1857,43 +1944,52 @@ class ResultsPage(ft.Stack):
                 return
             pending.append((slot, b64))
             if len(pending) >= 20:
+                _apply_t0 = time.perf_counter()
                 for thumb_slot, thumb_b64 in pending:
                     thumb_slot.content = ft.Image(
                         src=f"data:image/jpeg;base64,{thumb_b64}",
-                        width=120,
-                        height=120,
+                        width=96,
+                        height=96,
                         fit=ft.BoxFit.COVER,
                         border_radius=6,
                     )
                 pending.clear()
                 ResultsPage._safe_update(self._results_grid)
+                self._log_if_slow("results:thumbnail_batch_apply", _apply_t0)
                 await _aio.sleep(0)
 
         paths = [Path(k) for k in slots.keys()]
         await get_thumbnail_cache().load_batch_async(paths, _on_ready)
         if pending:
+            _apply_t0 = time.perf_counter()
             for thumb_slot, thumb_b64 in pending:
                 thumb_slot.content = ft.Image(
                     src=f"data:image/jpeg;base64,{thumb_b64}",
-                    width=120,
-                    height=120,
+                    width=96,
+                    height=96,
                     fit=ft.BoxFit.COVER,
                     border_radius=6,
                 )
             ResultsPage._safe_update(self._results_grid)
+            self._log_if_slow("results:thumbnail_batch_apply", _apply_t0)
 
     def _recompute_filter_counts(self) -> None:
         counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        # F9: count only what _filtered_groups() actually displays (respects min reclaimable)
-        for g in self._filtered_groups():
+        # Count across all groups that pass min reclaimable only — not the active type filter,
+        # or tab labels collapse when e.g. Images is selected.
+        groups = [
+            g for g in self._groups
+            if int(getattr(g, "reclaimable", 0) or 0) >= self._min_reclaimable_bytes
+        ]
+        for g in groups:
             files = list(g.files)
             counts["all"] += len(files)
             group_counts["all"] += 1
             seen_group_kinds: set[str] = set()
             for f in files:
-                key = classify_file(getattr(f, "extension", ""))
+                key = classify_file(ResultsPage._ext_for_filter(f))
                 bucket = key if key in counts else "other"
                 counts[bucket] += 1
                 sizes["all"] += f.size
@@ -1945,10 +2041,11 @@ class ResultsPage(ft.Stack):
         if hdr_parent is not None:
             hdr_parent.bgcolor = self._get_glass_style(0.04).get("bgcolor")
             hdr_parent.border = self._get_glass_style(0.04).get("border")
-        filt_parent = getattr(self._filter_seg, "parent", None)
-        if filt_parent is not None:
-            filt_parent.bgcolor = self._get_glass_style(0.03).get("bgcolor")
-            filt_parent.border = self._get_glass_style(0.03).get("border")
+        bar = getattr(self, "_results_filters_bar", None)
+        if bar is not None:
+            st = self._get_glass_style(0.03)
+            bar.bgcolor = st.get("bgcolor")
+            bar.border = st.get("border")
 
         self._empty.bgcolor = self._get_glass_style(0.04).get("bgcolor")
         self._empty.border = self._get_glass_style(0.04).get("border")

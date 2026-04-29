@@ -13,7 +13,7 @@ from typing import Callable, Dict
 import flet as ft
 
 from cerebro.v2.state import StateStore
-from cerebro.v2.state.actions import ResultsFilesRemoved, ScanCompleted, SetActiveTab
+from cerebro.v2.state.actions import GroupsPruned, ResultsFilesRemoved, ScanCompleted, SetActiveTab
 from cerebro.v2.state.app_state import AppState, create_initial_state
 from cerebro.v2.coordinator import CerebroCoordinator
 from cerebro.v2.ui.flet_app.layout import AppLayout
@@ -145,8 +145,26 @@ def _main(page: ft.Page) -> None:
     try:
         bridge.register_action_control("ResultsFilesRemoved", results_page._group_list)  # type: ignore[attr-defined]
         bridge.register_action_control("ScanCompleted", results_page._group_list)  # type: ignore[attr-defined]
+        bridge.register_action_control("GroupsPruned", results_page._group_list)  # type: ignore[attr-defined]
         bridge.register_action_control("ResultsFilesRemoved", review_page._grid)  # type: ignore[attr-defined]
         bridge.register_action_control("ScanCompleted", review_page._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("GroupsPruned", review_page._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ScanCompleted", dashboard_page._stats_row)  # type: ignore[attr-defined]
+        bridge.register_action_control("GroupsPruned", dashboard_page._stats_row)  # type: ignore[attr-defined]
+
+        # Broaden F1 action->control coverage for targeted updates.
+        for action_name, controls in {
+            "ScanCompleted": [getattr(results_page, "_results_grid", None), getattr(results_page, "_summary", None)],
+            "GroupsPruned": [getattr(results_page, "_results_grid", None), getattr(results_page, "_summary", None)],
+            "ResultsViewFilterChanged": [getattr(results_page, "_filter_seg", None), getattr(results_page, "_group_list", None)],
+            "ReviewNavigate": [getattr(review_page, "_compare_view", None), getattr(review_page, "_cmp_bar", None)],
+            "ReviewViewFilterChanged": [getattr(review_page, "_filter_seg", None), getattr(review_page, "_grid", None)],
+            "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
+            "ScanEnded": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
+        }.items():
+            for ctrl in controls:
+                if ctrl is not None:
+                    bridge.register_action_control(action_name, ctrl)
     except Exception:
         _log.debug("Could not register action-scoped controls", exc_info=True)
 
@@ -562,12 +580,12 @@ def _main(page: ft.Page) -> None:
         )
         if take_nav:
             layout.navigate_to(tab)
-        if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
+        if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
             _sync_groups_from_state(new_state)
             bridge.invalidate_stats_cache()
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
-        if isinstance(action, (ScanCompleted, ResultsFilesRemoved)):
+        if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
             history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
 
     bridge.set_on_state_change(_on_state_change)
