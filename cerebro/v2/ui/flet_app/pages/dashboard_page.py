@@ -1023,9 +1023,9 @@ class DashboardPage(ft.Column):
     def _refresh_folder_chips(self) -> None:
         t = self._t
         if not self._folders:
+            self._folder_container.height = 130
             self._folder_chips_row.controls = [
                 ft.Container(
-                    expand=True,
                     border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border)),
                     border_radius=10,
                     padding=ft.padding.symmetric(horizontal=12, vertical=14),
@@ -1056,6 +1056,7 @@ class DashboardPage(ft.Column):
                 )
             ]
         else:
+            self._folder_container.height = None
             self._folder_chips_row.controls = [
                 ft.Chip(
                     label=ft.Text(self._format_folder_chip_label(f), size=t.typography.size_sm),
