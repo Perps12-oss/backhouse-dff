@@ -197,7 +197,7 @@ class ExcludeListPage(ft.Column):
     def _on_clear_all(self, e) -> None:
         if not self._paths:
             return
-        def _confirm(ev):
+        def _confirm(_ev):
             self._bridge.dismiss_top_dialog()
             self._paths.clear()
             self._persist()
@@ -207,7 +207,7 @@ class ExcludeListPage(ft.Column):
             title=ft.Text("Clear Exclude List"),
             content=ft.Text("Remove all exclusions? Scans will include all previously excluded paths."),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda ev: self._bridge.dismiss_top_dialog()),
+                ft.TextButton("Cancel", on_click=lambda _ev: self._bridge.dismiss_top_dialog()),
                 ft.ElevatedButton(
                     "Clear All", on_click=_confirm,
                     style=ft.ButtonStyle(bgcolor=self._t.colors.danger, color=self._t.colors.bg),

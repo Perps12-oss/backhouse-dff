@@ -24,6 +24,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -187,6 +188,19 @@ def _safe_logs_dir() -> Path:
         return tmp
 
 
+def _prune_old_session_logs(logs_dir: Path, max_age_days: int = 7) -> None:
+    cutoff = time.time() - max_age_days * 86400
+    try:
+        for old in logs_dir.glob("cerebro_*.log"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def _make_formatter() -> logging.Formatter:
     if LOG_JSON:
         return _JsonFormatter()
@@ -245,6 +259,8 @@ def _configure_root(
                 fh.setFormatter(formatter)
                 fh.addFilter(_ScanIdFilter())
                 base.addHandler(fh)
+
+                _prune_old_session_logs(logs_dir)
 
                 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 session_log = logs_dir / f"cerebro_{stamp}.log"

@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -231,33 +232,39 @@ def _deep_merge(base: Dict, override: Dict) -> Dict:
 
 _config_instance: Optional[AppConfig] = None
 _config_manager: Optional[ConfigManager] = None
+_singleton_lock = threading.Lock()
 
 
 def load_config(config_dir: Optional[Path] = None) -> AppConfig:
     global _config_instance, _config_manager
-    if _config_instance is None:
-        _config_manager = ConfigManager(config_dir)
-        _config_instance = _config_manager.load_config()
+    with _singleton_lock:
+        if _config_instance is None:
+            _config_manager = ConfigManager(config_dir)
+            _config_instance = _config_manager.load_config()
     return _config_instance
 
 
 def save_config(config: AppConfig) -> bool:
     global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    return _config_manager.save_config(config)
+    with _singleton_lock:
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+        mgr = _config_manager
+    return mgr.save_config(config)
 
 
 def get_config_manager() -> ConfigManager:
     global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    return _config_manager
+    with _singleton_lock:
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+        return _config_manager
 
 
 def reload_config() -> AppConfig:
     global _config_instance, _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    _config_instance = _config_manager.load_config()
+    with _singleton_lock:
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+        _config_instance = _config_manager.load_config()
     return _config_instance

@@ -1230,96 +1230,71 @@ class ResultsPage(ft.Stack):
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
-    def _refresh(self) -> None:
-        _t0 = time.perf_counter()
-        self._recompute_filter_counts()
-        filtered = self._filtered_groups()
-        t = self._t
-        total_files = sum(len(g.files) for g in filtered)
-        cross_count = self._count_cross_folder_groups(filtered)
-        self._folder_cross_toggle.label = f"Cross-folder only ({cross_count:,})"
-        ResultsPage._safe_update(self._folder_cross_toggle)
-        self._update_summary_line()
-        self._refresh_dashboard(filtered)
-        self._update_selection_ui()
-        self._refresh_filter_labels()
-        sc = self._scroll_col.controls
-        if self._loading:
-            if self._empty in sc:
-                sc.remove(self._empty)
-            if self._group_list in sc:
-                sc.remove(self._group_list)
-            if self._loading_state not in sc:
-                sc.append(self._loading_state)
-            self._safe_update(self._scroll_col)
-            self._log_if_slow("results:grid_list_refresh", _t0)
-            return
-        if self._loading_state in sc:
-            sc.remove(self._loading_state)
 
-        if not filtered:
-            self._rendering_badge.visible = False
-            if self._empty not in sc:
-                sc.append(self._empty)
-            if self._group_list in sc:
-                sc.remove(self._group_list)
-            if self._results_grid in sc:
-                sc.remove(self._results_grid)
-            self._safe_update(self._scroll_col)
-            self._log_if_slow("results:grid_list_refresh", _t0)
-            return
-
+    def _render_loading_state(self, sc: list) -> None:
         if self._empty in sc:
             sc.remove(self._empty)
+        if self._group_list in sc:
+            sc.remove(self._group_list)
+        if self._loading_state not in sc:
+            sc.append(self._loading_state)
+        self._safe_update(self._scroll_col)
 
-        if self._view_mode == "grid":
-            if self._group_list in sc:
-                sc.remove(self._group_list)
-            if self._results_grid not in sc:
-                sc.append(self._results_grid)
-            self._thumb_slots.clear()
-            self._tile_cache_grid.clear()
-            n = len(filtered)
-            if n <= _GRID_BUILD_ASYNC_THRESHOLD:
-                self._results_grid.controls = [
-                    self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
-                ]
-                self._loading = False
-                self._set_rendering(False)
-                self._safe_update(self._scroll_col)
-                page = self._bridge.flet_page
-                if self._thumb_slots and hasattr(page, "run_task"):
-                    page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
-                self._log_if_slow("results:grid_list_refresh", _t0)
-                return
+    def _render_empty_state(self, sc: list) -> None:
+        self._rendering_badge.visible = False
+        if self._empty not in sc:
+            sc.append(self._empty)
+        if self._group_list in sc:
+            sc.remove(self._group_list)
+        if self._results_grid in sc:
+            sc.remove(self._results_grid)
+        self._safe_update(self._scroll_col)
 
-            self._list_build_generation += 1
-            gen = self._list_build_generation
-            self._set_rendering(True)
-            head_n = min(_GRID_FIRST_SYNC_GROUPS, n)
-            head = filtered[:head_n]
-            tail = filtered[head_n:]
-            self._results_grid.controls = [self._build_group_grid_section(g, i) for i, g in enumerate(head)]
+    def _render_grid_view(self, sc: list, filtered: list) -> None:
+        if self._group_list in sc:
+            sc.remove(self._group_list)
+        if self._results_grid not in sc:
+            sc.append(self._results_grid)
+        self._thumb_slots.clear()
+        self._tile_cache_grid.clear()
+        n = len(filtered)
+        page = self._bridge.flet_page
+
+        if n <= _GRID_BUILD_ASYNC_THRESHOLD:
+            self._results_grid.controls = [
+                self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
+            ]
             self._loading = False
+            self._set_rendering(False)
             self._safe_update(self._scroll_col)
-            try:
-                self._results_grid.update()
-            except Exception:
-                pass
-            page = self._bridge.flet_page
-            if tail and hasattr(page, "run_task"):
-                page.run_task(self._append_grid_sections_async, tail, head_n, gen)
-            elif tail:
-                self._results_grid.controls.extend(
-                    [self._build_group_grid_section(g, head_n + i) for i, g in enumerate(tail)]
-                )
-                self._safe_update(self._scroll_col)
-                self._set_rendering(False)
             if self._thumb_slots and hasattr(page, "run_task"):
                 page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
-            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
+        self._list_build_generation += 1
+        gen = self._list_build_generation
+        self._set_rendering(True)
+        head_n = min(_GRID_FIRST_SYNC_GROUPS, n)
+        head, tail = filtered[:head_n], filtered[head_n:]
+        self._results_grid.controls = [self._build_group_grid_section(g, i) for i, g in enumerate(head)]
+        self._loading = False
+        self._safe_update(self._scroll_col)
+        try:
+            self._results_grid.update()
+        except Exception:
+            pass
+        if tail and hasattr(page, "run_task"):
+            page.run_task(self._append_grid_sections_async, tail, head_n, gen)
+        elif tail:
+            self._results_grid.controls.extend(
+                [self._build_group_grid_section(g, head_n + i) for i, g in enumerate(tail)]
+            )
+            self._safe_update(self._scroll_col)
+            self._set_rendering(False)
+        if self._thumb_slots and hasattr(page, "run_task"):
+            page.run_task(self._load_grid_thumbnails_async, dict(self._thumb_slots))
+
+    def _render_list_view(self, sc: list, filtered: list) -> None:
         if self._results_grid in sc:
             sc.remove(self._results_grid)
         if self._group_list not in sc:
@@ -1330,12 +1305,12 @@ class ResultsPage(ft.Stack):
             self._loading = False
             self._set_rendering(False)
             self._safe_update(self._scroll_col)
-            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         n = len(filtered)
+        filtered_ids = {g.group_id for g in filtered}
+
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
-            filtered_ids = {g.group_id for g in filtered}
             self._group_list.controls = [self._build_or_get_group_card(g) for g in self._groups]
             self._apply_group_visibility(filtered_ids)
             self._loading = False
@@ -1346,17 +1321,13 @@ class ResultsPage(ft.Stack):
                     self._group_list.update()
                 except Exception:
                     pass
-            self._log_if_slow("results:grid_list_refresh", _t0)
             return
 
         self._list_build_generation += 1
         gen = self._list_build_generation
         self._set_rendering(True)
-        all_n = len(self._groups)
-        filtered_ids = {g.group_id for g in filtered}
-        head_n = min(_LIST_FIRST_SYNC_GROUPS, all_n)
-        head = self._groups[:head_n]
-        tail = self._groups[head_n:]
+        head_n = min(_LIST_FIRST_SYNC_GROUPS, len(self._groups))
+        head, tail = self._groups[:head_n], self._groups[head_n:]
         self._group_list.controls = [self._build_or_get_group_card(g) for g in head]
         self._apply_group_visibility(filtered_ids)
         self._safe_update(self._scroll_col)
@@ -1376,6 +1347,40 @@ class ResultsPage(ft.Stack):
                     self._group_list.update()
                 except Exception:
                     pass
+
+    def _refresh(self) -> None:
+        _t0 = time.perf_counter()
+        self._recompute_filter_counts()
+        filtered = self._filtered_groups()
+        cross_count = self._count_cross_folder_groups(filtered)
+        self._folder_cross_toggle.label = f"Cross-folder only ({cross_count:,})"
+        ResultsPage._safe_update(self._folder_cross_toggle)
+        self._update_summary_line()
+        self._refresh_dashboard(filtered)
+        self._update_selection_ui()
+        self._refresh_filter_labels()
+
+        sc = self._scroll_col.controls
+        if self._loading:
+            self._render_loading_state(sc)
+            self._log_if_slow("results:grid_list_refresh", _t0)
+            return
+        if self._loading_state in sc:
+            sc.remove(self._loading_state)
+
+        if not filtered:
+            self._render_empty_state(sc)
+            self._log_if_slow("results:grid_list_refresh", _t0)
+            return
+
+        if self._empty in sc:
+            sc.remove(self._empty)
+
+        if self._view_mode == "grid":
+            self._render_grid_view(sc, filtered)
+        else:
+            self._render_list_view(sc, filtered)
+
         self._log_if_slow("results:grid_list_refresh", _t0)
 
     async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int, filtered_ids: Set[int]) -> None:

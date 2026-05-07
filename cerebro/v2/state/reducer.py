@@ -62,39 +62,18 @@ def _mode_for_main_tab(key: str) -> AppMode:
     return AppMode.IDLE
 
 
-def reduce(state: AppState, action: Action) -> AppState:
-    """
-    Pure transition (FINAL PLAN v2.0 §2.2). No I/O, no UI imports.
-    User Action -> Dispatch -> State Update -> Render
-    """
-    # ------------------------------------------------------------------
-    # Global Advanced Toggle (FINAL PLAN §1.2)
-    # ------------------------------------------------------------------
+def _reduce_ui(state: AppState, action: Action) -> AppState | None:
+    """UI-level state transitions: theme, tabs, advanced mode."""
     if isinstance(action, AdvancedModeToggled):
         new_val = action.value if action.value is not None else not state.advanced_mode
         return replace(state, advanced_mode=bool(new_val))
 
-    # ------------------------------------------------------------------
-    # Theme (FINAL PLAN §3)
-    # ------------------------------------------------------------------
     if isinstance(action, ThemeChanged):
         t = action.theme
         if t not in ("light", "dark", "system"):
             return state
         return replace(state, theme=t)
 
-    # ------------------------------------------------------------------
-    # File Selection (FINAL PLAN §5.5)
-    # ------------------------------------------------------------------
-    if isinstance(action, FileSelectionChanged):
-        return replace(state, selected_files=set(action.file_ids))
-
-    if isinstance(action, FileSelectionCleared):
-        return replace(state, selected_files=set())
-
-    # ------------------------------------------------------------------
-    # Tab Navigation (FINAL PLAN §1.1)
-    # ------------------------------------------------------------------
     if isinstance(action, SetActiveTab):
         key = action.key
         if key not in VALID_MAIN_TAB_KEYS:
@@ -103,15 +82,25 @@ def reduce(state: AppState, action: Action) -> AppState:
             return state
         if state.mode == AppMode.SCANNING:
             return replace(state, active_tab=key)
-        return replace(
-            state,
-            active_tab=key,
-            mode=_mode_for_main_tab(key),
-        )
+        return replace(state, active_tab=key, mode=_mode_for_main_tab(key))
 
-    # ------------------------------------------------------------------
-    # Scan Lifecycle (FINAL PLAN §9)
-    # ------------------------------------------------------------------
+    if isinstance(action, HistorySubTabChanged):
+        key = action.key
+        if key not in HISTORY_PAGE_VALID_SUBTABS:
+            key = "scan"
+        return replace(state, ui={**state.ui, "history_subtab": key})
+
+    return None
+
+
+def _reduce_scan(state: AppState, action: Action) -> AppState | None:
+    """Scan lifecycle and file-selection transitions."""
+    if isinstance(action, FileSelectionChanged):
+        return replace(state, selected_files=set(action.file_ids))
+
+    if isinstance(action, FileSelectionCleared):
+        return replace(state, selected_files=set())
+
     if isinstance(action, ScanStarted):
         return replace(
             state,
@@ -139,18 +128,10 @@ def reduce(state: AppState, action: Action) -> AppState:
         )
 
     if isinstance(action, ScanPaused):
-        return replace(
-            state,
-            scan_can_pause=False,
-            scan_can_resume=True,
-        )
+        return replace(state, scan_can_pause=False, scan_can_resume=True)
 
     if isinstance(action, ScanResumed):
-        return replace(
-            state,
-            scan_can_pause=True,
-            scan_can_resume=False,
-        )
+        return replace(state, scan_can_pause=True, scan_can_resume=False)
 
     if isinstance(action, ScanCompleted):
         g = list(action.groups)
@@ -176,28 +157,23 @@ def reduce(state: AppState, action: Action) -> AppState:
         )
 
     if isinstance(action, ReviewNavigate):
-        gid = int(action.group_id)
         return replace(
             state,
             mode=AppMode.REVIEW,
-            selected_group_id=gid,
+            selected_group_id=int(action.group_id),
             review_unlocked=True,
         )
 
-    # ------------------------------------------------------------------
-    # History (FINAL PLAN §7)
-    # ------------------------------------------------------------------
+    return None
+
+
+def _reduce_history(state: AppState, action: Action) -> AppState | None:
+    """History page state transitions."""
     if isinstance(action, HistoryDataLoaded):
-        return replace(
-            state,
-            history_scan_rows=[dict(r) for r in action.rows],
-            history_page=0,
-        )
+        return replace(state, history_scan_rows=[dict(r) for r in action.rows], history_page=0)
 
     if isinstance(action, HistoryGridSortChanged):
-        col = action.column
-        if col not in HISTORY_SCAN_VALID_COLUMNS:
-            col = "date"
+        col = action.column if action.column in HISTORY_SCAN_VALID_COLUMNS else "date"
         return replace(
             state,
             history_sort_column=col,
@@ -206,78 +182,56 @@ def reduce(state: AppState, action: Action) -> AppState:
         )
 
     if isinstance(action, HistoryGridFilterChanged):
-        return replace(
-            state,
-            history_filter=str(action.text),
-            history_page=0,
-        )
+        return replace(state, history_filter=str(action.text), history_page=0)
 
     if isinstance(action, HistoryGridPageChanged):
-        return replace(
-            state,
-            history_page=max(0, int(action.page_index)),
-        )
+        return replace(state, history_page=max(0, int(action.page_index)))
 
     if isinstance(action, DeletionHistoryDataLoaded):
-        return replace(
-            state,
-            history_deletion_rows=[dict(r) for r in action.rows],
-        )
+        return replace(state, history_deletion_rows=[dict(r) for r in action.rows])
 
-    if isinstance(action, HistorySubTabChanged):
-        key = action.key
-        if key not in HISTORY_PAGE_VALID_SUBTABS:
-            key = "scan"
-        ui = {**state.ui, "history_subtab": key}
-        return replace(state, ui=ui)
+    return None
 
-    # ------------------------------------------------------------------
-    # Duplicates / Results (FINAL PLAN §5)
-    # ------------------------------------------------------------------
+
+def _reduce_results(state: AppState, action: Action) -> AppState | None:
+    """Duplicates / results page and delete-flow transitions."""
     if isinstance(action, ResultsGroupGridSortChanged):
-        col = action.column
-        if col not in RESULTS_GROUP_VALID_SORT:
-            col = "reclaimable"
-        return replace(
-            state,
-            results_group_sort_column=col,
-            results_group_sort_asc=bool(action.sort_asc),
-        )
+        col = action.column if action.column in RESULTS_GROUP_VALID_SORT else "reclaimable"
+        return replace(state, results_group_sort_column=col, results_group_sort_asc=bool(action.sort_asc))
 
     if isinstance(action, ResultsViewFilterChanged):
-        fk = action.filter_key
-        if fk not in RESULTS_FILE_VALID_FILTERS:
-            fk = "all"
-        return replace(
-            state,
-            results_file_filter=fk,
-        )
+        fk = action.filter_key if action.filter_key in RESULTS_FILE_VALID_FILTERS else "all"
+        return replace(state, results_file_filter=fk)
 
     if isinstance(action, ResultsViewTextFilterChanged):
         raw = str(action.text) if action.text is not None else ""
-        if len(raw) > 2000:
-            raw = raw[:2000]
-        return replace(state, results_text_filter=raw)
+        return replace(state, results_text_filter=raw[:2000])
 
-    # ------------------------------------------------------------------
-    # Delete Flow (FINAL PLAN §6)
-    # ------------------------------------------------------------------
     if isinstance(action, SetDryRun):
         return replace(state, dry_run=bool(action.value))
 
     if isinstance(action, ResultsFilesRemoved):
         if not action.paths:
             return state
-        new_groups = prune_paths_from_groups(state.groups, action.paths)
-        return replace(state, groups=new_groups, selected_files=set())
+        return replace(state, groups=prune_paths_from_groups(state.groups, action.paths), selected_files=set())
 
     if isinstance(action, GroupsPruned):
         return replace(state, groups=list(action.groups), selected_files=set())
 
     if isinstance(action, ReviewViewFilterChanged):
-        fk = action.filter_key
-        if fk not in RESULTS_FILE_VALID_FILTERS:
-            fk = "all"
+        fk = action.filter_key if action.filter_key in RESULTS_FILE_VALID_FILTERS else "all"
         return replace(state, review_file_filter=fk)
 
+    return None
+
+
+def reduce(state: AppState, action: Action) -> AppState:
+    """
+    Pure transition (FINAL PLAN v2.0 §2.2). No I/O, no UI imports.
+    Delegates to domain sub-reducers; raises TypeError for unknown actions.
+    """
+    for sub in (_reduce_ui, _reduce_scan, _reduce_history, _reduce_results):
+        result = sub(state, action)
+        if result is not None:
+            return result
     raise TypeError(f"Unsupported action: {type(action).__name__}")
