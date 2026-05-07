@@ -147,22 +147,13 @@ class HistoryStore:
 
         try:
             line = json.dumps(record.to_dict(), default=str) + "\n"
-            fd, tmp_path = tempfile.mkstemp(prefix="cerebro_audit_", suffix=".jsonl", dir=str(self._audit_dir))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    if audit_file.exists():
-                        with open(audit_file, "r", encoding="utf-8") as existing:
-                            f.write(existing.read())
-                    f.write(line)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp_path, audit_file)
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                try:
-                    os.unlink(tmp_path)
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                    pass
-                raise
+            # True append — O(1) regardless of file size.
+            # The reader skips corrupt/partial lines, so an interrupted write
+            # is safe: at worst one incomplete line is ignored on next read.
+            with open(audit_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
             self._log(
                 f"Recorded deletion audit: scan={record.scan_id} deleted={record.deleted} failed={record.failed} bytes={record.bytes_reclaimed}"
             )

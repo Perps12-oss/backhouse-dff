@@ -11,6 +11,7 @@ dependencies = [
     "imagehash>=4.3.1",
     "numpy>=1.24.0",
     "flet>=0.25.0",
+    "structlog>=24.0.0",
 ]
 
 [project.scripts]
@@ -38,6 +39,11 @@ select = [
 # ----------------------------------------------------------------------------
 # mypy — gradual typing
 # ----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    "limit_memory: pytest-memray memory ceiling (no-op without --memray flag)",
+]
+
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true   # third-party libs without stubs

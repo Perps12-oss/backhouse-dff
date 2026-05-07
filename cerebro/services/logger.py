@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 """
-CEREBRO Logger (Normalized)
+CEREBRO Logger
 
-- Single global logging configuration (no per-module handlers).
+- Single global logging configuration under the "cerebro" hierarchy.
+- Module loggers (logging.getLogger(__name__)) propagate here automatically
+  because __name__ resolves to e.g. "cerebro.services.config" which is a
+  child of "cerebro" in Python's logging tree.
+- Optional JSON output: set CEREBRO_LOG_JSON=1 for structured log lines.
+- Optional debug verbosity: set CEREBRO_DEBUG=1.
 - Safe on locked folders (falls back to OS temp dir).
 - Backwards compatible symbols used across the codebase:
     logger, get_logger,
@@ -13,6 +18,7 @@ CEREBRO Logger (Normalized)
     flush_all_handlers
 """
 
+import json
 import logging
 import os
 import sys
@@ -25,8 +31,12 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, Generator
 
-# Global DEBUG: when set (e.g. CEREBRO_DEBUG=1), root level is DEBUG so log_debug is emitted
 DEBUG = os.environ.get("CEREBRO_DEBUG", "").strip().lower() in ("1", "true", "yes")
+LOG_JSON = os.environ.get("CEREBRO_LOG_JSON", "").strip().lower() in ("1", "true", "yes")
+
+# Root name for the entire cerebro logging hierarchy.
+# All module loggers (getLogger(__name__)) propagate here automatically.
+_ROOT_NAME = "cerebro"
 
 
 # ----------------------------
@@ -57,8 +67,38 @@ def scan_context(scan_id: str) -> Generator[None, None, None]:
 
 class _ScanIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.scan_id = get_scan_id()
+        record.scan_id = get_scan_id()  # type: ignore[attr-defined]
         return True
+
+
+# ----------------------------
+# Formatters
+# ----------------------------
+
+class _TextFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        scan = getattr(record, "scan_id", "")
+        scan_part = f" [scan:{scan}]" if scan else ""
+        formatted = super().format(record)
+        return formatted.replace(f"{record.name}:", f"{record.name}{scan_part}:")
+
+
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log line for log aggregator ingestion."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        scan = getattr(record, "scan_id", "")
+        if scan:
+            payload["scan_id"] = scan
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
 
 
 # ----------------------------
@@ -71,34 +111,18 @@ _current_log_file: Optional[Path] = None
 
 
 class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
-    """RotatingFileHandler that survives Windows os.rename failures.
+    """RotatingFileHandler that survives Windows os.rename failures on rollover.
 
-    Problem:
-        On Windows, RotatingFileHandler.doRollover() calls os.rename(log → log.1).
-        If any other process has either file open (common: a previous app instance
-        that crashed without releasing the handle, or two app instances running
-        concurrently), the rename raises PermissionError [WinError 32]. The base
-        class's emit() then calls handleError() which prints a 20-line traceback
-        for every subsequent log call — the file stays oversized, so
-        shouldRollover() keeps returning True and each emit retries the rename.
-
-    Fix:
-        - doRollover(): swallow PermissionError/OSError, reopen the stream so
-          subsequent emits still write to the same (now-oversized) file, and
-          disable further rollover attempts for the rest of this process so we
-          don't spam retries. One warning to stderr per process.
-        - handleError(): suppress the traceback path entirely. Known issue,
-          one-line stderr notice is enough.
-
-    On Linux / macOS / happy-path Windows this class behaves exactly like the
-    stock RotatingFileHandler.
+    On Windows, concurrent file handles (second app instance, log viewer) cause
+    PermissionError during os.rename. This handler catches that, reopens the
+    stream so writes continue to the oversized file, and suppresses further
+    rollover attempts for the session rather than spamming handleError().
     """
 
-    # Class-level flags so every handler instance in the process shares state.
     _rollover_warned: bool = False
     _rollover_disabled: bool = False
 
-    def shouldRollover(self, record) -> int:
+    def shouldRollover(self, record: logging.LogRecord) -> int:
         if _WindowsSafeRotatingFileHandler._rollover_disabled:
             return 0
         return super().shouldRollover(record)
@@ -107,12 +131,10 @@ class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
         try:
             super().doRollover()
         except (PermissionError, OSError) as exc:
-            # The base class closed self.stream before the os.rename attempt;
-            # reopen it so subsequent writes land in the oversized file.
             try:
                 self.stream = self._open()
             except (OSError, ValueError):
-                self.stream = None
+                self.stream = None  # type: ignore[assignment]
 
             _WindowsSafeRotatingFileHandler._rollover_disabled = True
 
@@ -122,28 +144,18 @@ class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
                     sys.stderr.write(
                         f"[cerebro.logger] rotation of {self.baseFilename} "
                         f"failed ({exc.__class__.__name__}: {exc}); "
-                        f"rollover disabled for this session, log file will "
-                        f"grow past configured maxBytes. "
-                        f"Close other CEREBRO instances and any tail/viewers "
-                        f"holding this file open, then restart to re-enable rotation.\n"
+                        f"rollover disabled for this session. "
+                        f"Close other CEREBRO instances and restart to re-enable.\n"
                     )
                     sys.stderr.flush()
                 except (OSError, ValueError):
                     pass
 
-    def handleError(self, record) -> None:
-        # Default handleError prints traceback.print_exc() which, combined with
-        # rollover retry-on-every-emit, produces the 20-line-per-log-call spam
-        # we are trying to eliminate. Silent swallow is the intended behaviour
-        # for this handler.
+    def handleError(self, record: logging.LogRecord) -> None:
         return
 
 
 def _safe_logs_dir() -> Path:
-    """
-    Prefer ~/.cerebro/logs.
-    Fall back to <project_root>/logs, then OS temp if needed.
-    """
     home_preferred = Path.home() / ".cerebro" / "logs"
     try:
         home_preferred.mkdir(parents=True, exist_ok=True)
@@ -151,14 +163,14 @@ def _safe_logs_dir() -> Path:
         test.write_text("ok", encoding="utf-8")
         try:
             test.unlink()
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+        except OSError:
             pass
         return home_preferred
-    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+    except OSError:
         pass
 
     here = Path(__file__).resolve()
-    root = here.parents[2]  # <root> (.. / .. /)
+    root = here.parents[2]
     preferred = root / "logs"
     try:
         preferred.mkdir(parents=True, exist_ok=True)
@@ -166,63 +178,56 @@ def _safe_logs_dir() -> Path:
         test.write_text("ok", encoding="utf-8")
         try:
             test.unlink()
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+        except OSError:
             pass
         return preferred
-    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+    except OSError:
         tmp = Path(tempfile.gettempdir()) / "cerebro_logs"
         tmp.mkdir(parents=True, exist_ok=True)
         return tmp
 
 
-def _configure_root(level: int = logging.INFO, 
-                    log_to_file: bool = True,
-                    file_max_size: int = 10*1024*1024,  # 10MB
-                    file_backup_count: int = 5) -> None:
+def _make_formatter() -> logging.Formatter:
+    if LOG_JSON:
+        return _JsonFormatter()
+    return _TextFormatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+def _configure_root(
+    level: int = logging.INFO,
+    log_to_file: bool = True,
+    file_max_size: int = 10 * 1024 * 1024,
+    file_backup_count: int = 5,
+) -> None:
     global _configured, _current_log_file
-    
+
     with _config_lock:
         if _configured:
             return
 
-        base = logging.getLogger("CEREBRO")
+        base = logging.getLogger(_ROOT_NAME)
         base.setLevel(level)
-        base.propagate = False  # prevents double printing via Python root logger
+        # Prevent double-logging through Python's root logger.
+        base.propagate = False
 
-        # Defensive: if module reloads in dev, don't duplicate handlers
         for h in list(base.handlers):
             try:
                 base.removeHandler(h)
                 h.close()
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            except OSError:
                 pass
 
-        class _Fmt(logging.Formatter):
-            def format(self, record: logging.LogRecord) -> str:
-                scan = getattr(record, "scan_id", "")
-                scan_part = f" [scan:{scan}]" if scan else ""
-                # Store formatted message
-                original_msg = record.getMessage()
-                formatted = super().format(record)
-                # Insert scan info after the logger name
-                return formatted.replace(
-                    f"{record.name}:", 
-                    f"{record.name}{scan_part}:"
-                )
+        formatter = _make_formatter()
 
-        formatter = _Fmt(
-            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        )
-
-        # Console handler
         sh = logging.StreamHandler(sys.stdout)
         sh.setLevel(level)
         sh.setFormatter(formatter)
         sh.addFilter(_ScanIdFilter())
         base.addHandler(sh)
 
-        # File handler (best effort)
         if log_to_file:
             try:
                 logs_dir = _safe_logs_dir()
@@ -234,14 +239,13 @@ def _configure_root(level: int = logging.INFO,
                     maxBytes=file_max_size,
                     backupCount=file_backup_count,
                     encoding="utf-8",
-                    delay=True,  # defer open until first write
+                    delay=True,
                 )
                 fh.setLevel(level)
                 fh.setFormatter(formatter)
                 fh.addFilter(_ScanIdFilter())
                 base.addHandler(fh)
-                
-                # Also create a timestamped log for this session
+
                 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 session_log = logs_dir / f"cerebro_{stamp}.log"
                 session_fh = logging.FileHandler(session_log, encoding="utf-8")
@@ -249,44 +253,43 @@ def _configure_root(level: int = logging.INFO,
                 session_fh.setFormatter(formatter)
                 session_fh.addFilter(_ScanIdFilter())
                 base.addHandler(session_fh)
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                # Console logging still works even if file logging fails.
+            except OSError:
                 pass
 
         _configured = True
 
 
-def configure(level: int = logging.INFO, 
-              log_to_file: bool = True,
-              file_max_size: int = 10*1024*1024,
-              file_backup_count: int = 5) -> None:
+def configure(
+    level: int = logging.INFO,
+    log_to_file: bool = True,
+    file_max_size: int = 10 * 1024 * 1024,
+    file_backup_count: int = 5,
+) -> None:
     """Configure the logger with custom options."""
     global _configured
     with _config_lock:
         _configured = False
-        _configure_root(level, log_to_file, file_max_size, file_backup_count)
+    _configure_root(level, log_to_file, file_max_size, file_backup_count)
 
 
 def get_logger(name: Optional[str] = None, level: Optional[int] = None) -> logging.Logger:
-    """
-    Get a logger that shares the global CEREBRO handlers.
-    Never add handlers in feature modules; use this instead.
+    """Return a logger that shares the global cerebro handlers.
+
+    If *name* is given, returns a child of the root cerebro logger
+    (e.g. get_logger("history.store") → "cerebro.history.store").
+    Prefer logging.getLogger(__name__) in modules — those names already sit
+    in the right hierarchy and propagate here automatically.
     """
     _configure_root()
-    base = logging.getLogger("CEREBRO")
+    base = logging.getLogger(_ROOT_NAME)
 
     lg = base.getChild(name) if name else base
     if level is not None:
-        # Validate it's a proper logging level
         valid_levels = {
             logging.DEBUG, logging.INFO, logging.WARNING,
-            logging.ERROR, logging.CRITICAL, logging.FATAL,
-            logging.NOTSET
+            logging.ERROR, logging.CRITICAL, logging.FATAL, logging.NOTSET,
         }
-        if level in valid_levels:
-            lg.setLevel(level)
-        else:
-            lg.setLevel(logging.INFO)
+        lg.setLevel(level if level in valid_levels else logging.INFO)
 
     return lg
 
@@ -329,34 +332,87 @@ def log_fatal(msg: str) -> None:
 
 def flush_all_handlers() -> None:
     """Flush stream/file handlers (useful before crash exit)."""
-    base = logging.getLogger("CEREBRO")
-    for h in base.handlers[:]:  # Create a copy to avoid iteration issues
+    base = logging.getLogger(_ROOT_NAME)
+    for h in base.handlers[:]:
         try:
-            if hasattr(h, 'flush'):
+            if hasattr(h, "flush"):
                 h.flush()
         except (AttributeError, ValueError):
-            # Handler might have been closed
             continue
 
 
 def get_current_log_file() -> Optional[Path]:
-    """Get the path to the current rotating log file."""
+    """Return the path to the current rotating log file."""
     return _current_log_file
 
 
 def cleanup_handlers() -> None:
-    """Clean up all handlers (useful for tests or reconfiguration)."""
+    """Remove all handlers and reset configuration (tests / reconfiguration)."""
     global _configured
     with _config_lock:
-        base = logging.getLogger("CEREBRO")
+        base = logging.getLogger(_ROOT_NAME)
         for h in list(base.handlers):
             try:
                 base.removeHandler(h)
                 h.close()
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            except OSError:
                 pass
         _configured = False
 
 
-# Initialize on module import (debug logs only when DEBUG/level allows)
+def get_structured_logger(name: str) -> object:
+    """Return a structlog BoundLogger for new code that wants key=value context.
+
+    Falls back to a stdlib logger if structlog is not installed.
+
+    Usage (new code only — do not migrate existing getLogger(__name__) calls):
+        _log = get_structured_logger(__name__)
+        _log.info("scan_complete", files=12345, elapsed_s=4.2)
+    """
+    try:
+        import structlog
+
+        _configure_structlog_once()
+        return structlog.get_logger(name)
+    except ImportError:
+        return logging.getLogger(name)
+
+
+_structlog_configured = False
+_structlog_lock = threading.Lock()
+
+
+def _configure_structlog_once() -> None:
+    global _structlog_configured
+    if _structlog_configured:
+        return
+    with _structlog_lock:
+        if _structlog_configured:
+            return
+        import structlog
+
+        processors: list = [
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%dT%H:%M:%S", utc=False),
+        ]
+        if LOG_JSON:
+            processors.append(structlog.processors.JSONRenderer())
+        else:
+            processors.append(structlog.dev.ConsoleRenderer())
+
+        structlog.configure(
+            processors=processors,
+            wrapper_class=structlog.make_filtering_bound_logger(
+                logging.DEBUG if DEBUG else logging.INFO
+            ),
+            context_class=dict,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=True,
+        )
+        _structlog_configured = True
+
+
+# Initialize on module import
 _configure_root(level=logging.DEBUG if DEBUG else logging.INFO)

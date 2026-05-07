@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 
 from cerebro.runtime_deps import ensure_runtime_dependencies
 
@@ -15,4 +16,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Required for PyInstaller + multiprocessing on Windows: without this,
+    # spawned child processes re-execute the entry point and hang.
+    multiprocessing.freeze_support()
     raise SystemExit(main())

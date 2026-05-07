@@ -34,8 +34,13 @@ for pkg in ("flet", "PIL"):
         datas += d
         binaries += b
         hiddenimports += h
-    except Exception:
-        pass
+    except Exception as exc:
+        import sys as _sys
+        _sys.stderr.write(
+            f"[SPEC ERROR] collect_all({pkg!r}) failed: {exc}\n"
+            f"Install the package before building: pip install {pkg}\n"
+        )
+        raise SystemExit(1) from exc
 
 # Whole cerebro package (engines, v2 UI, etc.)
 hiddenimports += collect_submodules("cerebro")
