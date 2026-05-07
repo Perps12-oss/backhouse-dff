@@ -6,7 +6,7 @@ Extracted from cerebro/core/scanners/turbo_scanner.py at Phase 2d
 can all import the same guard without duplicating logic.
 
 Strict mode:
-    CEREBRO_STRICT=1   — guard raises AssertionError (tests, CI, dev runs)
+    CEREBRO_STRICT=1   — guard raises ValueError (tests, CI, dev runs)
     unset / empty      — guard logs warning and drops offending entry (default
                          production posture). ``CEREBRO_STRICT`` is evaluated on
                          each call so tests and shells can toggle without restart.
@@ -51,7 +51,10 @@ def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list,
     Each item is returned as-is in the kept list; only the path is extracted
     for canonicalization.
 
-    Strict mode (CEREBRO_STRICT=1): raises AssertionError with context.
+    Strict mode (CEREBRO_STRICT=1): raises ValueError with context. (Used to
+    raise AssertionError; switched to ValueError so the check survives ``-O``
+    optimisation, which strips the ``assert`` statement but leaves explicit
+    raises intact.)
     Default (unset): logs warning and drops the offending entry.
 
     Returns (kept_items, regression_count).

@@ -9,8 +9,11 @@ file-dedup scan core in the app. It is registered as mode "files" by
 ScanOrchestrator; there is no "files_classic" alternative anymore.
 
 Limitations (v1):
-  - pause()/resume() raise NotImplementedError (TurboScanner has no
-    mid-scan suspension).  Cancel takes effect at phase boundaries.
+  - pause()/resume() use a threading.Event that gates each hashing worker
+    per-file. Pause therefore takes effect within ~1 file (sub-second on
+    typical workloads), but does not cancel an in-flight read of a single
+    file. Cross-process pausing is not supported (use_multiprocessing=True
+    bypasses the gate because threading.Event does not span processes).
   - follow_symlinks is accepted in configure() but TurboScanner's
     recursive walk always follows symlinks when os.scandir is used;
     the option is stored but currently a no-op in the fast path.
@@ -212,6 +215,11 @@ class TurboFileEngine(BaseEngine):
             hash_algorithm=hash_algo,
             progress_callback=self._on_turbo_progress,
             cache_dir=default_cerebro_cache_dir() if use_cache else None,
+            # Forward the pause event so hashing workers gate per-file. The
+            # outer scanner-loop wait() below catches phase-boundary pauses;
+            # this catches mid-phase pauses where a single hashing phase
+            # might otherwise run for minutes after pause() is called.
+            pause_event=self._pause_event,
         )
 
         # Filter protected folders out of roots
