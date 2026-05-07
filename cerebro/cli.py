@@ -93,10 +93,15 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     )
 
     t0 = time.monotonic()
-    while not done_event.wait(timeout=0.25):
-        if time.monotonic() - t0 > 3600:
-            print("\nerror: scan timeout", file=sys.stderr)
-            return 1
+    try:
+        while not done_event.wait(timeout=0.25):
+            if time.monotonic() - t0 > 3600:
+                print("\nerror: scan timeout", file=sys.stderr)
+                return 1
+    except KeyboardInterrupt:
+        orchestrator.cancel()
+        print("\nScan cancelled.", file=sys.stderr)
+        return 130
 
     if not args.quiet:
         print()  # newline after progress

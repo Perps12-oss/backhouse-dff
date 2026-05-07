@@ -34,11 +34,11 @@ class PreviewManager:
                 return False
 
             if platform.system() == "Darwin":
-                subprocess.run(["open", str(path)], check=False, shell=False)
+                subprocess.run(["open", str(path)], check=False, shell=False, timeout=10)
             elif platform.system() == "Windows":
                 os.startfile(str(path))
             else:
-                subprocess.run(["xdg-open", str(path)], check=False, shell=False)
+                subprocess.run(["xdg-open", str(path)], check=False, shell=False, timeout=10)
             return True
 
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:

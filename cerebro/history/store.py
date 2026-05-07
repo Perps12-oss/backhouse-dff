@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -145,20 +146,28 @@ class HistoryStore:
         date_str = now.strftime("%Y-%m-%d")
         audit_file = self._audit_dir / f"deletions_{date_str}.jsonl"
 
-        try:
-            line = json.dumps(record.to_dict(), default=str) + "\n"
-            # True append — O(1) regardless of file size.
-            # The reader skips corrupt/partial lines, so an interrupted write
-            # is safe: at worst one incomplete line is ignored on next read.
-            with open(audit_file, "a", encoding="utf-8") as f:
-                f.write(line)
-                f.flush()
-                os.fsync(f.fileno())
+        line = json.dumps(record.to_dict(), default=str) + "\n"
+        # True append — O(1) regardless of file size.
+        # The reader skips corrupt/partial lines, so an interrupted write
+        # is safe: at worst one incomplete line is ignored on next read.
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                with open(audit_file, "a", encoding="utf-8") as f:
+                    f.write(line)
+                    f.flush()
+                    os.fsync(f.fileno())
+                last_exc = None
+                break
+            except OSError as e:
+                last_exc = e
+                time.sleep(0.1 * (attempt + 1))
+        if last_exc is not None:
+            self._log(f"Failed to write audit record after retries: {last_exc}", level="warning")
+        else:
             self._log(
                 f"Recorded deletion audit: scan={record.scan_id} deleted={record.deleted} failed={record.failed} bytes={record.bytes_reclaimed}"
             )
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
-            self._log(f"Failed to write audit record: {e}", level="warning")
 
         return record
 
