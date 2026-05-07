@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -30,7 +29,7 @@ class HistoryManager:
 
     def __init__(self, db_path: str | None = None):
         if db_path:
-            self.db_path = os.path.abspath(db_path)
+            self.db_path = str(Path(db_path).resolve())
         else:
             self.db_path = str(_default_db_path())
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +60,7 @@ class HistoryManager:
 
     def log_deletion(self, file_path: str, size: int, mode: str) -> bool:
         try:
-            filename = os.path.basename(file_path)
+            filename = Path(file_path).name
             timestamp = datetime.now(timezone.utc).isoformat()
             with self._lock, sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 conn.execute(

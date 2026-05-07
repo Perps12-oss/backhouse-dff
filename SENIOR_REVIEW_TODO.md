@@ -111,43 +111,7 @@ A: No `assert` used for runtime validation in production paths. `group_invariant
 
 ## OPEN TODO ITEMS
 
-### Priority: MEDIUM (Next sprint)
-
-- [ ] **#2 — Mixed `os.path` and `pathlib` across the codebase**  
-  Several files use `os.path.exists`, `os.path.basename`, `os.path.abspath`, `os.path.getsize` alongside `pathlib.Path`. This is inconsistent and creates UNC path / Windows long-path edge cases.  
-  **Files:** `cerebro/services/config.py:543`, `cerebro/v2/core/deletion_history_db.py:33,64`, `cerebro/core/scanners/turbo_scanner.py:603`, `cerebro/core/group_invariants.py:66`  
-  **Fix:** Standardise on `pathlib.Path` — replace `os.path.*` calls with their `Path` equivalents.
-
-- [ ] **#7 — `assert` in `group_invariants.py` for runtime data checks**  
-  `cerebro/core/group_invariants.py:66` uses `assert` to enforce that duplicate groups have exactly one survivor. Assertions are stripped when Python is run with `-O` (optimise flag) or `-OO`. PyInstaller does not use `-O` by default, but this is a latent footgun.  
-  **Fix:** Replace `assert` with explicit `if not condition: raise ValueError(...)`.  
-  **File:** `cerebro/core/group_invariants.py`
-
-### Priority: LOW (Technical debt backlog)
-
-- [ ] **#8 — No `run.sh` for Linux/macOS despite cross-platform Flet UI**  
-  There is `Run CEREBRO.bat` for Windows but no shell script for Linux/macOS. The spec is also Windows-only (`CEREBRO.exe`). If cross-platform is a goal, add a `run.sh` and a platform-aware build script.  
-  **Files:** repo root
-
-- [ ] **#9 — `config.py` is 880 LOC — split into domains**  
-  UI settings, scan config, performance config, notifications, and migration logic are all in one file. This makes it hard to test individual sub-systems and slows parsing.  
-  **Fix:** Extract into `config_ui.py`, `config_scan.py`, `config_migration.py`.  
-  **File:** `cerebro/services/config.py`
-
-- [ ] **#10 — `TurboFileEngine.pause()` raises `NotImplementedError`**  
-  `cerebro/engines/turbo_file_engine.py` advertises pause/resume via `BaseEngine` but raises `NotImplementedError` at runtime. If the UI exposes a pause button for this engine, it will crash.  
-  **Fix:** Either implement pause (use `threading.Event`) or document/disable the pause button for this engine mode.  
-  **File:** `cerebro/engines/turbo_file_engine.py`
-
-- [ ] **#11 — `runtime_deps.py` restart loop has no iteration guard**  
-  After pip install succeeds, the process is restarted. If a package installs successfully but is still not importable (e.g., wrong platform wheel, corrupted install), `_missing_pip_names()` will return it again on the next run, triggering another pip call and restart — infinitely.  
-  **Fix:** Set an environment variable (e.g., `CEREBRO_RESTART_ATTEMPT=1`) before restarting and abort with a clear error if that variable is already set.  
-  **File:** `cerebro/runtime_deps.py:126-137`
-
-- [ ] **#12 — No performance regression tests**  
-  `test_turbo_discovery_speed.py` exists but uses `use_multiprocessing=False` for all benchmarks. There is no CI assertion that scanning N files completes within a time budget. A slow PR could regress scan speed silently.  
-  **Fix:** Add a pytest benchmark with `pytest-benchmark` or a simple `time.perf_counter()` assertion for a known file corpus.  
-  **File:** `tests/test_turbo_discovery_speed.py`
+None. All items resolved.
 
 ---
 
@@ -168,6 +132,23 @@ A: No `assert` used for runtime validation in production paths. `group_invariant
 - [x] **Startup time monitoring in CI** — CI step added: imports `cerebro` and fails build if elapsed time exceeds 3000ms.
 
 - [x] **`logging.conf` added** — `cerebro/services/logging.conf` documents the full logger hierarchy and provides an INI-format config for runtime log-level changes via `CEREBRO_LOG_CONF`.
+
+- [x] **#2 — `os.path` → `pathlib` standardisation** — Replaced `os.path.exists/abspath/basename/getsize` with `Path` equivalents in `config.py`, `deletion_history_db.py`, `turbo_scanner.py`, `group_invariants.py`. Removed now-unused `import os` from `deletion_history_db.py`.
+
+- [x] **#7 — `AssertionError` → `ValueError` in `group_invariants.py`** — `raise AssertionError(msg)` changed to `raise ValueError(msg)`. Also switched `os.path.realpath` → `Path.resolve()` in the same file.
+
+- [x] **#8 — `run.sh` added** — Shell launcher for Linux/macOS at repo root. Auto-detects `python3`/`python`, `cd`s to script directory, forwards all args.
+
+- [x] **#9 — `config.py` split into domain modules** — 880-LOC monolith split into:
+  - `config_types.py` — all enums + dataclasses (AppConfig, UISettings, ScanSettings, etc.)
+  - `config_migration.py` — migration chain with `@_migration` decorator registry
+  - `config.py` — slim ConfigManager + module-level singletons; re-exports all public types for backwards compatibility
+
+- [x] **#10 — `TurboFileEngine` pause/resume implemented** — `_pause_event: threading.Event` (initially set) added; `pause()` clears it (blocks scan loop), `resume()` sets it (unblocks); both emit a progress update. Scan loop calls `_pause_event.wait()` on each generator tick.
+
+- [x] **#11 — `runtime_deps.py` infinite-restart guard** — Before restarting, sets `CEREBRO_RESTARTED=1` in child env. On entry, if flag is already set, prints manual-install instructions and exits immediately instead of looping.
+
+- [x] **#12 — Performance regression tests** — `tests/test_scan_performance.py` creates 150 files (50 unique × 3 copies), asserts ≥50 groups found and scan completes in <30s. Also covers pause/resume correctness end-to-end.
 
 ---
 

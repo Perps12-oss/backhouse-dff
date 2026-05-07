@@ -123,10 +123,24 @@ def ensure_runtime_dependencies() -> None:
         )
         raise SystemExit(1)
 
+    # Guard against an infinite restart loop: if pip succeeded but the import
+    # still fails (wrong-platform wheel, broken package), the sentinel stops us
+    # from looping forever and prints a clear manual-install message instead.
+    _RESTART_SENTINEL = "CEREBRO_RESTARTED"
+    if os.environ.get(_RESTART_SENTINEL):
+        print(
+            "[CEREBRO] Dependencies were installed but packages are still missing "
+            "after restart. Install manually:\n  %s -m pip install -r requirements.txt"
+            % sys.executable,
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     # New process so importlib metadata and sys.path pick up the new wheels.
     print("[CEREBRO] Dependencies installed — restarting…", file=sys.stderr)
     try:
-        proc = subprocess.run([sys.executable, *sys.argv])
+        new_env = {**os.environ, _RESTART_SENTINEL: "1"}
+        proc = subprocess.run([sys.executable, *sys.argv], env=new_env)
     except OSError as exc:
         print(
             "[CEREBRO] Could not restart automatically (%s). "

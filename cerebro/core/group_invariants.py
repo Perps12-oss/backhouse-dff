@@ -15,6 +15,7 @@ Strict mode:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Tuple
 
 from cerebro.services.logger import get_logger
@@ -63,7 +64,7 @@ def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list,
         # Extract path regardless of item format
         path = item[0] if isinstance(item, tuple) else item
         try:
-            canonical = os.path.normcase(os.path.realpath(str(path)))
+            canonical = os.path.normcase(str(Path(str(path)).resolve()))
         except OSError as e:
             logger.warning("[GUARD] realpath failed for %s: %s — keeping as-is", path, e)
             kept.append(item)
@@ -76,7 +77,7 @@ def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list,
                 f"via {canonicals[canonical]}"
             )
             if _strict_enabled():
-                raise AssertionError(msg)
+                raise ValueError(msg)
             logger.warning(msg)
             regressions += 1
             continue

@@ -600,7 +600,7 @@ class TurboScanner:
             total = 0
             for p, _ in paths_list:
                 try:
-                    total += os.path.getsize(str(p))
+                    total += Path(str(p)).stat().st_size
                 except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
             return total

@@ -113,6 +113,9 @@ class TurboFileEngine(BaseEngine):
         self._results: List[DuplicateGroup] = []
         self._progress: ScanProgress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
+        # Initially set (unblocked) — clear() to pause, set() to resume.
+        self._pause_event = threading.Event()
+        self._pause_event.set()
         self._callback: Optional[Callable[[ScanProgress], None]] = None
 
     def configure(
@@ -128,6 +131,7 @@ class TurboFileEngine(BaseEngine):
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._callback = progress_callback
         self._cancel_event.clear()
+        self._pause_event.set()  # ensure unpaused at start
         self._results = []
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
@@ -137,10 +141,26 @@ class TurboFileEngine(BaseEngine):
         self._run_scan()
 
     def pause(self) -> None:
-        raise NotImplementedError("TurboFileEngine does not support pause/resume.")
+        self._pause_event.clear()
+        self._state = ScanState.PAUSED
+        self._progress = ScanProgress(
+            state=ScanState.PAUSED,
+            files_scanned=self._progress.files_scanned,
+            files_total=self._progress.files_total,
+            stage=self._progress.stage,
+        )
+        self._emit_progress()
 
     def resume(self) -> None:
-        raise NotImplementedError("TurboFileEngine does not support pause/resume.")
+        self._state = ScanState.SCANNING
+        self._progress = ScanProgress(
+            state=ScanState.SCANNING,
+            files_scanned=self._progress.files_scanned,
+            files_total=self._progress.files_total,
+            stage=self._progress.stage,
+        )
+        self._emit_progress()
+        self._pause_event.set()  # unblock the scan loop
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -241,6 +261,8 @@ class TurboFileEngine(BaseEngine):
 
         # Drain the generator ( TurboScanner.scan yields nothing but is a gen )
         for _ in scanner.scan(reachable_roots):
+            # Block here while paused; wakes immediately when resumed.
+            self._pause_event.wait()
             if self._cancel_event.is_set():
                 self._state = ScanState.CANCELLED
                 self._progress = ScanProgress(state=ScanState.CANCELLED)
