@@ -797,7 +797,7 @@ class TurboScanner:
                     results = future.result()
                     all_files.extend(results)
                     discovered_so_far += len(results)
-                    if emit and discovered_so_far % 1000 <= len(results):
+                    if emit and discovered_so_far % 100 <= len(results):
                         emit("discovering", discovered_so_far, 0)
                     # Persist signature + file list so the next scan can skip this root.
                     if self.dir_cache and results:
@@ -851,10 +851,27 @@ class TurboScanner:
         
         if not files_to_hash:
             return {}
-        
+
+        # Pre-fetch all cache entries in batch to avoid one SQLite query per file.
+        # StatSignature.from_path() does a stat() per file but that is still far
+        # cheaper than N individual "SELECT ... WHERE path=?" round-trips at scale.
+        _batch_cache: Dict[str, Optional[str]] = {}
+        if self.hash_cache:
+            _batch_paths = [str(p) for p, _ in files_to_hash]
+            _batch_sigs: Dict[str, Any] = {}
+            for p, _ in files_to_hash:
+                try:
+                    _batch_sigs[str(p)] = StatSignature.from_path(p)
+                except OSError:
+                    pass
+            if quick:
+                _batch_cache = self.hash_cache.get_many_quick(_batch_paths, _batch_sigs)
+            else:
+                _batch_cache = self.hash_cache.get_many_full(_batch_paths, _batch_sigs)
+
         # Use thread pool (not process pool) for hashing to share cache
         workers = min(self.config.hash_workers, len(files_to_hash))
-        
+
         pause_event = self.config.pause_event
 
         def hash_worker(path_mtime: Tuple[Path, float]) -> Tuple[Path, float, Optional[str]]:
@@ -864,12 +881,19 @@ class TurboScanner:
             # before any read so an interrupted file is never half-processed.
             if pause_event is not None and not pause_event.is_set():
                 pause_event.wait()
+            path_str = str(path)
+            # Fast path: batch pre-fetch already validated the sig.
+            if path_str in _batch_cache:
+                cached = _batch_cache[path_str]
+                if cached:
+                    self.stats['hash_cache_hits'] += 1
+                    return path, mtime, cached
             if self.hash_cache:
                 hash_val = compute_hash_cached(
-                    path, 
+                    path,
                     self.hash_cache,
                     self.config.hash_algorithm,
-                    quick=quick
+                    quick=quick,
                 )
                 if hash_val:
                     self.stats['hash_cache_hits'] += 1
@@ -880,7 +904,7 @@ class TurboScanner:
                     hash_val = compute_quick_hash_fast(path, self.config.hash_algorithm)
                 else:
                     hash_val = compute_full_hash_mmap(path, self.config.hash_algorithm)
-            
+
             return path, mtime, hash_val
         
         try:

@@ -54,6 +54,10 @@ _GRID_BUILD_ASYNC_THRESHOLD = 36
 _GRID_FIRST_SYNC_GROUPS = 4   # F3: same for grid
 _GRID_ASYNC_BATCH = 8
 _UI_SLOW_MS = 80.0
+# Hard cap on rendered controls: prevents OOM / WebSocket timeouts at 100K+ groups.
+# Groups are already sorted by reclaimable desc so the top _MAX_RENDERED_GROUPS
+# are always the most impactful ones. A banner is shown when the cap is active.
+_MAX_RENDERED_GROUPS = 1_000
 
 _SMART_SELECT_OPTIONS = [
     ("keep_largest", "Keep Largest"),
@@ -1257,13 +1261,18 @@ class ResultsPage(ft.Stack):
             sc.append(self._results_grid)
         self._thumb_slots.clear()
         self._tile_cache_grid.clear()
-        n = len(filtered)
         page = self._bridge.flet_page
 
+        # Cap rendered groups to avoid OOM and WebSocket overload at scale.
+        grid_overflow = len(filtered) - _MAX_RENDERED_GROUPS
+        display_filtered = filtered if grid_overflow <= 0 else filtered[:_MAX_RENDERED_GROUPS]
+        n = len(display_filtered)
+
         if n <= _GRID_BUILD_ASYNC_THRESHOLD:
-            self._results_grid.controls = [
-                self._build_group_grid_section(g, i) for i, g in enumerate(filtered)
-            ]
+            controls = [self._build_group_grid_section(g, i) for i, g in enumerate(display_filtered)]
+            if grid_overflow > 0:
+                controls.append(self._build_overflow_banner(grid_overflow))
+            self._results_grid.controls = controls
             self._loading = False
             self._set_rendering(False)
             self._safe_update(self._scroll_col)
@@ -1275,7 +1284,7 @@ class ResultsPage(ft.Stack):
         gen = self._list_build_generation
         self._set_rendering(True)
         head_n = min(_GRID_FIRST_SYNC_GROUPS, n)
-        head, tail = filtered[:head_n], filtered[head_n:]
+        head, tail = display_filtered[:head_n], display_filtered[head_n:]
         self._results_grid.controls = [self._build_group_grid_section(g, i) for i, g in enumerate(head)]
         self._loading = False
         self._safe_update(self._scroll_col)
@@ -1284,11 +1293,13 @@ class ResultsPage(ft.Stack):
         except Exception:
             pass
         if tail and hasattr(page, "run_task"):
-            page.run_task(self._append_grid_sections_async, tail, head_n, gen)
+            page.run_task(self._append_grid_sections_async, tail, head_n, gen, grid_overflow)
         elif tail:
             self._results_grid.controls.extend(
                 [self._build_group_grid_section(g, head_n + i) for i, g in enumerate(tail)]
             )
+            if grid_overflow > 0:
+                self._results_grid.controls.append(self._build_overflow_banner(grid_overflow))
             self._safe_update(self._scroll_col)
             self._set_rendering(False)
         if self._thumb_slots and hasattr(page, "run_task"):
@@ -1310,8 +1321,17 @@ class ResultsPage(ft.Stack):
         n = len(filtered)
         filtered_ids = {g.group_id for g in filtered}
 
+        # Cap rendered groups to avoid OOM and WebSocket overload at scale.
+        all_groups_to_render = self._groups
+        overflow = len(self._groups) - _MAX_RENDERED_GROUPS
+        if overflow > 0:
+            all_groups_to_render = self._groups[:_MAX_RENDERED_GROUPS]
+
         if n <= _LIST_BUILD_ASYNC_THRESHOLD:
-            self._group_list.controls = [self._build_or_get_group_card(g) for g in self._groups]
+            controls = [self._build_or_get_group_card(g) for g in all_groups_to_render]
+            if overflow > 0:
+                controls.append(self._build_overflow_banner(overflow))
+            self._group_list.controls = controls
             self._apply_group_visibility(filtered_ids)
             self._loading = False
             self._set_rendering(False)
@@ -1326,8 +1346,8 @@ class ResultsPage(ft.Stack):
         self._list_build_generation += 1
         gen = self._list_build_generation
         self._set_rendering(True)
-        head_n = min(_LIST_FIRST_SYNC_GROUPS, len(self._groups))
-        head, tail = self._groups[:head_n], self._groups[head_n:]
+        head_n = min(_LIST_FIRST_SYNC_GROUPS, len(all_groups_to_render))
+        head, tail = all_groups_to_render[:head_n], all_groups_to_render[head_n:]
         self._group_list.controls = [self._build_or_get_group_card(g) for g in head]
         self._apply_group_visibility(filtered_ids)
         self._safe_update(self._scroll_col)
@@ -1338,9 +1358,11 @@ class ResultsPage(ft.Stack):
         if tail:
             page = self._bridge.flet_page
             if hasattr(page, "run_task"):
-                page.run_task(self._append_group_cards_async, tail, gen, filtered_ids)
+                page.run_task(self._append_group_cards_async, tail, gen, filtered_ids, overflow)
             else:
                 self._group_list.controls.extend([self._build_or_get_group_card(g) for g in tail])
+                if overflow > 0:
+                    self._group_list.controls.append(self._build_overflow_banner(overflow))
                 self._apply_group_visibility(filtered_ids)
                 self._safe_update(self._scroll_col)
                 try:
@@ -1383,7 +1405,7 @@ class ResultsPage(ft.Stack):
 
         self._log_if_slow("results:grid_list_refresh", _t0)
 
-    async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int, filtered_ids: Set[int]) -> None:
+    async def _append_group_cards_async(self, tail: List[DuplicateGroup], gen: int, filtered_ids: Set[int], overflow: int = 0) -> None:
         for i in range(0, len(tail), _LIST_ASYNC_BATCH):
             if gen != self._list_build_generation:
                 self._set_rendering(False)
@@ -1398,11 +1420,13 @@ class ResultsPage(ft.Stack):
                 pass
             await asyncio.sleep(0)
         if gen == self._list_build_generation:
+            if overflow > 0:
+                self._group_list.controls.append(self._build_overflow_banner(overflow))
             self._set_rendering(False)
             self._loading = False
             self._safe_update(self._scroll_col)
 
-    async def _append_grid_sections_async(self, tail: List[DuplicateGroup], start_idx: int, gen: int) -> None:
+    async def _append_grid_sections_async(self, tail: List[DuplicateGroup], start_idx: int, gen: int, overflow: int = 0) -> None:
         for i in range(0, len(tail), _GRID_ASYNC_BATCH):
             if gen != self._list_build_generation:
                 self._set_rendering(False)
@@ -1419,7 +1443,30 @@ class ResultsPage(ft.Stack):
                 pass
             await asyncio.sleep(0)
         if gen == self._list_build_generation:
+            if overflow > 0:
+                self._results_grid.controls.append(self._build_overflow_banner(overflow))
             self._set_rendering(False)
+
+    def _build_overflow_banner(self, overflow: int) -> ft.Container:
+        t = self._t
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color=t.colors.fg_muted, size=16),
+                    ft.Text(
+                        f"{overflow:,} more groups not displayed — showing top {_MAX_RENDERED_GROUPS:,} by reclaimable size.",
+                        size=t.typography.size_sm,
+                        color=t.colors.fg_muted,
+                    ),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            margin=ft.margin.only(top=8, bottom=16),
+        )
 
     async def _finish_loading_async(self) -> None:
         await asyncio.sleep(0)

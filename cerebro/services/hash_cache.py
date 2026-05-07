@@ -303,6 +303,70 @@ class HashCache:
                     continue
                 raise
 
+    # ------------------------------------------------------------------
+    # Batch lookups (1M-file scale optimisation)
+    # ------------------------------------------------------------------
+
+    _SQLITE_MAX_VARS = 900  # SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999
+
+    def get_many_quick(
+        self,
+        paths: list,
+        sigs: dict,
+    ) -> dict:
+        """Batch lookup of quick hashes.
+
+        paths — list of str|Path
+        sigs  — dict mapping str(path) -> StatSignature (used for invalidation)
+
+        Returns dict mapping str(path) -> hash string or None.
+        Paths absent from the DB or with a stale sig return None.
+        """
+        if not paths:
+            return {}
+        conn = self._require_conn()
+        path_strs = [str(p) for p in paths]
+        results: dict = {p: None for p in path_strs}
+        for i in range(0, len(path_strs), self._SQLITE_MAX_VARS):
+            chunk = path_strs[i : i + self._SQLITE_MAX_VARS]
+            ph = ",".join("?" * len(chunk))
+            for row in conn.execute(
+                f"SELECT path, size, mtime_ns, dev, inode, quick_hash FROM file_hashes WHERE path IN ({ph})",
+                chunk,
+            ):
+                p_str, size, mtime_ns, dev, inode, quick_hash = row
+                sig = sigs.get(p_str)
+                if sig and (size, mtime_ns, dev, inode) == (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+                    results[p_str] = quick_hash
+        return results
+
+    def get_many_full(
+        self,
+        paths: list,
+        sigs: dict,
+    ) -> dict:
+        """Batch lookup of full hashes.
+
+        Same contract as get_many_quick but returns full_hash values.
+        """
+        if not paths:
+            return {}
+        conn = self._require_conn()
+        path_strs = [str(p) for p in paths]
+        results: dict = {p: None for p in path_strs}
+        for i in range(0, len(path_strs), self._SQLITE_MAX_VARS):
+            chunk = path_strs[i : i + self._SQLITE_MAX_VARS]
+            ph = ",".join("?" * len(chunk))
+            for row in conn.execute(
+                f"SELECT path, size, mtime_ns, dev, inode, full_hash FROM file_hashes WHERE path IN ({ph})",
+                chunk,
+            ):
+                p_str, size, mtime_ns, dev, inode, full_hash = row
+                sig = sigs.get(p_str)
+                if sig and (size, mtime_ns, dev, inode) == (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+                    results[p_str] = full_hash
+        return results
+
     def get_stats(self) -> dict:
         """Return cache statistics (total_entries, cache_size_mb, hit_rate). Requires open()."""
         conn = self._require_conn()
