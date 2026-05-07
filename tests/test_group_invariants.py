@@ -26,7 +26,7 @@ def test_assert_no_self_duplicates_strict_on_raises(
     f = tmp_path / "dup.txt"
     f.write_text("x", encoding="utf-8")
     group = [(f, 0.0), (f, 0.0)]
-    with pytest.raises(AssertionError, match="self-duplicate regression"):
+    with pytest.raises(ValueError, match="self-duplicate regression"):
         _assert_no_self_duplicates(group, group_key="test")
 
 

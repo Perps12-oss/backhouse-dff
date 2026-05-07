@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import time
 import hashlib
+import threading
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -166,6 +167,16 @@ class TurboScanConfig:
     
     # Progress
     progress_callback: Optional[Callable] = None
+
+    # Pause control
+    # When set (default), the scanner runs at full speed. Engines that want
+    # mid-scan pause/resume pass in a threading.Event and call .clear() to
+    # pause and .set() to resume. The event is checked at every phase boundary
+    # and (most importantly) before each file hash so wall-time-dominant
+    # hashing phases respond promptly to pause requests. Cross-process
+    # pause is intentionally not supported; ``use_multiprocessing=True``
+    # bypasses these checks because threading.Event does not span processes.
+    pause_event: Optional[threading.Event] = None
     
 
 # ============================================================================
@@ -537,8 +548,19 @@ class TurboScanner:
             except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Never allow UI callback errors to break scanning.
                 pass
-        
+
+        def _pause_gate() -> None:
+            """Block here while the engine has cleared the pause event.
+
+            Called at phase boundaries and inside the inner hash worker so
+            long-running phases respond to pause() within ~1 file.
+            """
+            ev = self.config.pause_event
+            if ev is not None and not ev.is_set():
+                ev.wait()
+
         # Phase 1: Parallel directory discovery
+        _pause_gate()
         user_roots = list(roots)
         scan_roots = dedupe_roots(user_roots)
         if len(scan_roots) != len(user_roots):
@@ -559,6 +581,7 @@ class TurboScanner:
             time.time() - start_time,
         )
         # Phase 2: Group by size (instant duplicate detection)
+        _pause_gate()
         _emit("grouping_by_size", len(discovered_files), len(discovered_files))
         size_groups = defaultdict(list)
         for path, size, mtime in discovered_files:
@@ -570,6 +593,7 @@ class TurboScanner:
         _diag_size_candidates = sum(len(v) for v in size_groups.values())
 
         # Phase 3: Quick hash for size groups (parallel with caching)
+        _pause_gate()
         if self.config.use_quick_hash and size_groups:
             logger.info("[Turbo] Phase 2: Computing quick hashes...")
             quick_hash_groups = self._compute_hashes_parallel(
@@ -583,6 +607,7 @@ class TurboScanner:
             quick_hash_groups = size_groups
         
         # Phase 4: Full hash if needed (parallel with caching)
+        _pause_gate()
         if self.config.use_full_hash and quick_hash_groups:
             logger.info("[Turbo] Phase 3: Computing full hashes...")
             final_groups = self._compute_hashes_parallel(
@@ -830,8 +855,15 @@ class TurboScanner:
         # Use thread pool (not process pool) for hashing to share cache
         workers = min(self.config.hash_workers, len(files_to_hash))
         
+        pause_event = self.config.pause_event
+
         def hash_worker(path_mtime: Tuple[Path, float]) -> Tuple[Path, float, Optional[str]]:
             path, mtime = path_mtime
+            # Per-file pause gate. Blocks the worker (not the executor) so
+            # paused workers free up no CPU but also do no I/O. The check is
+            # before any read so an interrupted file is never half-processed.
+            if pause_event is not None and not pause_event.is_set():
+                pause_event.wait()
             if self.hash_cache:
                 hash_val = compute_hash_cached(
                     path, 
