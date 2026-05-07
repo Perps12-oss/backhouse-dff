@@ -165,13 +165,12 @@ class DashboardPage(ft.Column):
         s = t.spacing
 
         # Compact greeting strip (replaces wasteful hero)
-        username = Path.home().name
         self._hero = ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=20, color="#22D3EE"),
                     ft.Text(
-                        f"Welcome back, {username} - configure your scan and reclaim disk space.",
+                        "Welcome back. Ready to free up some space?",
                         size=t.typography.size_md,
                         color=t.colors.fg2,
                         expand=True,
@@ -206,11 +205,7 @@ class DashboardPage(ft.Column):
         self._update_modes_ui()
 
         # Folder list
-        self._folder_chips_row = ft.Row(
-            [ft.Text("No folders selected", color=t.colors.fg_muted, size=t.typography.size_base)],
-            wrap=True,
-            spacing=s.xs,
-        )
+        self._folder_chips_row = ft.Row([], wrap=True, spacing=s.xs)
         self._folder_container = ft.Container(
             content=ft.Column(
                 [
@@ -225,7 +220,7 @@ class DashboardPage(ft.Column):
                 spacing=s.xs,
             ),
             padding=s.md,
-            **self._get_glass_style(0.04),
+            **self._get_glass_style(0.10),
         )
         self._folder_container.on_click = self._browse_folders
         self._folder_container.ink = True
@@ -285,6 +280,16 @@ class DashboardPage(ft.Column):
             ],
             spacing=s.xs,
         )
+        self._quick_scan_btn = ft.FilledTonalButton(
+            "Quick Scan: Desktop + Downloads",
+            icon=ft.icons.Icons.BOLT,
+            on_click=self._quick_scan_common_folders,
+            style=ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=10),
+                color=t.colors.fg,
+            ),
+            visible=False,
+        )
         self._load_quick_add_ui_preferences()
         self._refresh_recent_paths_bar()
         self._refresh_quick_add_bar()
@@ -308,6 +313,7 @@ class DashboardPage(ft.Column):
                 shape=ft.RoundedRectangleBorder(radius=10),
                 padding=ft.padding.symmetric(horizontal=24, vertical=12),
             ),
+            disabled=True,
         )
         self._browse_btn = ft.OutlinedButton(
             "Browse Folders",
@@ -424,10 +430,14 @@ class DashboardPage(ft.Column):
             self._hero,
             ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
             ft.Container(content=self._mode_label, padding=ft.padding.only(left=s.md, top=s.sm)),
-            ft.Container(content=self._mode_row, padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm)),
+            ft.Container(
+                content=self._mode_row,
+                padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+                **self._get_glass_style(0.08),
+            ),
             self._folder_container,
             ft.Container(
-                content=ft.Column([self._recent_wrap, self._quick_add_wrap], spacing=s.sm),
+                content=ft.Column([self._quick_scan_btn, self._recent_wrap, self._quick_add_wrap], spacing=s.sm),
                 padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
             ),
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
@@ -435,6 +445,7 @@ class DashboardPage(ft.Column):
         ]
         self._main_panels = list(self.controls)  # snapshot for hide/show swap
         self.controls.append(self._scan_view)     # scan view always last, starts hidden
+        self._refresh_folder_chips()
         
         # Initial data fetch (async so first layout is not blocked)
         self._schedule_dashboard_data_fetch()
@@ -778,9 +789,12 @@ class DashboardPage(ft.Column):
         t = self._t
         if not recents:
             self._recent_wrap.visible = False
+            self._quick_scan_btn.visible = False
             if self._is_mounted():
                 self._recent_wrap.update()
+                self._quick_scan_btn.update()
             return
+        self._quick_scan_btn.visible = True
         self._recent_wrap.visible = True
         self._recent_paths_row.controls = []
         for label, p in recents:
@@ -797,6 +811,7 @@ class DashboardPage(ft.Column):
         if self._is_mounted():
             self._recent_paths_row.update()
             self._recent_wrap.update()
+            self._quick_scan_btn.update()
 
     def _discover_recent_scan_paths(self, limit: int = 6) -> list[tuple[str, Path]]:
         try:
@@ -1009,17 +1024,35 @@ class DashboardPage(ft.Column):
         t = self._t
         if not self._folders:
             self._folder_chips_row.controls = [
-                ft.Row(
-                    [
-                        ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=16, color=t.colors.fg_muted),
-                        ft.Text(
-                            "No folders selected — browse or quick-add below",
-                            color=t.colors.fg_muted,
-                            size=t.typography.size_base,
-                            italic=True,
-                        ),
-                    ],
-                    spacing=6,
+                ft.Container(
+                    expand=True,
+                    border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border)),
+                    border_radius=10,
+                    padding=ft.padding.symmetric(horizontal=12, vertical=14),
+                    bgcolor=ft.Colors.with_opacity(0.04, t.colors.primary),
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Icon(ft.icons.Icons.UPLOAD_FILE, size=16, color=t.colors.fg_muted),
+                                    ft.Text(
+                                        "Drag and drop folders here, or click to browse",
+                                        color=t.colors.fg2,
+                                        size=t.typography.size_base,
+                                        weight=ft.FontWeight.W_500,
+                                    ),
+                                ],
+                                spacing=8,
+                            ),
+                            ft.Text(
+                                "No folders selected yet",
+                                color=t.colors.fg_muted,
+                                size=t.typography.size_sm,
+                                italic=True,
+                            ),
+                        ],
+                        spacing=6,
+                    ),
                 )
             ]
         else:
@@ -1034,6 +1067,7 @@ class DashboardPage(ft.Column):
                 for f in self._folders
             ]
         self._clear_folders_btn.visible = bool(self._folders)
+        self._sync_start_button_state()
         if self._is_mounted():
             self._folder_chips_row.update()
             self._clear_folders_btn.update()
@@ -1046,6 +1080,42 @@ class DashboardPage(ft.Column):
     def _clear_selected_folders(self, _e: ft.ControlEvent | None = None) -> None:
         self._folders.clear()
         self._refresh_folder_chips()
+
+    def _sync_start_button_state(self) -> None:
+        has_folders = bool(self._folders)
+        self._start_btn.disabled = not has_folders
+        if has_folders:
+            self._start_btn.style = ft.ButtonStyle(
+                bgcolor="#22D3EE",
+                color="#0A0E14",
+                overlay_color=ft.Colors.with_opacity(0.2, "#22D3EE"),
+                shape=ft.RoundedRectangleBorder(radius=10),
+                padding=ft.padding.symmetric(horizontal=24, vertical=12),
+            )
+        else:
+            self._start_btn.style = ft.ButtonStyle(
+                bgcolor=ft.Colors.with_opacity(0.16, "#94A3B8"),
+                color="#64748B",
+                shape=ft.RoundedRectangleBorder(radius=10),
+                padding=ft.padding.symmetric(horizontal=24, vertical=12),
+            )
+        DashboardPage._safe_update(self._start_btn)
+
+    def _quick_scan_common_folders(self, _e: ft.ControlEvent | None = None) -> None:
+        candidates = _discover_existing_popular_paths()
+        preferred_labels = {"desktop", "downloads", "desktop (onedrive)", "downloads (onedrive)"}
+        picked: list[Path] = []
+        for label, p in candidates:
+            if label.lower() in preferred_labels:
+                picked.append(p)
+        if not picked:
+            self._bridge.show_snackbar("Quick folders not found on this machine. Use Browse Folders.", info=True)
+            return
+        for p in picked:
+            if p not in self._folders:
+                self._folders.append(p)
+        self._refresh_folder_chips()
+        self._bridge.show_snackbar("Quick folders added. You can start scanning now.", info=True)
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
         if not self._folders:
