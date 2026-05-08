@@ -599,7 +599,7 @@ def _main(page: ft.Page) -> None:
     # Some Flet builds do not fire on_route_change for initial route assignment.
     # Force initial mount so the content host is never left blank on startup.
     layout.navigate_to(key_for_route(page.route or default_route()))
-    if store.state.groups:
+    if bool(store.get_state().groups):
         layout.navigate_to("review")
 
     def _sync_groups_from_state(s: AppState) -> None:
@@ -647,6 +647,10 @@ def _main(page: ft.Page) -> None:
     bridge.subscribe()
 
     def _on_theme_change(mode: str) -> None:
+        try:
+            layout.apply_theme(mode)
+        except Exception:
+            _log.exception("Layout theme update failed")
         page_map = {
             "dashboard": dashboard_page,
             "review": review_page,

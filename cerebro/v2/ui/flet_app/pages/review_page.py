@@ -583,6 +583,17 @@ class ReviewPage(ft.Column):
             self._safe_update(self._content)
         elif self._mode == "grid":
             self._refresh_grid()
+        else:
+            # If the page was showing empty/loading while groups arrived,
+            # transition into the actual workspace instead of staying stale.
+            self._loading = True
+            self._enter_mode("loading")
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._finish_load_to_groups_async)
+            else:
+                self._loading = False
+                self._enter_mode("groups")
 
     def on_show(self) -> None:
         if self._pending_deferred_render:
@@ -667,6 +678,10 @@ class ReviewPage(ft.Column):
     # Mode management
     # ------------------------------------------------------------------
     def _enter_mode(self, mode: str) -> None:
+        # Safety invariant: if groups exist, never render the empty-state shell.
+        # This prevents stale/contradictory UI when event ordering briefly races.
+        if mode == "empty" and bool(self._groups):
+            mode = "groups"
         self._mode = mode
         # Compare layout needs a bounded viewport: page-level scroll + unbounded ListView made the
         # compare Row as tall as all groups and vertically centered A/B (~mid-list).
@@ -766,7 +781,6 @@ class ReviewPage(ft.Column):
         folder = str(Path(first_path).parent) if first_path else ""
         return ft.Container(
             padding=ft.padding.symmetric(horizontal=16, vertical=12),
-            border_radius=10,
             ink=True,
             on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
             content=ft.Row(
@@ -1787,7 +1801,14 @@ class ReviewPage(ft.Column):
         selected_files = len(self._files_by_filter.get(self._filter_key, []))
         selected_groups = self._filter_group_counts.get(self._filter_key, 0)
         reclaimable = fmt_size(self._filter_sizes.get(self._filter_key, 0))
-        mode_label = "Compare" if self._mode == "compare" else "Grid"
+        mode_label_map = {
+            "compare": "Compare",
+            "grid": "Grid",
+            "groups": "Groups",
+            "loading": "Loading",
+            "empty": "Empty",
+        }
+        mode_label = mode_label_map.get(self._mode, "Grid")
         self._summary_lbl.value = f"Filter: {self._filter_key.title()} · Mode: {mode_label}"
         self._stats_row.controls = [
             self._metric_chip("Groups", f"{selected_groups:,}", "#A78BFA"),
