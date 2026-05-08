@@ -101,7 +101,7 @@ class ScanSettings:
     default_mode: str = "standard"
     min_file_size_kb: int = 100
     max_file_size_mb: int = 0
-    default_hash_algorithm: str = "md5"
+    default_hash_algorithm: str = "auto"
     cache_mode: int = 1
     recursive: bool = True
     follow_symlinks: bool = False

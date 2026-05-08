@@ -69,7 +69,7 @@ class BackendService:
     def start_scan(
         self,
         folders: List[Path],
-        mode: str = "files",
+        mode: Any = "files",
         protected: Optional[List[Path]] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -83,23 +83,38 @@ class BackendService:
             self._rate_samples.clear()
             self._prev_progress_cf = ""
             self._ema_warm_ticks = 0
-        engine_mode = self._resolve_engine_mode(mode)
+        mode_list: List[str]
+        if isinstance(mode, (list, tuple, set)):
+            mode_list = [str(m) for m in mode if str(m).strip()]
+        else:
+            mode_list = [str(mode or "files")]
+        if not mode_list:
+            mode_list = ["files"]
+        resolved_modes = [self._resolve_engine_mode(m) for m in mode_list]
+        combined_mode = "+".join(mode_list) if len(mode_list) > 1 else mode_list[0]
 
         def _worker() -> None:
             try:
-                self._orchestrator.set_mode(engine_mode)
-                self._orchestrator.start_scan(
-                    folders=folders,
-                    protected=protected or [],
-                    options=options or {},
-                    progress_callback=self._handle_progress,
-                )
-                # start_scan only spawns ScanOrchestrator's thread; it returns immediately.
-                # Without waiting, get_results() runs while the scan is still running (empty).
-                self._orchestrator.wait_for_completion(timeout=None)
-                results = self._orchestrator.get_results()
+                all_results: List[DuplicateGroup] = []
+                for engine_mode in resolved_modes:
+                    if self._cancel_event.is_set():
+                        break
+                    self._orchestrator.set_mode(engine_mode)
+                    self._orchestrator.start_scan(
+                        folders=folders,
+                        protected=protected or [],
+                        options=options or {},
+                        progress_callback=self._handle_progress,
+                    )
+                    # start_scan only spawns ScanOrchestrator's thread; it returns immediately.
+                    # Without waiting, get_results() runs while the scan is still running (empty).
+                    self._orchestrator.wait_for_completion(timeout=None)
+                    all_results.extend(self._orchestrator.get_results())
+                # Ensure stable unique group ids after mode aggregation.
+                for idx, group in enumerate(all_results, start=1):
+                    group.group_id = idx
                 if self._on_complete:
-                    self._deliver_on_ui_thread(self._on_complete, results, mode)
+                    self._deliver_on_ui_thread(self._on_complete, all_results, combined_mode)
             except Exception as exc:
                 _log.exception("Scan worker failed")
                 if self._on_error:
@@ -119,6 +134,20 @@ class BackendService:
             self._orchestrator.cancel()
         except Exception:
             _log.exception("Cancel failed")
+
+    def pause_scan(self) -> None:
+        """Pause the active scan if possible."""
+        try:
+            self._orchestrator.pause()
+        except Exception:
+            _log.exception("Pause failed")
+
+    def resume_scan(self) -> None:
+        """Resume a paused scan if possible."""
+        try:
+            self._orchestrator.resume()
+        except Exception:
+            _log.exception("Resume failed")
 
     # -- Engine introspection -------------------------------------------------
 
@@ -241,8 +270,19 @@ class BackendService:
                     "bytes_reclaimable": progress.bytes_reclaimable,
                     "elapsed_seconds": progress.elapsed_seconds,
                     "current_file": progress.current_file or "",
+                    "current_file_path": progress.current_file_path or progress.current_file or "",
                     "stage": stage,
                     "rate": rate,
+                    "total_files_in_scope": int(progress.total_files_in_scope or 0),
+                    "files_processed": int(progress.files_processed or 0),
+                    "candidates_found": int(progress.candidates_found or 0),
+                    "active_hash_algorithm": str(progress.active_hash_algorithm or ""),
+                    # camelCase aliases for UI/event consumers
+                    "totalFilesInScope": int(progress.total_files_in_scope or 0),
+                    "filesProcessed": int(progress.files_processed or 0),
+                    "candidatesFound": int(progress.candidates_found or 0),
+                    "activeHashAlgorithm": str(progress.active_hash_algorithm or ""),
+                    "currentFilePath": progress.current_file_path or progress.current_file or "",
                 }
                 _log.debug(
                     "progress dispatch: stage=%s scanned=%d total=%d",

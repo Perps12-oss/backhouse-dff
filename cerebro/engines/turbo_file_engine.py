@@ -70,8 +70,8 @@ class TurboFileEngine(BaseEngine):
                 name="hash_algorithm",
                 display_name="Hash Algorithm",
                 type="choice",
-                default="sha256",
-                choices=["sha256", "xxhash", "blake3", "md5"],
+                default="auto",
+                choices=["auto", "xxhash", "blake3", "sha256", "md5"],
             ),
             EngineOption(
                 name="min_size_bytes",
@@ -135,6 +135,10 @@ class TurboFileEngine(BaseEngine):
         self._pause_event.set()
         self._callback: Optional[Callable[[ScanProgress], None]] = None
         self._scan_wall_t0: float = 0.0
+        self._total_files_in_scope: int = 0
+        self._files_processed: int = 0
+        self._candidates_found: int = 0
+        self._active_hash_algorithm: str = ""
 
     def configure(
         self,
@@ -154,6 +158,10 @@ class TurboFileEngine(BaseEngine):
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._scan_wall_t0 = time.monotonic()
+        self._total_files_in_scope = 0
+        self._files_processed = 0
+        self._candidates_found = 0
+        self._active_hash_algorithm = ""
         # Run on the orchestrator scan thread (same as other engines). A nested
         # thread here used to return immediately so wait_for_completion() joined
         # before the turbo pipeline finished, leaving get_results() empty.
@@ -210,14 +218,22 @@ class TurboFileEngine(BaseEngine):
         hash_algo = str(
             opts.get("hash_algorithm")
             or opts.get("hash_algo")
-            or "sha256"
+            or "auto"
         ).lower()
-        if hash_algo == "xxhash":
+        if hash_algo == "auto":
+            hash_algo = "auto"
+        elif hash_algo == "xxhash":
             try:
                 import xxhash  # noqa: F401
             except ImportError:
                 hash_algo = "sha256"
                 logger.info("xxhash not installed — using sha256 fallback")
+        elif hash_algo == "blake3":
+            try:
+                import blake3  # noqa: F401
+            except ImportError:
+                hash_algo = "sha256"
+                logger.info("blake3 not installed — using sha256 fallback")
 
         # Build TurboScanConfig from UI options — accept both naming conventions.
         use_cache = bool(opts.get("incremental_scan", True))
@@ -225,6 +241,12 @@ class TurboFileEngine(BaseEngine):
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
             skip_hidden=not bool(opts.get("include_hidden", False)),
+            exclude_paths={
+                str(p)
+                for p in (opts.get("exclude_paths", []) or [])
+                if str(p).strip()
+            },
+            recursive=bool(opts.get("include_subfolders", True)),
             use_multiprocessing=False,  # safer on Windows; still threaded
             use_quick_hash=True,
             use_full_hash=True,
@@ -335,13 +357,22 @@ class TurboFileEngine(BaseEngine):
             groups_found=len(self._results),
             bytes_reclaimable=sum(g.reclaimable for g in self._results),
             stage=terminal_stage,
+            total_files_in_scope=max(self._total_files_in_scope, files_done),
+            files_processed=max(self._files_processed, files_done),
+            candidates_found=self._candidates_found,
+            active_hash_algorithm=self._active_hash_algorithm,
         )
         self._emit_progress()
 
     # -- progress bridge -------------------------------------------------------
 
     def _on_turbo_progress(
-        self, stage: str, processed: int, total: int, current_file: str = ""
+        self,
+        stage: str,
+        processed: int,
+        total: int,
+        current_file: str = "",
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
         if self._cancel_event.is_set() and stage not in (
             ScanStage.COMPLETE,
@@ -353,6 +384,7 @@ class TurboFileEngine(BaseEngine):
         self._state = state
         prev = self._progress
         prev_stage = prev.stage or ""
+        metric_data = metrics or {}
 
         is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
         was_hashing = prev_stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
@@ -381,8 +413,34 @@ class TurboFileEngine(BaseEngine):
             files_total=ft,
             stage=stage,
             current_file=current_file,
+            current_file_path=current_file,
             elapsed_seconds=max(0.0, time.monotonic() - self._scan_wall_t0),
         )
+        metric_scope = int(metric_data.get("total_files_in_scope", 0) or 0)
+        metric_processed = int(metric_data.get("files_processed", 0) or 0)
+        metric_candidates = int(metric_data.get("candidates_found", 0) or 0)
+        metric_hash_algo = str(metric_data.get("active_hash_algorithm", "") or "")
+        if metric_scope > 0:
+            self._total_files_in_scope = max(self._total_files_in_scope, metric_scope)
+        if metric_processed >= 0:
+            self._files_processed = max(self._files_processed, metric_processed)
+        self._candidates_found = max(self._candidates_found, metric_candidates)
+        if metric_hash_algo:
+            self._active_hash_algorithm = metric_hash_algo
+
+        # Backfill missing metrics from stage counters when scanner callback
+        # doesn't provide explicit values (legacy emitters).
+        if self._total_files_in_scope <= 0:
+            self._total_files_in_scope = max(self._total_files_in_scope, ft, scanned)
+        if self._files_processed <= 0:
+            self._files_processed = max(0, min(self._total_files_in_scope or scanned, scanned))
+        self._progress.total_files_in_scope = self._total_files_in_scope
+        self._progress.files_processed = min(
+            max(0, self._files_processed),
+            max(self._total_files_in_scope, self._files_processed),
+        )
+        self._progress.candidates_found = self._candidates_found
+        self._progress.active_hash_algorithm = self._active_hash_algorithm
         self._emit_progress()
 
     def _emit_progress(self) -> None:

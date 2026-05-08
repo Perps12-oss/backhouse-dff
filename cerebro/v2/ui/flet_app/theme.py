@@ -150,11 +150,10 @@ def theme_for_mode(mode: str) -> ThemeTokens:
 
 # Well-known scan-mode definitions used by the dashboard card grid.
 SCAN_MODES: list[Dict[str, str]] = [
-    {"key": "files",          "icon": "description",  "label": "Full Scan",      "desc": "All duplicate files"},
-    {"key": "photos",         "icon": "image",         "label": "Scan Pictures",  "desc": "Exact image matches"},
-    {"key": "similar_photos", "icon": "image_search",  "label": "Similar Photos", "desc": "Near-duplicate images"},
-    {"key": "videos",         "icon": "videocam",      "label": "Scan Videos",    "desc": "Duplicate video files"},
-    {"key": "music",          "icon": "music_note",    "label": "Scan Audio",     "desc": "Duplicate audio files"},
+    {"key": "files", "icon": "description", "label": "Full Scan", "desc": "All duplicate files", "group": "General category"},
+    {"key": "photos", "icon": "image", "label": "Scan Pictures", "desc": "Exact image matches", "group": "Image category"},
+    {"key": "videos", "icon": "videocam", "label": "Scan Videos", "desc": "Duplicate video files", "group": "Audio/Video category"},
+    {"key": "music", "icon": "music_note", "label": "Scan Audio", "desc": "Duplicate audio files", "group": "Audio/Video category"},
 ]
 
 # Extension filter buckets used by results and review pages.

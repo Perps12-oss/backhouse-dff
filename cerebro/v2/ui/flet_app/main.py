@@ -687,5 +687,9 @@ def _main(page: ft.Page) -> None:
     appearance = bridge.get_settings().get("appearance") or {}
     bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "arctic")))
     _show_onboarding_if_needed()
+    try:
+        dashboard_page.prompt_resume_incomplete_scan_if_needed()
+    except Exception:
+        _log.exception("Failed to prompt incomplete scan resume")
 
     _log.info("Cerebro Flet UI initialized  (total %.0fms)", (_time.monotonic() - _t0) * 1000)

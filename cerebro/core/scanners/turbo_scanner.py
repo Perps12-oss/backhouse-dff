@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import time
 import hashlib
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -43,6 +44,16 @@ from cerebro.engines.scan_stage import ScanStage
 
 logger = get_logger(__name__)
 _LAST_PROCESS_RSS_MB: Optional[float] = None
+
+try:
+    import xxhash  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    xxhash = None
+
+try:
+    import blake3  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    blake3 = None
 
 
 # ============================================================================
@@ -164,11 +175,13 @@ class TurboScanConfig:
     skip_hidden: bool = True
     skip_system: bool = True
     exclude_dirs: Set[str] = field(default_factory=set)
+    exclude_paths: Set[str] = field(default_factory=set)
+    recursive: bool = True
     
     # Hashing
     use_quick_hash: bool = True
     use_full_hash: bool = False
-    hash_algorithm: str = "md5"
+    hash_algorithm: str = "auto"
     
     # Performance
     use_mmap: bool = True  # Use memory-mapped I/O
@@ -325,12 +338,46 @@ class DirectoryCache:
             (str(path), json.dumps(files_data), time.time()),
         )
         conn.commit()
+
+    def clear_all(self) -> None:
+        """Delete all directory signatures and cached file lists."""
+        self._memory_cache.clear()
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("DELETE FROM directory_cache")
+        conn.execute("DELETE FROM file_cache")
+        conn.commit()
+        conn.close()
         conn.close()
 
 
 # ============================================================================
 # OPTIMIZED HASH FUNCTIONS
 # ============================================================================
+
+def _new_hasher(algorithm: str):
+    algo = str(algorithm or "sha256").lower()
+    if algo == "xxhash" and xxhash is not None:
+        return xxhash.xxh64()
+    if algo == "blake3" and blake3 is not None:
+        return blake3.blake3()
+    return hashlib.new(algo)
+
+
+def _available_hash_algorithms() -> List[str]:
+    algos: List[str] = []
+    if xxhash is not None:
+        algos.append("xxhash")
+    if blake3 is not None:
+        algos.append("blake3")
+    algos.extend(["sha256", "md5"])
+    seen: set[str] = set()
+    out: List[str] = []
+    for a in algos:
+        if a not in seen:
+            seen.add(a)
+            out.append(a)
+    return out
+
 
 def compute_quick_hash_fast(path: Path, algorithm: str = "md5") -> Optional[str]:
     """
@@ -342,7 +389,7 @@ def compute_quick_hash_fast(path: Path, algorithm: str = "md5") -> Optional[str]
         if size == 0:
             return None
         
-        hasher = hashlib.new(algorithm)
+        hasher = _new_hasher(algorithm)
         
         with open(path, 'rb') as f:
             # Read first 32KB
@@ -369,7 +416,7 @@ def compute_full_hash_mmap(path: Path, algorithm: str = "md5") -> Optional[str]:
         if size == 0:
             return None
         
-        hasher = hashlib.new(algorithm)
+        hasher = _new_hasher(algorithm)
         
         # Use mmap for large files
         if size > MMAP_THRESHOLD:
@@ -409,7 +456,7 @@ def compute_hash_cached(
         
         # Try cache first
         if quick:
-            cached = cache.get_quick(str(path), sig)
+            cached = cache.get_quick(str(path), sig, expected_algo=algorithm)
             if cached:
                 return cached
             
@@ -419,7 +466,7 @@ def compute_hash_cached(
                 cache.set_quick(path, sig, hash_val, algo=algorithm, quick_bytes=QUICK_HASH_SIZE)
             return hash_val
         else:
-            cached = cache.get_full(str(path), sig)
+            cached = cache.get_full(str(path), sig, expected_algo=algorithm)
             if cached:
                 return cached
             
@@ -450,12 +497,29 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
     (:class:`threading.Event`, same process only) or a legacy 6-tuple
     (process pool workers — no intra-walk cancel).
     """
-    if len(args) >= 7:
-        directory, skip_hidden, exclude_dirs, min_size, max_size, scan_archives, cancel_event = args[
-            :7
-        ]
+    if len(args) >= 9:
+        (
+            directory,
+            skip_hidden,
+            exclude_dirs,
+            exclude_paths,
+            recursive,
+            min_size,
+            max_size,
+            scan_archives,
+            cancel_event,
+        ) = args[:9]
     else:
-        directory, skip_hidden, exclude_dirs, min_size, max_size, scan_archives = args[:6]
+        (
+            directory,
+            skip_hidden,
+            exclude_dirs,
+            exclude_paths,
+            recursive,
+            min_size,
+            max_size,
+            scan_archives,
+        ) = args[:8]
         cancel_event = None
     results: List[Tuple[Path, int, float]] = []
     listed_since_cancel_check = 0
@@ -464,6 +528,22 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
     # on pathological trees and gives us tight control over symlink/junction
     # behaviour.
     stack: List[str] = [str(directory)]
+    root_dir_s = str(directory)
+    exclude_prefixes = []
+    for p in (exclude_paths or set()):
+        raw = str(p).replace("/", "\\").rstrip("\\")
+        if raw:
+            exclude_prefixes.append(raw.casefold())
+
+    def _norm_path(p: str) -> str:
+        return str(p).replace("/", "\\").rstrip("\\").casefold()
+
+    def _is_excluded_path(p: str) -> bool:
+        np = _norm_path(p)
+        for ep in exclude_prefixes:
+            if np == ep or np.startswith(ep + "\\"):
+                return True
+        return False
 
     def _want_cancel() -> bool:
         return cancel_event is not None and cancel_event.is_set()
@@ -472,6 +552,8 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
         if _want_cancel():
             return results
         current = stack.pop()
+        if _is_excluded_path(current):
+            continue
         try:
             with os.scandir(current) as it:
                 for entry in it:
@@ -482,7 +564,11 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
                             return results
                     name = entry.name
                     try:
+                        if _is_excluded_path(entry.path):
+                            continue
                         if entry.is_dir(follow_symlinks=False):
+                            if not recursive:
+                                continue
                             if skip_hidden and name.startswith('.'):
                                 continue
                             if name in exclude_dirs:
@@ -524,8 +610,10 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
                         # Permission denied, dangling symlink, etc.
                         # Skip the individual entry and keep going.
                         continue
-        except OSError:
+        except OSError as exc:
             # Directory unreadable as a whole — skip and continue.
+            if str(current_dir) == root_dir_s:
+                raise OSError(f"Network path unreachable: {root_dir_s}") from exc
             continue
 
     return results
@@ -554,6 +642,8 @@ class TurboScanner:
         # Initialize caches
         cache_dir = self.config.cache_dir or default_cerebro_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_dir = cache_dir
+        self._scope_fingerprint_path = self._cache_dir / "scan_scope_fingerprint.json"
         
         self.hash_cache = None
         self.dir_cache = None
@@ -579,6 +669,51 @@ class TurboScanner:
             'total_bytes': 0,
             'elapsed_time': 0,
         }
+
+    def _scan_scope_fingerprint(self) -> Dict[str, Any]:
+        def _norm_paths(values: Set[str] | List[str]) -> List[str]:
+            out: List[str] = []
+            for raw in values or []:
+                text = str(raw).strip().replace("/", "\\").rstrip("\\")
+                if text:
+                    out.append(text.casefold())
+            return sorted(set(out))
+
+        return {
+            "min_size": int(self.config.min_size or 0),
+            "max_size": int(self.config.max_size or 0),
+            "exclude_paths": _norm_paths(list(self.config.exclude_paths or set())),
+            "exclude_dirs": _norm_paths(list(self.config.exclude_dirs or set())),
+            "scan_archives": bool(self.config.scan_archives),
+            "skip_hidden": bool(self.config.skip_hidden),
+            "recursive": bool(self.config.recursive),
+        }
+
+    def _invalidate_caches_if_scope_changed(self) -> None:
+        if not self.config.use_cache:
+            return
+        current = self._scan_scope_fingerprint()
+        previous: Optional[Dict[str, Any]] = None
+        try:
+            if self._scope_fingerprint_path.exists():
+                previous = json.loads(self._scope_fingerprint_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RuntimeError, TypeError, json.JSONDecodeError):
+            previous = None
+
+        changed = not isinstance(previous, dict) or previous != current
+        if changed:
+            logger.info("[Turbo] Scan scope changed; clearing hash/directory cache")
+            try:
+                if self.hash_cache:
+                    self.hash_cache.clear_all()
+                if self.dir_cache:
+                    self.dir_cache.clear_all()
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError, sqlite3.Error):
+                logger.exception("[Turbo] Failed clearing cache on scope change")
+        try:
+            self._scope_fingerprint_path.write_text(json.dumps(current, sort_keys=True), encoding="utf-8")
+        except (OSError, ValueError, RuntimeError, TypeError):
+            logger.exception("[Turbo] Failed writing scope fingerprint")
         
     def scan(self, roots: List[Path]) -> Generator[FileMetadata, None, None]:
         """
@@ -604,15 +739,22 @@ class TurboScanner:
         self._scan_last_emit_p = 0
         self._scan_last_emit_t = 0
         self._last_stage_emitted = ""
+        self._invalidate_caches_if_scope_changed()
 
-        def _emit(stage: str, processed: int, total: int, current_file: str = "") -> None:
+        def _emit(
+            stage: str,
+            processed: int,
+            total: int,
+            current_file: str = "",
+            metrics: Optional[Dict[str, Any]] = None,
+        ) -> None:
             self._scan_last_emit_p = processed
             self._scan_last_emit_t = max(self._scan_last_emit_t, total, processed)
             cb = self.config.progress_callback
             if cb is None:
                 return
             try:
-                cb(stage, processed, total, current_file)
+                cb(stage, processed, total, current_file, metrics or {})
                 self._last_stage_emitted = stage
             except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Never allow UI callback errors to break scanning.
@@ -641,9 +783,23 @@ class TurboScanner:
         else:
             logger.debug("[ROOT_DEDUP] user_roots=%d deduped_roots=%d (no overlap)", len(user_roots), len(scan_roots))
         logger.info("[Turbo] Phase 1: Discovering files...")
-        _emit(ScanStage.DISCOVERING, 0, 0)
+        _emit(
+            ScanStage.DISCOVERING,
+            0,
+            0,
+            metrics={"total_files_in_scope": 0, "files_processed": 0, "candidates_found": 0},
+        )
         discovered_files = self._discover_files_parallel(scan_roots, emit=_emit)
-        _emit(ScanStage.DISCOVERING, len(discovered_files), len(discovered_files))
+        _emit(
+            ScanStage.DISCOVERING,
+            len(discovered_files),
+            len(discovered_files),
+            metrics={
+                "total_files_in_scope": len(discovered_files),
+                "files_processed": len(discovered_files),
+                "candidates_found": 0,
+            },
+        )
         logger.info(
             "[Turbo] Discovered %d files in %.2fs",
             len(discovered_files),
@@ -651,7 +807,16 @@ class TurboScanner:
         )
         # Phase 2: Group by size (instant duplicate detection)
         _pause_gate()
-        _emit(ScanStage.GROUPING_BY_SIZE, len(discovered_files), len(discovered_files))
+        _emit(
+            ScanStage.GROUPING_BY_SIZE,
+            len(discovered_files),
+            len(discovered_files),
+            metrics={
+                "total_files_in_scope": len(discovered_files),
+                "files_processed": len(discovered_files),
+                "candidates_found": 0,
+            },
+        )
         size_groups = defaultdict(list)
         _ce = self.config.cancel_event
         for gi, (path, size, mtime) in enumerate(discovered_files):
@@ -666,6 +831,17 @@ class TurboScanner:
 
         # Phase 3: Quick hash for size groups (parallel with caching)
         _pause_gate()
+        candidates_found = sum(len(v) for v in size_groups.values()) if size_groups else 0
+        _emit(
+            ScanStage.GROUPING_BY_SIZE,
+            len(discovered_files),
+            len(discovered_files),
+            metrics={
+                "total_files_in_scope": len(discovered_files),
+                "files_processed": len(discovered_files),
+                "candidates_found": candidates_found,
+            },
+        )
         if self.config.use_quick_hash and size_groups:
             logger.info("[Turbo] Phase 2: Computing quick hashes...")
             quick_hash_groups = self._compute_hashes_parallel(
@@ -813,7 +989,16 @@ class TurboScanner:
         ce = self.config.cancel_event
         if ce is None or not ce.is_set():
             self._turbo_completed_normally = True
-            _emit(ScanStage.COMPLETE, discovered_count, discovered_count)
+            _emit(
+                ScanStage.COMPLETE,
+                discovered_count,
+                discovered_count,
+                metrics={
+                    "total_files_in_scope": discovered_count,
+                    "files_processed": discovered_count,
+                    "candidates_found": candidates_found,
+                },
+            )
 
     def force_emit_cancel_terminal_if_needed(self) -> None:
         """Emit CANCELLED if cancel is set but COMPLETE never ran (consumer broke early).
@@ -880,6 +1065,8 @@ class TurboScanner:
         worker_tpl = (
             self.config.skip_hidden,
             self.config.exclude_dirs,
+            self.config.exclude_paths,
+            self.config.recursive,
             self.config.min_size,
             self.config.max_size,
             self.config.scan_archives,
@@ -924,6 +1111,12 @@ class TurboScanner:
                             self.dir_cache.set_files(root_dir, results)
                 except OSError as e:
                     logger.warning("%s: %s", warn_prefix, e)
+                    if emit:
+                        emit("network_error", discovered_so_far, 0, f"Network path unreachable: {root_dir}")
+                except Exception as e:
+                    logger.warning("%s: %s", warn_prefix, e)
+                    if emit:
+                        emit("network_error", discovered_so_far, 0, f"Network path unreachable: {root_dir}")
 
         if self.config.use_multiprocessing and len(dirs_to_scan) > 1:
             workers = min(self.config.dir_workers, len(dirs_to_scan))
@@ -978,6 +1171,17 @@ class TurboScanner:
         if not files_to_hash:
             return {}
 
+        effective_algorithm = str(self.config.hash_algorithm or "xxhash").lower()
+        if effective_algorithm == "auto":
+            sample_paths = [p for p, _ in files_to_hash[:24]]
+            effective_algorithm = self._auto_pick_hash_algorithm(sample_paths, quick=quick)
+            logger.info(
+                "[Turbo] auto hash selection: phase=%s picked=%s sample=%d",
+                stage_name,
+                effective_algorithm,
+                len(sample_paths),
+            )
+
         total = len(files_to_hash)
         # With hash cache: count stat/prep + hash as two halves so the progress bar
         # never jumps backwards when the thread pool starts (prep reached N, then
@@ -990,7 +1194,18 @@ class TurboScanner:
 
         if emit and total > 0:
             try:
-                emit(stage_name, 0, work_total, "")
+                emit(
+                    stage_name,
+                    0,
+                    work_total,
+                    "",
+                    {
+                        "total_files_in_scope": total,
+                        "files_processed": 0,
+                        "candidates_found": total,
+                        "active_hash_algorithm": effective_algorithm,
+                    },
+                )
             except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 pass
 
@@ -1020,7 +1235,18 @@ class TurboScanner:
                 ):
                     _prep_emit = _now
                     try:
-                        emit(stage_name, min(idx + 1, total), work_total, str(p))
+                        emit(
+                            stage_name,
+                            min(idx + 1, total),
+                            work_total,
+                            str(p),
+                            {
+                                "total_files_in_scope": total,
+                                "files_processed": min(idx + 1, total),
+                                "candidates_found": total,
+                                "active_hash_algorithm": effective_algorithm,
+                            },
+                        )
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
             if cancel_event is not None and cancel_event.is_set():
@@ -1051,9 +1277,17 @@ class TurboScanner:
                 if slice_sigs:
                     t0_sql = time.monotonic()
                     if quick:
-                        part = self.hash_cache.get_many_quick(slice_paths, slice_sigs)
+                        part = self.hash_cache.get_many_quick(
+                            slice_paths,
+                            slice_sigs,
+                            expected_algo=effective_algorithm,
+                        )
                     else:
-                        part = self.hash_cache.get_many_full(slice_paths, slice_sigs)
+                        part = self.hash_cache.get_many_full(
+                            slice_paths,
+                            slice_sigs,
+                            expected_algo=effective_algorithm,
+                        )
                     dt_sql = time.monotonic() - t0_sql
                     _batch_cache.update(part)
 
@@ -1076,7 +1310,18 @@ class TurboScanner:
                     hint = f"Retrieving cached signatures ({done:,} / {n_paths:,})"
                     msg = f"{hint} — {tail}" if tail else hint
                     try:
-                        emit(stage_name, total, work_total, msg)
+                        emit(
+                            stage_name,
+                            total,
+                            work_total,
+                            msg,
+                            {
+                                "total_files_in_scope": total,
+                                "files_processed": total,
+                                "candidates_found": total,
+                                "active_hash_algorithm": effective_algorithm,
+                            },
+                        )
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
 
@@ -1103,7 +1348,7 @@ class TurboScanner:
                 hash_val = compute_hash_cached(
                     path,
                     self.hash_cache,
-                    self.config.hash_algorithm,
+                    effective_algorithm,
                     quick=quick,
                 )
                 if hash_val:
@@ -1112,9 +1357,9 @@ class TurboScanner:
                     self.stats['hash_cache_misses'] += 1
             else:
                 if quick:
-                    hash_val = compute_quick_hash_fast(path, self.config.hash_algorithm)
+                    hash_val = compute_quick_hash_fast(path, effective_algorithm)
                 else:
-                    hash_val = compute_full_hash_mmap(path, self.config.hash_algorithm)
+                    hash_val = compute_full_hash_mmap(path, effective_algorithm)
 
             return path, mtime, hash_val
 
@@ -1146,7 +1391,23 @@ class TurboScanner:
                             or (_now - _last_emit_time) >= 0.3
                         ):
                             _last_emit_time = _now
-                            emit(stage_name, prep_done + processed, work_total, _current_file)
+                            completed_units = prep_done + processed
+                            normalized_files_done = min(
+                                total,
+                                int((completed_units / max(1, work_total)) * total),
+                            )
+                            emit(
+                                stage_name,
+                                completed_units,
+                                work_total,
+                                _current_file,
+                                {
+                                    "total_files_in_scope": total,
+                                    "files_processed": normalized_files_done,
+                                    "candidates_found": total,
+                                    "active_hash_algorithm": effective_algorithm,
+                                },
+                            )
                     if cancel_event is not None and cancel_event.is_set():
                         break
         finally:
@@ -1161,6 +1422,37 @@ class TurboScanner:
         
         # Filter out groups with only one file
         return {k: v for k, v in hash_groups.items() if len(v) >= 2}
+
+    def _auto_pick_hash_algorithm(self, sample_paths: List[Path], *, quick: bool) -> str:
+        candidates = _available_hash_algorithms()
+        if not candidates:
+            return "sha256"
+        if len(candidates) == 1:
+            return candidates[0]
+        if not sample_paths:
+            return candidates[0]
+
+        elapsed_by_algo: Dict[str, float] = {}
+        for algo in candidates:
+            t0 = time.monotonic()
+            ok = 0
+            for p in sample_paths:
+                try:
+                    hv = (
+                        compute_quick_hash_fast(p, algo)
+                        if quick
+                        else compute_full_hash_mmap(p, algo)
+                    )
+                    if hv:
+                        ok += 1
+                except OSError:
+                    continue
+            dt = max(0.000001, time.monotonic() - t0)
+            if ok > 0:
+                elapsed_by_algo[algo] = dt
+        if not elapsed_by_algo:
+            return "sha256"
+        return min(elapsed_by_algo.items(), key=lambda kv: kv[1])[0]
     
     def close(self):
         """Clean up resources."""

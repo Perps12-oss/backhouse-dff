@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+import json
 import logging
 import threading
 import time
+import re
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Optional, Set
 
 import flet as ft
 import flet.canvas as cv
@@ -24,6 +27,7 @@ _BAR_SLICES: int = 200
 _BAR_HEIGHT: int = 28
 _BAR_WIDTH: int = 520
 _BAR_MARKER_TTL: float = 0.30
+_INCOMPLETE_SCAN_PATH = Path.home() / ".cerebro" / "incomplete_scan.json"
 
 _SCAN_MODE_ICON_MAP = {
     "description": ft.icons.Icons.DESCRIPTION,
@@ -32,41 +36,6 @@ _SCAN_MODE_ICON_MAP = {
     "videocam": ft.icons.Icons.VIDEOCAM,
     "music_note": ft.icons.Icons.MUSIC_NOTE,
 }
-
-
-def _popular_scan_folder_candidates() -> List[Tuple[str, Path]]:
-    """Display labels and paths under the user profile commonly used for dedup scans."""
-    home = Path.home()
-    return [
-        ("Desktop", home / "Desktop"),
-        ("Documents", home / "Documents"),
-        ("Downloads", home / "Downloads"),
-        ("Pictures", home / "Pictures"),
-        ("Videos", home / "Videos"),
-        ("Music", home / "Music"),
-        ("Desktop (OneDrive)", home / "OneDrive" / "Desktop"),
-        ("Documents (OneDrive)", home / "OneDrive" / "Documents"),
-        ("Downloads (OneDrive)", home / "OneDrive" / "Downloads"),
-    ]
-
-
-def _discover_existing_popular_paths() -> List[Tuple[str, Path]]:
-    """Return candidate folders that exist and are directories, de-duplicated by resolved path."""
-    seen: set[str] = set()
-    out: List[Tuple[str, Path]] = []
-    for label, p in _popular_scan_folder_candidates():
-        try:
-            r = p.resolve()
-        except (OSError, RuntimeError):
-            continue
-        if not r.is_dir():
-            continue
-        key = str(r).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append((label, r))
-    return out
 
 
 class DashboardPage(ft.Column):
@@ -79,14 +48,17 @@ class DashboardPage(ft.Column):
         self._folders: list[Path] = []  # Enforce Path objects
         self._picker_active: bool = False  # guard against concurrent picker opens
         self._selected_mode = "files"
-        self._scan_options: dict = {"scan_archives": False}
+        self._selected_modes: set[str] = {"files"}
+        self._scan_options: dict = {
+            "scan_archives": False,
+            "min_size_bytes": 0,
+            "exclude_paths": [],
+            "include_subfolders": True,
+        }
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
         self._initial_load_done = False
         self._stats_fetch_generation = 0
         self._last_on_show_ts = 0.0
-        self._session_hidden_quick_add: set[str] = set()
-        self._session_recent_scan_paths: list[Path] = []
-        self._quick_add_expanded: bool = False
         # Initial Theme Load
         self._t = theme_for_mode("dark")
         self._glass_cache: dict = {}
@@ -95,20 +67,13 @@ class DashboardPage(ft.Column):
         self._hero: ft.Container
         self._stats_row: ft.Row
         self._mode_label: ft.Text
-        self._mode_row: ft.Row
+        self._mode_row: ft.Column
+        self._scan_type_summary: ft.Text
+        self._scan_type_checkboxes: dict[str, ft.Checkbox]
+        self._scan_safety_note: ft.Text
         self._folder_chips_row: ft.Row
         self._folder_container: ft.Container
-        self._recent_paths_row: ft.Row
-        self._recent_wrap: ft.Column
-        self._quick_add_title: ft.Text
-        self._quick_paths_row: ft.Row
-        self._quick_add_wrap: ft.Column
-        self._quick_add_body: ft.Container
-        self._quick_toggle_btn: ft.TextButton
-        self._quick_reset_btn: ft.TextButton
-        self._clear_folders_btn: ft.TextButton
         self._actions: ft.Row
-        self._browse_btn: ft.OutlinedButton
         self._last_session_btn: ft.TextButton
         self._start_btn: ft.FilledButton
         self._stop_btn: ft.OutlinedButton
@@ -116,10 +81,15 @@ class DashboardPage(ft.Column):
         self._progress_label: ft.Text
         self._progress_detail: ft.Text
         self._status: ft.Text
+        self._cancelled_results_banner: ft.Container
+        self._cancelled_results_text: ft.Text
+        self._cancelled_results_btn: ft.TextButton
         self._ring: ft.ProgressRing
         self._ring_phase_label: ft.Text
+        self._scan_mode_run_label: ft.Text
         self._ring_label: ft.Text
         self._ring_counter: ft.Text
+        self._hash_algo_label: ft.Text
         self._ring_timer: ft.Text
         self._ring_path: ft.Text
         self._cancel_btn: ft.OutlinedButton
@@ -133,6 +103,17 @@ class DashboardPage(ft.Column):
         self._bar_row: ft.Container
         self._scan_archives_cb: ft.Checkbox
         self._archives_warning: ft.Text
+        self._advanced_options_visible: bool
+        self._scan_options_dropdown_open: bool
+        self._advanced_toggle_btn: ft.IconButton
+        self._scan_options_toggle_btn: ft.OutlinedButton
+        self._scan_options_dropdown: ft.Container
+        self._advanced_panel: ft.Container
+        self._min_size_slider: ft.Slider
+        self._min_size_label: ft.Text
+        self._exclude_paths_tf: ft.TextField
+        self._exclude_paths_browse_btn: ft.OutlinedButton
+        self._include_subfolders_sw: ft.Switch
         self._scan_options_row: ft.Container
         # Cancellation state: track whether we're in a cancel flow and cache
         # partial results so the user can choose to view them post-cancel.
@@ -145,6 +126,13 @@ class DashboardPage(ft.Column):
         self._scan_hud_snap: dict = {}
         self._scan_hud_stop = threading.Event()
         self._scan_timer_thread: Optional[threading.Thread] = None
+        self._last_path_paint_ts: float = 0.0
+        self._speed_points: deque[tuple[float, int]] = deque(maxlen=60)
+        self._status_token: int = 0
+        self._cancelled_banner_token: int = 0
+        self._io_failure_hits_by_root: dict[str, int] = {}
+        self._io_pause_dialog_open: bool = False
+        self._io_paused_root: str = ""
         # Largest file-catalogue count seen (discovery + grouping); explains hashing denominator.
         self._scan_files_catalogued: int = 0
         # Canvas chunk bar state
@@ -153,6 +141,7 @@ class DashboardPage(ft.Column):
         self._bar_is_complete: bool = False
         self._bar_last_dupes: int = 0
         self._build_ui()
+        self._load_scan_options_for_mode(self._selected_mode)
 
     def _is_mounted(self) -> bool:
         """True only when this control is attached to a :class:`ft.Page` (safe before ``page.add``)."""
@@ -206,57 +195,81 @@ class DashboardPage(ft.Column):
         s = t.spacing
 
         # Compact greeting strip (replaces wasteful hero)
+        self._last_session_btn = ft.TextButton(
+            "Open Last Session",
+            icon=ft.icons.Icons.HISTORY,
+            on_click=self._open_last_session,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+        )
         self._hero = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=20, color="#22D3EE"),
+                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
                     ft.Text(
-                        "Welcome back. Ready to free up some space?",
-                        size=t.typography.size_md,
-                        color=t.colors.fg2,
+                        "Scan intelligently. Review safely.",
+                        size=t.typography.size_base,
+                        weight=ft.FontWeight.W_600,
+                        color=t.colors.fg,
                         expand=True,
                     ),
+                    self._last_session_btn,
                 ],
-                spacing=s.md,
+                spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+            padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
+            width=860,
             **self._get_glass_style(opacity=0.04),
         )
 
         # Stat cards
-        self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.lg)
+        self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.md)
         self._update_stats_ui()
 
         # Scan mode selector
         self._mode_label = ft.Text(
-            "Choose scan type",
+            "Scan mode",
             size=t.typography.size_sm,
-            weight=ft.FontWeight.W_500,
+            weight=ft.FontWeight.W_600,
             color=t.colors.fg_muted,
         )
-        self._mode_row = ft.Row(
+        self._mode_row = ft.Column(
             [],
-            wrap=True,
-            spacing=s.md,
-            run_spacing=s.md,
-            alignment=ft.MainAxisAlignment.START,
-            vertical_alignment=ft.CrossAxisAlignment.START,
+            spacing=s.sm,
+            horizontal_alignment=ft.CrossAxisAlignment.START,
+            visible=True,
         )
+        self._scan_type_summary = ft.Text(
+            "1 type selected",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            italic=True,
+        )
+        self._scan_type_checkboxes = {}
         self._update_modes_ui()
 
-        # Folder list
+        # Folder list + clear drop target
         self._folder_chips_row = ft.Row([], wrap=True, spacing=s.xs)
         self._folder_container = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.Text("Selected folders", color=t.colors.fg_muted, size=t.typography.size_sm),
+                            ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=18, color="#22D3EE"),
+                            ft.Text("Selected folders", color=t.colors.fg_muted, size=t.typography.size_sm, weight=ft.FontWeight.W_600),
                             ft.Container(expand=True),
                         ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     self._folder_chips_row,
+                    ft.Container(
+                        content=ft.FilledTonalButton(
+                            "+ Quick Add: Desktop & Downloads",
+                            on_click=self._quick_add_desktop_downloads,
+                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=999)),
+                        ),
+                        padding=ft.padding.only(top=s.xs),
+                    ),
                 ],
                 spacing=s.xs,
             ),
@@ -264,76 +277,11 @@ class DashboardPage(ft.Column):
             **self._get_glass_style(0.10),
         )
         self._folder_container.on_click = self._browse_folders
+        self._folder_container.on_hover = lambda e, c=self._folder_container: self._set_container_glow(
+            c, e.data == "true", variant="primary"
+        )
         self._folder_container.ink = True
-        self._clear_folders_btn = ft.TextButton(
-            "Clear selected",
-            icon=ft.icons.Icons.CLEAR_ALL,
-            on_click=self._clear_selected_folders,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
-            visible=False,
-        )
         cast_col = self._folder_container.content
-        if isinstance(cast_col, ft.Column) and cast_col.controls and isinstance(cast_col.controls[0], ft.Row):
-            cast_col.controls[0].controls.append(self._clear_folders_btn)
-
-        self._quick_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
-        self._recent_paths_row = ft.Row([], wrap=True, spacing=s.sm, alignment=ft.MainAxisAlignment.START)
-        self._recent_paths_generation = 0
-        self._recent_wrap = ft.Column(
-            [
-                ft.Text(
-                    "Recent scan folders",
-                    size=t.typography.size_sm,
-                    weight=ft.FontWeight.W_500,
-                    color=t.colors.fg_muted,
-                ),
-                self._recent_paths_row,
-            ],
-            spacing=s.xs,
-            visible=False,
-        )
-        self._quick_add_title = ft.Text(
-            "Quick add — smart suggestions (recent + frequent)",
-            size=t.typography.size_sm,
-            weight=ft.FontWeight.W_500,
-            color=t.colors.fg_muted,
-        )
-        self._quick_reset_btn = ft.TextButton(
-            "Reset hidden suggestions",
-            on_click=self._reset_hidden_quick_suggestions,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
-            visible=False,
-        )
-        self._quick_toggle_btn = ft.TextButton(
-            "Show suggestions",
-            icon=ft.icons.Icons.EXPAND_MORE,
-            on_click=self._toggle_quick_add,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
-        )
-        self._quick_add_body = ft.Container(content=self._quick_paths_row, visible=False)
-        self._quick_add_wrap = ft.Column(
-            [
-                ft.Row(
-                    [self._quick_add_title, self._quick_toggle_btn, ft.Container(expand=True), self._quick_reset_btn],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                self._quick_add_body,
-            ],
-            spacing=s.xs,
-        )
-        self._quick_scan_btn = ft.FilledTonalButton(
-            "Quick Scan: Desktop + Downloads",
-            icon=ft.icons.Icons.BOLT,
-            on_click=self._quick_scan_common_folders,
-            style=ft.ButtonStyle(
-                shape=ft.RoundedRectangleBorder(radius=10),
-                color=t.colors.fg,
-            ),
-            visible=False,
-        )
-        self._load_quick_add_ui_preferences()
-        self._refresh_recent_paths_bar()
-        self._refresh_quick_add_bar()
 
         # Action buttons — clear hierarchy: primary CTA, secondary, tertiary
         self._stop_btn = ft.OutlinedButton(
@@ -344,55 +292,38 @@ class DashboardPage(ft.Column):
             style=ft.ButtonStyle(color=t.colors.danger),
         )
         self._start_btn = ft.FilledButton(
-            "Start Scan",
-            icon=ft.icons.Icons.PLAY_ARROW,
+            "START SCAN",
+            icon=ft.icons.Icons.ROCKET_LAUNCH,
             on_click=self._start_scan,
             style=ft.ButtonStyle(
-                bgcolor="#22D3EE",
+                bgcolor="#28C7D8",
                 color="#0A0E14",
-                overlay_color=ft.Colors.with_opacity(0.2, "#22D3EE"),
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=24, vertical=12),
+                overlay_color=ft.Colors.with_opacity(0.2, "#28C7D8"),
+                shape=ft.RoundedRectangleBorder(radius=14),
+                text_style=ft.TextStyle(size=t.typography.size_xl, weight=ft.FontWeight.W_800),
+                padding=ft.padding.symmetric(horizontal=56, vertical=28),
             ),
-            disabled=True,
+            disabled=False,
+            width=368,
+            height=74,
         )
-        self._browse_btn = ft.OutlinedButton(
-            "Browse Folders",
-            icon=ft.icons.Icons.FOLDER_OPEN,
-            on_click=self._browse_folders,
-            style=ft.ButtonStyle(
-                color=t.colors.fg2,
-                side=ft.BorderSide(1, t.colors.border),
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=16, vertical=12),
-            ),
+        self._scan_safety_note = ft.Text(
+            "Nothing is deleted automatically • Content-aware matching enabled",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+            italic=True,
         )
-        self._last_session_btn = ft.TextButton(
-            "Open Last Session",
-            icon=ft.icons.Icons.HISTORY,
-            on_click=self._open_last_session,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
-        )
-        browse_wrap = ft.Container(content=self._browse_btn, border_radius=10)
-        start_wrap = ft.Container(content=self._start_btn, border_radius=10)
-        last_wrap = ft.Container(content=self._last_session_btn, border_radius=10)
-        browse_wrap.on_hover = lambda e, c=browse_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
+        start_wrap = ft.Container(content=self._start_btn, border_radius=14)
         start_wrap.on_hover = lambda e, c=start_wrap: self._set_container_glow(c, e.data == "true", variant="primary", strong=True)
-        last_wrap.on_hover = lambda e, c=last_wrap: self._set_container_glow(c, e.data == "true", variant="secondary")
-        secondary_actions = ft.Row(
-            [browse_wrap, last_wrap],
-            alignment=ft.MainAxisAlignment.CENTER,
-            spacing=s.md,
-            wrap=True,
-        )
         self._actions = ft.Column(
             [
                 start_wrap,
-                secondary_actions,
+                self._scan_safety_note,
                 self._stop_btn,
             ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=s.sm,
+            horizontal_alignment=ft.CrossAxisAlignment.START,
+            spacing=s.xs,
         )
 
         self._progress = ft.ProgressBar(width=400, bar_height=6, visible=False, color=t.colors.primary, bgcolor=t.colors.bg3)
@@ -418,6 +349,13 @@ class DashboardPage(ft.Column):
             "",
             size=t.typography.size_sm,
             color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+            width=520,
+        )
+        self._scan_mode_run_label = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg2,
             text_align=ft.TextAlign.CENTER,
             width=520,
         )
@@ -451,6 +389,13 @@ class DashboardPage(ft.Column):
             spacing=2,
             vertical_alignment=ft.CrossAxisAlignment.START,
             tight=True,
+        )
+        self._hash_algo_label = ft.Text(
+            "",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+            visible=False,
         )
         self._ring_timer = ft.Text(
             "",
@@ -532,7 +477,12 @@ class DashboardPage(ft.Column):
                     self._ring_label,
                     self._ring,
                     self._ring_phase_label,
+                    self._scan_mode_run_label,
                     self._ring_counter_row,
+                    self._hash_algo_label,
+                    self._progress_label,
+                    self._progress,
+                    self._progress_detail,
                     self._ring_timer,
                     self._ring_path,
                     self._bar_row,
@@ -556,6 +506,33 @@ class DashboardPage(ft.Column):
             size=t.typography.size_base,
             text_align=ft.TextAlign.CENTER,
         )
+        self._cancelled_results_text = ft.Text(
+            "",
+            color=t.colors.fg2,
+            size=t.typography.size_sm,
+        )
+        self._cancelled_results_btn = ft.TextButton(
+            "View Partial Results",
+            icon=ft.icons.Icons.CHECKLIST,
+            on_click=self._go_to_partial_results,
+        )
+        self._cancelled_results_banner = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color="#F59E0B", size=18),
+                    self._cancelled_results_text,
+                    ft.Container(expand=True),
+                    self._cancelled_results_btn,
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#F59E0B")),
+            border_radius=10,
+            bgcolor=ft.Colors.with_opacity(0.08, "#F59E0B"),
+            visible=False,
+        )
 
         # Scan options row — opt-in toggles shown between folder list and start button
         self._scan_archives_cb = ft.Checkbox(
@@ -572,38 +549,170 @@ class DashboardPage(ft.Column):
             italic=True,
             visible=False,
         )
+        self._advanced_options_visible = False
+        self._scan_options_dropdown_open = False
+        self._min_size_label = ft.Text(
+            "Min file size: 0 MB",
+            size=t.typography.size_sm,
+            color=t.colors.fg2,
+        )
+        self._min_size_slider = ft.Slider(
+            min=0,
+            max=1024,
+            divisions=128,
+            value=0,
+            label="{value} MB",
+            on_change=self._on_min_size_change,
+        )
+        self._exclude_paths_tf = ft.TextField(
+            label="Exclude paths (one per line)",
+            hint_text="D:\\Photos\\Backups",
+            multiline=True,
+            min_lines=3,
+            max_lines=6,
+            on_blur=self._on_exclude_paths_blur,
+        )
+        self._exclude_paths_browse_btn = ft.OutlinedButton(
+            "Browse",
+            icon=ft.icons.Icons.FOLDER_OPEN,
+            on_click=self._browse_exclude_path,
+        )
+        self._include_subfolders_sw = ft.Switch(
+            label="Include subfolders",
+            value=True,
+            on_change=self._on_include_subfolders_change,
+        )
+        self._advanced_panel = ft.Container(
+            visible=False,
+            content=ft.Column(
+                [
+                    self._include_subfolders_sw,
+                    self._min_size_label,
+                    self._min_size_slider,
+                    ft.Row(
+                        [
+                            ft.Text(
+                                "Exclude paths",
+                                size=t.typography.size_sm,
+                                color=t.colors.fg_muted,
+                            ),
+                            ft.Container(expand=True),
+                            self._exclude_paths_browse_btn,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    self._exclude_paths_tf,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            padding=ft.padding.only(top=8),
+        )
+        self._advanced_toggle_btn = ft.IconButton(
+            icon=ft.icons.Icons.SETTINGS,
+            tooltip="Advanced scan options",
+            on_click=self._toggle_advanced_panel,
+        )
         self._scan_options_row = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Scan options", size=t.typography.size_sm, weight=ft.FontWeight.W_500, color=t.colors.fg_muted),
+                    ft.Row(
+                        [
+                            self._mode_label,
+                            ft.Container(expand=True),
+                            self._advanced_toggle_btn,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    self._scan_type_summary,
+                    self._mode_row,
+                    ft.Text("Advanced scan settings", size=t.typography.size_sm, weight=ft.FontWeight.W_500, color=t.colors.fg_muted),
                     self._scan_archives_cb,
                     self._archives_warning,
+                    self._advanced_panel,
                 ],
                 spacing=4,
                 tight=True,
             ),
             padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
         )
-
-        # Assemble — main panels tracked so scan view can swap in/out
-        self.controls = [
-            self._hero,
-            ft.Container(content=self._stats_row, padding=ft.padding.symmetric(vertical=s.lg)),
-            ft.Container(content=self._mode_label, padding=ft.padding.only(left=s.md, top=s.sm)),
-            ft.Container(
-                content=self._mode_row,
-                padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+        self._scan_options_toggle_btn = ft.OutlinedButton(
+            "Advanced scan settings",
+            icon=ft.icons.Icons.KEYBOARD_ARROW_DOWN,
+            on_click=self._toggle_scan_options_dropdown,
+            style=ft.ButtonStyle(
+                color=t.colors.fg2,
+                shape=ft.RoundedRectangleBorder(radius=10),
+            ),
+        )
+        self._scan_options_dropdown = ft.Container(
+            content=ft.Container(
+                content=self._scan_options_row,
+                padding=ft.padding.all(s.xl),
                 **self._get_glass_style(0.08),
             ),
-            self._folder_container,
-            ft.Container(
-                content=ft.Column([self._quick_scan_btn, self._recent_wrap, self._quick_add_wrap], spacing=s.sm),
-                padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
+            visible=False,
+            width=620,
+        )
+
+        folder_section = ft.Column(
+            [
+                self._folder_container,
+                ft.Container(
+                    content=self._actions,
+                    padding=ft.padding.only(top=s.xs),
+                    alignment=ft.Alignment(0.34, 0),
+                ),
+            ],
+            spacing=s.xs,
+        )
+        folder_panel = ft.Container(content=folder_section, width=620)
+
+        capability_hint = ft.Text(
+            "Content-aware matching and perceptual image analysis",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+        )
+
+        workflow_stack = ft.Container(
+            width=840,
+            padding=ft.padding.symmetric(horizontal=s.lg, vertical=s.md),
+            content=ft.Column(
+                [
+                    self._hero,
+                    folder_panel,
+                    ft.Container(
+                        content=self._scan_options_toggle_btn,
+                        width=620,
+                        padding=ft.padding.only(top=s.sm),
+                        alignment=ft.Alignment(0.16, 0),
+                    ),
+                    self._scan_options_dropdown,
+                    capability_hint,
+                ],
+                spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            self._scan_options_row,
-            ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
-            ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
-        ]
+            **self._get_glass_style(0.035),
+        )
+
+        # Assemble — main panels tracked so scan view can swap in/out
+        home_content = ft.Container(
+            alignment=ft.Alignment(0, -1),
+            padding=ft.padding.only(top=4),
+            content=ft.Column(
+                [
+                    workflow_stack,
+                    ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.sm)),
+                    ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.sm)),
+                    ft.Container(content=self._stats_row, width=360, padding=ft.padding.only(top=s.sm)),
+                ],
+                spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        )
+        self.controls = [home_content]
         self._main_panels = list(self.controls)  # snapshot for hide/show swap
         self.controls.append(self._scan_view)     # scan view always last, starts hidden
         self._refresh_folder_chips()
@@ -691,10 +800,14 @@ class DashboardPage(ft.Column):
 
     def _update_stats_ui(self):
         t = self._t
+        scans_n = int(self._stats.get("scans", 0) or 0)
+        dupes_n = int(self._stats.get("dupes", 0) or 0)
+        bytes_n = int(self._stats.get("bytes_reclaimed", 0) or 0)
+        self._stats_row.visible = (scans_n > 0) or (dupes_n > 0) or (bytes_n > 0)
         cards = [
-            (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", f"{self._stats.get('scans', 0):,}"),
-            (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", f"{self._stats.get('dupes', 0):,}"),
-            (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(self._stats.get('bytes_reclaimed', 0))),
+            (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", f"{scans_n:,}"),
+            (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", f"{dupes_n:,}"),
+            (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(bytes_n)),
         ]
         controls: list[ft.Control] = []
         for icon, accent, label, value in cards:
@@ -704,7 +817,7 @@ class DashboardPage(ft.Column):
                         ft.Container(
                             content=ft.Icon(icon, size=20, color=accent),
                             bgcolor=ft.Colors.with_opacity(0.18, accent),
-                            border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent)),
+                            border=ft.border.all(1, ft.Colors.with_opacity(0.24, accent)),
                             border_radius=8,
                             padding=8,
                         ),
@@ -714,13 +827,13 @@ class DashboardPage(ft.Column):
                                     value,
                                     size=t.typography.size_lg,
                                     weight=ft.FontWeight.W_700,
-                                    color=accent,
+                                    color=t.colors.fg,
                                 ),
                                 ft.Text(
                                     label,
                                     size=t.typography.size_sm,
-                                    color=t.colors.fg2,
-                                    weight=ft.FontWeight.W_600,
+                                    color=t.colors.fg_muted,
+                                    weight=ft.FontWeight.W_500,
                                 ),
                             ],
                             spacing=2,
@@ -747,109 +860,86 @@ class DashboardPage(ft.Column):
 
     def _update_modes_ui(self) -> None:
         t = self._t
-        s = t.spacing
-        TEAL = "#00BFA5"
+        controls: list[ft.Control] = []
+        self._scan_type_checkboxes = {}
+        has_specific = any(m != "files" for m in self._selected_modes)
 
-        cards = []
         for m in SCAN_MODES:
-            is_active = m["key"] == self._selected_mode
-            raw_icon = str(m.get("icon", "") or "").lower()
-            icon_name = _SCAN_MODE_ICON_MAP.get(raw_icon, ft.icons.Icons.CATEGORY)
-
-            icon_bg = ft.Colors.with_opacity(0.20 if is_active else 0.08, TEAL if is_active else ft.Colors.WHITE)
-            icon_color = TEAL if is_active else t.colors.fg_muted
-            label_color = "#F8FEFF" if is_active else t.colors.fg2
-            border_color = "#22D3EE" if is_active else ft.Colors.with_opacity(0.12, ft.Colors.WHITE)
-            bg_color = ft.Colors.with_opacity(0.24 if is_active else 0.04, TEAL if is_active else ft.Colors.WHITE)
-
-            card_content = ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Container(
-                                content=ft.Icon(icon_name, size=20, color=icon_color),
-                                bgcolor=icon_bg,
-                                border_radius=8,
-                                padding=8,
-                            ),
-                            ft.Container(expand=True),
-                            ft.Icon(
-                                ft.icons.Icons.RADIO_BUTTON_CHECKED if is_active
-                                else ft.icons.Icons.RADIO_BUTTON_UNCHECKED,
-                                size=14,
-                                color=TEAL if is_active else ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
-                            ),
-                            ft.Container(
-                                content=ft.Text(
-                                    "SELECTED",
-                                    size=8,
-                                    weight=ft.FontWeight.W_700,
-                                    color="#081018",
-                                ),
-                                bgcolor="#22D3EE",
-                                border_radius=999,
-                                padding=ft.padding.symmetric(horizontal=7, vertical=2),
-                                visible=is_active,
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
-                    ft.Text(
-                        m["label"],
-                        size=t.typography.size_lg,
-                        weight=ft.FontWeight.W_700,
-                        color=label_color,
-                    ),
-                    ft.Text(
-                        m.get("desc", ""),
-                        size=t.typography.size_sm,
-                        color=t.colors.fg_muted,
-                    ),
-                ],
-                spacing=s.sm,
-                tight=True,
+            key = str(m.get("key", ""))
+            if not key:
+                continue
+            label = str(m.get("label", key))
+            if key == "files":
+                label = "Full Scan"
+            cb = ft.Checkbox(
+                label=label,
+                value=(key in self._selected_modes),
+                active_color="#22D3EE",
+                label_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
+                on_change=lambda e, k=key: self._on_scan_type_selected(k, e),
+                disabled=(key == "files" and has_specific),
             )
-
-            card_kwargs: dict = dict(
-                content=card_content,
-                width=160,
-                height=142,
-                padding=ft.padding.all(s.md),
-                border=ft.border.all(3 if is_active else 1, border_color),
-                border_radius=12,
-                bgcolor=bg_color,
-                alignment=ft.Alignment(-1, -1),
-                ink=True,
-                on_click=lambda e, k=m["key"]: self._select_mode(k),
-            )
-            if is_active:
-                card_kwargs["shadow"] = ft.BoxShadow(
-                    blur_radius=28,
-                    spread_radius=0,
-                    color=ft.Colors.with_opacity(0.48, TEAL),
-                    offset=ft.Offset(0, 4),
-                )
-            card = ft.Container(**card_kwargs)
-            card.on_hover = lambda e, c=card, active=is_active: self._on_mode_card_hover(c, e.data == "true", active)
-            cards.append(card)
-
-        self._mode_row.controls = cards
+            self._scan_type_checkboxes[key] = cb
+            controls.append(cb)
+        self._mode_row.controls = controls
+        self._update_scan_type_summary()
         DashboardPage._safe_update(self._mode_row)
+        DashboardPage._safe_update(self._scan_type_summary)
 
-    def _on_mode_card_hover(self, card: ft.Container, hovering: bool, is_active: bool) -> None:
-        if hovering:
-            card.shadow = self._hover_shadow(self._hover_glow_color("primary"), strong=True)
-        else:
-            if is_active:
-                card.shadow = ft.BoxShadow(
-                    blur_radius=28,
-                    spread_radius=0,
-                    color=ft.Colors.with_opacity(0.48, "#00BFA5"),
-                    offset=ft.Offset(0, 4),
-                )
+    def _on_scan_type_selected(self, key: str, e: ft.ControlEvent) -> None:
+        prev_mode = self._selected_mode
+        next_selected = set(self._selected_modes)
+        checked = bool(e.control.value)
+        if key == "files":
+            if checked:
+                next_selected = {"files"}
             else:
-                card.shadow = None
-        DashboardPage._safe_update(card)
+                next_selected = set(self._selected_modes) or {"files"}
+        else:
+            if checked:
+                next_selected.discard("files")
+                next_selected.add(key)
+            else:
+                next_selected.discard(key)
+                if not next_selected:
+                    next_selected = {"files"}
+
+        self._save_scan_options_for_mode(prev_mode)
+        self._selected_modes = next_selected
+        self._selected_mode = self._primary_selected_mode()
+        self._load_scan_options_for_mode(self._selected_mode)
+        self._update_modes_ui()
+        self._update_scan_type_summary()
+        _log.info("scan_type_selected modes=%s", sorted(self._selected_modes))
+
+    def _update_scan_type_summary(self) -> None:
+        selected = len(self._selected_modes)
+        noun = "type" if selected == 1 else "types"
+        self._scan_type_summary.value = f"{selected} {noun} selected"
+
+    def _primary_selected_mode(self) -> str:
+        if "files" in self._selected_modes:
+            return "files"
+        if self._selected_modes:
+            return sorted(self._selected_modes)[0]
+        return "files"
+
+    def _selected_modes_for_scan(self) -> list[str]:
+        if "files" in self._selected_modes:
+            return ["files"]
+        modes = [m for m in sorted(self._selected_modes) if m]
+        return modes or ["files"]
+
+    def _scan_modes_display_label(self, modes: list[str]) -> str:
+        label_by_key = {
+            str(m.get("key", "")): str(m.get("label", m.get("key", "")))
+            for m in SCAN_MODES
+            if str(m.get("key", "")).strip()
+        }
+        names = [label_by_key.get(k, str(k)) for k in modes if str(k).strip()]
+        if not names:
+            names = ["Full Scan"]
+        return "Running: " + " + ".join(names)
 
     def _open_last_session(self, e=None):
         try:
@@ -865,303 +955,136 @@ class DashboardPage(ft.Column):
         self._scan_options["scan_archives"] = enabled
         self._archives_warning.visible = enabled
         DashboardPage._safe_update(self._archives_warning)
+        self._save_scan_options_for_mode(self._selected_mode)
+
+    def _toggle_advanced_panel(self, _e: ft.ControlEvent) -> None:
+        self._advanced_options_visible = not self._advanced_options_visible
+        self._advanced_panel.visible = self._advanced_options_visible
+        self._advanced_toggle_btn.icon = (
+            ft.icons.Icons.SETTINGS_SUGGEST
+            if self._advanced_options_visible
+            else ft.icons.Icons.SETTINGS
+        )
+        DashboardPage._safe_update(self._advanced_panel)
+        DashboardPage._safe_update(self._advanced_toggle_btn)
+
+    def _toggle_scan_options_dropdown(self, _e: ft.ControlEvent) -> None:
+        self._scan_options_dropdown_open = not self._scan_options_dropdown_open
+        self._scan_options_dropdown.visible = self._scan_options_dropdown_open
+        self._scan_options_toggle_btn.icon = (
+            ft.icons.Icons.KEYBOARD_ARROW_UP
+            if self._scan_options_dropdown_open
+            else ft.icons.Icons.KEYBOARD_ARROW_DOWN
+        )
+        DashboardPage._safe_update(self._scan_options_dropdown)
+        DashboardPage._safe_update(self._scan_options_toggle_btn)
+
+    def _on_min_size_change(self, e: ft.ControlEvent) -> None:
+        mb = int(e.control.value or 0)
+        self._scan_options["min_size_bytes"] = mb * 1024 * 1024
+        self._min_size_label.value = f"Min file size: {mb} MB"
+        DashboardPage._safe_update(self._min_size_label)
+        self._save_scan_options_for_mode(self._selected_mode)
+
+    def _on_exclude_paths_blur(self, _e: ft.ControlEvent) -> None:
+        raw = str(self._exclude_paths_tf.value or "")
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        self._scan_options["exclude_paths"] = lines
+        _log.info("exclude_paths_updated count=%d", len(lines))
+        self._save_scan_options_for_mode(self._selected_mode)
+
+    def _on_include_subfolders_change(self, e: ft.ControlEvent) -> None:
+        self._scan_options["include_subfolders"] = bool(e.control.value)
+        self._save_scan_options_for_mode(self._selected_mode)
+
+    def _browse_exclude_path(self, _e: ft.ControlEvent) -> None:
+        if self._picker_active:
+            return
+        page = getattr(self._bridge, "flet_page", None)
+        if page:
+            page.run_task(self._browse_exclude_path_async)
+
+    async def _browse_exclude_path_async(self) -> None:
+        if self._picker_active:
+            return
+        self._picker_active = True
+        try:
+            result = await self._folder_picker.get_directory_path(
+                dialog_title="Select folder path to exclude"
+            )
+            if not result:
+                return
+            lines = list(self._scan_options.get("exclude_paths", []) or [])
+            path_s = str(result).strip()
+            if path_s and path_s not in lines:
+                lines.append(path_s)
+                self._scan_options["exclude_paths"] = lines
+                self._exclude_paths_tf.value = "\n".join(lines)
+                DashboardPage._safe_update(self._exclude_paths_tf)
+                self._save_scan_options_for_mode(self._selected_mode)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "session" not in msg and "closed" not in msg:
+                _log.error("Exclude-path picker failed: %s", exc)
+        finally:
+            self._picker_active = False
+
+    def _save_scan_options_for_mode(self, mode_key: str) -> None:
+        if not mode_key:
+            return
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            settings = {}
+        scan_cfg = settings.get("scan")
+        if not isinstance(scan_cfg, dict):
+            scan_cfg = {}
+        adv = scan_cfg.get("advanced_by_mode")
+        if not isinstance(adv, dict):
+            adv = {}
+        adv[str(mode_key)] = {
+            "min_size_bytes": int(self._scan_options.get("min_size_bytes", 0) or 0),
+            "exclude_paths": list(self._scan_options.get("exclude_paths", []) or []),
+            "scan_archives": bool(self._scan_options.get("scan_archives", False)),
+            "include_subfolders": bool(self._scan_options.get("include_subfolders", True)),
+        }
+        scan_cfg["advanced_by_mode"] = adv
+        settings["scan"] = scan_cfg
+        self._bridge.save_settings(settings)
+
+    def _load_scan_options_for_mode(self, mode_key: str) -> None:
+        settings = self._bridge.get_settings()
+        scan_cfg = settings.get("scan") if isinstance(settings, dict) else {}
+        adv = scan_cfg.get("advanced_by_mode") if isinstance(scan_cfg, dict) else {}
+        conf = adv.get(str(mode_key), {}) if isinstance(adv, dict) else {}
+        if not isinstance(conf, dict):
+            conf = {}
+
+        self._scan_options["min_size_bytes"] = int(conf.get("min_size_bytes", 0) or 0)
+        ex = conf.get("exclude_paths", [])
+        self._scan_options["exclude_paths"] = [str(x) for x in ex] if isinstance(ex, list) else []
+        self._scan_options["scan_archives"] = bool(conf.get("scan_archives", False))
+        self._scan_options["include_subfolders"] = bool(conf.get("include_subfolders", True))
+
+        min_mb = max(0, min(1024, int(self._scan_options["min_size_bytes"]) // (1024 * 1024)))
+        self._min_size_slider.value = min_mb
+        self._min_size_label.value = f"Min file size: {min_mb} MB"
+        self._exclude_paths_tf.value = "\n".join(self._scan_options["exclude_paths"])
+        self._scan_archives_cb.value = bool(self._scan_options["scan_archives"])
+        self._archives_warning.visible = bool(self._scan_options["scan_archives"])
+        self._include_subfolders_sw.value = bool(self._scan_options["include_subfolders"])
+        DashboardPage._safe_update(self._min_size_slider)
+        DashboardPage._safe_update(self._min_size_label)
+        DashboardPage._safe_update(self._exclude_paths_tf)
+        DashboardPage._safe_update(self._scan_archives_cb)
+        DashboardPage._safe_update(self._archives_warning)
+        DashboardPage._safe_update(self._include_subfolders_sw)
 
     def _select_mode(self, key: str) -> None:
-        if self._selected_mode == key:
+        if self._selected_mode == key and key in self._selected_modes:
             return
+        self._selected_modes = {str(key or "files")}
         self._selected_mode = key
         self._update_modes_ui()
-
-    def _refresh_quick_add_bar(self) -> None:
-        """Populate one-tap smart suggestions based on scan history + recency."""
-        t = self._t
-        paths = self._discover_smart_quick_paths(limit=8)
-        self._quick_add_title.color = t.colors.fg_muted
-        hidden_count = len(self._get_hidden_quick_suggestions() | set(self._session_hidden_quick_add))
-        self._quick_reset_btn.visible = hidden_count > 0
-        if not paths:
-            self._quick_add_wrap.visible = False
-            if self._is_mounted():
-                self._quick_add_wrap.update()
-            return
-        self._quick_add_wrap.visible = True
-        self._quick_add_body.visible = self._quick_add_expanded
-        self._quick_toggle_btn.text = "Hide suggestions" if self._quick_add_expanded else "Show suggestions"
-        self._quick_toggle_btn.icon = ft.icons.Icons.EXPAND_LESS if self._quick_add_expanded else ft.icons.Icons.EXPAND_MORE
-        self._quick_paths_row.controls = []
-        for label, p in paths:
-            remove_btn = ft.TextButton(
-                "X",
-                tooltip="Remove suggestion",
-                on_click=lambda _e, pp=p: self._dismiss_quick_suggestion(pp),
-                style=ft.ButtonStyle(
-                    color=t.colors.fg_muted,
-                    text_style=ft.TextStyle(size=t.typography.size_xs, weight=ft.FontWeight.W_700),
-                    padding=ft.padding.symmetric(horizontal=6, vertical=4),
-                    shape=ft.RoundedRectangleBorder(radius=6),
-                ),
-            )
-            quick_item = ft.Container(
-                content=ft.Row(
-                    [
-                        ft.TextButton(
-                            label,
-                            icon=ft.icons.Icons.FOLDER_SPECIAL,
-                            on_click=lambda _e, pp=p: self._add_folder(pp),
-                            style=ft.ButtonStyle(
-                                color=t.colors.fg2,
-                                padding=ft.padding.symmetric(horizontal=8, vertical=6),
-                                shape=ft.RoundedRectangleBorder(radius=8),
-                            ),
-                        ),
-                        remove_btn,
-                    ],
-                    spacing=2,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                bgcolor=ft.Colors.with_opacity(0.10, t.colors.primary),
-                border=ft.border.all(1, ft.Colors.with_opacity(0.16, t.colors.primary)),
-                border_radius=10,
-                padding=ft.padding.only(left=2, right=2),
-            )
-            quick_item.on_hover = lambda e, c=quick_item: self._set_container_glow(c, e.data == "true", variant="secondary")
-            self._quick_paths_row.controls.append(quick_item)
-        if self._is_mounted():
-            self._quick_paths_row.update()
-            self._quick_add_body.update()
-            self._quick_toggle_btn.update()
-            self._quick_reset_btn.update()
-            self._quick_add_wrap.update()
-
-    def _refresh_recent_paths_bar(self) -> None:
-        self._recent_paths_generation += 1
-        gen = self._recent_paths_generation
-        page = self._bridge.flet_page
-        if hasattr(page, "run_task"):
-            page.run_task(self._refresh_recent_paths_bar_async, gen)
-            return
-        recents = self._discover_recent_scan_paths(limit=6)
-        self._apply_recent_paths(recents)
-
-    async def _refresh_recent_paths_bar_async(self, gen: int) -> None:
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        recents = await loop.run_in_executor(None, lambda: self._discover_recent_scan_paths(limit=6))
-        if gen != self._recent_paths_generation:
-            return
-        self._apply_recent_paths(recents)
-
-    def _apply_recent_paths(self, recents: list[tuple[str, Path]]) -> None:
-        t = self._t
-        if not recents:
-            self._recent_wrap.visible = False
-            self._quick_scan_btn.visible = False
-            if self._is_mounted():
-                self._recent_wrap.update()
-                self._quick_scan_btn.update()
-            return
-        self._quick_scan_btn.visible = True
-        self._recent_wrap.visible = True
-        self._recent_paths_row.controls = []
-        for label, p in recents:
-            recent_chip = ft.Chip(
-                label=ft.Text(label, size=t.typography.size_sm),
-                leading=ft.Icon(ft.icons.Icons.HISTORY, size=14, color=t.colors.fg2),
-                shape=ft.RoundedRectangleBorder(radius=10),
-                on_click=lambda _e, pp=p: self._add_folder(pp),
-            )
-            recent_chip.bgcolor = ft.Colors.with_opacity(0.03, t.colors.primary)
-            recent_chip.side = ft.BorderSide(1, ft.Colors.with_opacity(0.30, t.colors.primary))
-            recent_chip.tooltip = str(p)
-            self._recent_paths_row.controls.append(recent_chip)
-        if self._is_mounted():
-            self._recent_paths_row.update()
-            self._recent_wrap.update()
-            self._quick_scan_btn.update()
-
-    def _discover_recent_scan_paths(self, limit: int = 6) -> list[tuple[str, Path]]:
-        try:
-            from cerebro.v2.core.scan_history_db import get_scan_history_db
-
-            seen: set[str] = set()
-            out: list[tuple[str, Path]] = []
-
-            for p in self._session_recent_scan_paths:
-                try:
-                    rp = Path(str(p)).resolve()
-                except (OSError, RuntimeError, ValueError):
-                    continue
-                if not rp.is_dir():
-                    continue
-                key = str(rp).lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append((rp.name or str(rp), rp))
-                if len(out) >= max(1, limit):
-                    return out
-
-            for entry in get_scan_history_db().get_recent(250):
-                for raw in (entry.folders or []):
-                    try:
-                        p = Path(str(raw)).resolve()
-                    except (OSError, RuntimeError, ValueError):
-                        continue
-                    if not p.is_dir():
-                        continue
-                    key = str(p).lower()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append((p.name or str(p), p))
-                    if len(out) >= max(1, limit):
-                        return out
-            return out
-        except Exception:
-            _log.exception("Failed loading recent scan paths")
-            return []
-
-    def _load_quick_add_ui_preferences(self) -> None:
-        settings = self._bridge.get_settings()
-        if not isinstance(settings, dict):
-            self._quick_add_expanded = False
-            return
-        dashboard = settings.get("dashboard")
-        if not isinstance(dashboard, dict):
-            self._quick_add_expanded = False
-            return
-        self._quick_add_expanded = bool(dashboard.get("quick_add_expanded", False))
-
-    def _persist_quick_add_ui_preferences(self) -> None:
-        settings = self._bridge.get_settings()
-        if not isinstance(settings, dict):
-            settings = {}
-        dashboard = settings.get("dashboard")
-        if not isinstance(dashboard, dict):
-            dashboard = {}
-        dashboard["quick_add_expanded"] = bool(self._quick_add_expanded)
-        settings["dashboard"] = dashboard
-        self._bridge.save_settings(settings)
-
-    def _toggle_quick_add(self, _e: ft.ControlEvent | None = None) -> None:
-        self._quick_add_expanded = not self._quick_add_expanded
-        self._persist_quick_add_ui_preferences()
-        self._refresh_quick_add_bar()
-
-    def _discover_smart_quick_paths(self, limit: int = 8) -> list[tuple[str, Path]]:
-        hidden = self._get_hidden_quick_suggestions() | set(self._session_hidden_quick_add)
-        try:
-            from cerebro.v2.core.scan_history_db import get_scan_history_db
-            import time
-
-            now = time.time()
-            scores: dict[str, float] = {}
-            pretty: dict[str, Path] = {}
-
-            # Prioritize folders scanned in this session so suggestions feel live.
-            for rank, p in enumerate(self._session_recent_scan_paths):
-                try:
-                    rp = Path(str(p)).resolve()
-                except (OSError, RuntimeError, ValueError):
-                    continue
-                if not rp.is_dir():
-                    continue
-                key = str(rp).lower()
-                if key in hidden:
-                    continue
-                scores[key] = scores.get(key, 0.0) + 20.0 - float(rank)
-                pretty[key] = rp
-
-            entries = get_scan_history_db().get_recent(300)
-            for i, entry in enumerate(entries):
-                # Recency + frequency weighted score.
-                age_days = max(0.0, (now - float(entry.timestamp or now)) / 86400.0)
-                recency_boost = 1.0 / (1.0 + age_days)
-                order_boost = 1.0 / (1.0 + i)
-                for raw in (entry.folders or []):
-                    try:
-                        p = Path(str(raw)).resolve()
-                    except (OSError, RuntimeError, ValueError):
-                        continue
-                    if not p.is_dir():
-                        continue
-                    key = str(p).lower()
-                    if key in hidden:
-                        continue
-                    scores[key] = scores.get(key, 0.0) + 1.0 + (2.0 * recency_boost) + order_boost
-                    pretty[key] = p
-            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: max(1, limit)]
-            out: list[tuple[str, Path]] = []
-            for key, _score in ranked:
-                p = pretty[key]
-                label = p.name or str(p)
-                out.append((label, p))
-            if out:
-                return out
-        except Exception:
-            _log.exception("Failed building smart quick-add suggestions")
-        # Fallback for brand-new users, still honoring hidden dismissals.
-        fallback: list[tuple[str, Path]] = []
-        for label, p in _discover_existing_popular_paths():
-            try:
-                key = str(p.resolve()).lower()
-            except (OSError, RuntimeError, ValueError):
-                key = str(p).lower()
-            if key in hidden:
-                continue
-            fallback.append((label, p))
-            if len(fallback) >= max(1, limit):
-                break
-        return fallback
-
-    def _get_hidden_quick_suggestions(self) -> set[str]:
-        settings = self._bridge.get_settings()
-        if not isinstance(settings, dict):
-            return set()
-        dashboard = settings.get("dashboard")
-        if not isinstance(dashboard, dict):
-            return set()
-        hidden = dashboard.get("quick_add_hidden")
-        if not isinstance(hidden, list):
-            return set()
-        return {str(x).lower() for x in hidden}
-
-    def _dismiss_quick_suggestion(self, path: Path) -> None:
-        try:
-            key = str(Path(str(path)).resolve()).lower()
-        except (OSError, RuntimeError, ValueError):
-            key = str(path).lower()
-        self._session_hidden_quick_add.add(key)
-        settings = self._bridge.get_settings()
-        if not isinstance(settings, dict):
-            settings = {}
-        dashboard = settings.get("dashboard")
-        if not isinstance(dashboard, dict):
-            dashboard = {}
-        hidden = dashboard.get("quick_add_hidden")
-        if not isinstance(hidden, list):
-            hidden = []
-        if key not in [str(x).lower() for x in hidden]:
-            hidden.append(str(path))
-        dashboard["quick_add_hidden"] = hidden
-        settings["dashboard"] = dashboard
-        self._bridge.save_settings(settings)
-        self._refresh_quick_add_bar()
-        self._bridge.show_snackbar("Suggestion removed.", info=True)
-
-    def _reset_hidden_quick_suggestions(self, _e: ft.ControlEvent | None = None) -> None:
-        settings = self._bridge.get_settings()
-        if not isinstance(settings, dict):
-            settings = {}
-        dashboard = settings.get("dashboard")
-        if not isinstance(dashboard, dict):
-            dashboard = {}
-        dashboard["quick_add_hidden"] = []
-        settings["dashboard"] = dashboard
-        self._session_hidden_quick_add.clear()
-        self._bridge.save_settings(settings)
-        self._refresh_quick_add_bar()
 
     def _browse_folders(self, e: ft.ControlEvent) -> None:
         if self._picker_active:
@@ -1198,32 +1121,34 @@ class DashboardPage(ft.Column):
     def _refresh_folder_chips(self) -> None:
         t = self._t
         if not self._folders:
-            self._folder_container.height = 130
+            self._folder_container.height = 108
+            self._folder_container.border = ft.border.all(1, ft.Colors.with_opacity(0.40, "#22D3EE"))
+            self._folder_container.border_radius = 12
             self._folder_chips_row.controls = [
                 ft.Container(
-                    border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border)),
+                    border=ft.border.all(1, ft.Colors.with_opacity(0.52, t.colors.border)),
                     border_radius=10,
                     padding=ft.padding.symmetric(horizontal=12, vertical=14),
-                    bgcolor=ft.Colors.with_opacity(0.04, t.colors.primary),
+                    bgcolor=ft.Colors.with_opacity(0.07, t.colors.primary),
                     content=ft.Column(
                         [
                             ft.Row(
                                 [
-                                    ft.Icon(ft.icons.Icons.UPLOAD_FILE, size=16, color=t.colors.fg_muted),
+                                    ft.Icon(ft.icons.Icons.FILE_UPLOAD_OUTLINED, size=24, color="#22D3EE"),
                                     ft.Text(
-                                        "Drag and drop folders here, or click to browse",
+                                        "Drop a folder here or click to browse",
                                         color=t.colors.fg2,
                                         size=t.typography.size_base,
-                                        weight=ft.FontWeight.W_500,
+                                        weight=ft.FontWeight.W_600,
                                     ),
                                 ],
                                 spacing=8,
                             ),
                             ft.Text(
-                                "No folders selected yet",
-                                color=t.colors.fg_muted,
+                                "Add folders to scan for duplicate files and similar images",
+                                color=t.colors.fg2,
                                 size=t.typography.size_sm,
-                                italic=True,
+                                weight=ft.FontWeight.W_500,
                             ),
                         ],
                         spacing=6,
@@ -1232,6 +1157,7 @@ class DashboardPage(ft.Column):
             ]
         else:
             self._folder_container.height = None
+            self._folder_container.border = ft.border.all(1, ft.Colors.with_opacity(0.35, "#22D3EE"))
             self._folder_chips_row.controls = [
                 ft.Chip(
                     label=ft.Text(self._format_folder_chip_label(f), size=t.typography.size_sm),
@@ -1242,66 +1168,84 @@ class DashboardPage(ft.Column):
                 )
                 for f in self._folders
             ]
-        self._clear_folders_btn.visible = bool(self._folders)
         self._sync_start_button_state()
         if self._is_mounted():
             self._folder_chips_row.update()
-            self._clear_folders_btn.update()
 
     def _remove_folder(self, path: Path) -> None:
         if path in self._folders:
             self._folders.remove(path)
         self._refresh_folder_chips()
 
-    def _clear_selected_folders(self, _e: ft.ControlEvent | None = None) -> None:
-        self._folders.clear()
-        self._refresh_folder_chips()
-
     def _sync_start_button_state(self) -> None:
-        has_folders = bool(self._folders)
-        self._start_btn.disabled = not has_folders
-        if has_folders:
-            self._start_btn.style = ft.ButtonStyle(
-                bgcolor="#22D3EE",
-                color="#0A0E14",
-                overlay_color=ft.Colors.with_opacity(0.2, "#22D3EE"),
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=24, vertical=12),
-            )
-        else:
-            self._start_btn.style = ft.ButtonStyle(
-                bgcolor=ft.Colors.with_opacity(0.16, "#94A3B8"),
-                color="#64748B",
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=24, vertical=12),
-            )
+        self._start_btn.disabled = False
+        self._start_btn.style = ft.ButtonStyle(
+            bgcolor="#28C7D8",
+            color="#0A0E14",
+            overlay_color=ft.Colors.with_opacity(0.2, "#28C7D8"),
+            shape=ft.RoundedRectangleBorder(radius=14),
+            text_style=ft.TextStyle(size=self._t.typography.size_xl, weight=ft.FontWeight.W_800),
+            padding=ft.padding.symmetric(horizontal=56, vertical=28),
+        )
         DashboardPage._safe_update(self._start_btn)
 
-    def _quick_scan_common_folders(self, _e: ft.ControlEvent | None = None) -> None:
-        candidates = _discover_existing_popular_paths()
-        preferred_labels = {"desktop", "downloads", "desktop (onedrive)", "downloads (onedrive)"}
-        picked: list[Path] = []
-        for label, p in candidates:
-            if label.lower() in preferred_labels:
-                picked.append(p)
-        if not picked:
-            self._bridge.show_snackbar("Quick folders not found on this machine. Use Browse Folders.", info=True)
-            return
-        for p in picked:
-            if p not in self._folders:
+    def _quick_add_desktop_downloads(self, _e: ft.ControlEvent | None = None) -> None:
+        home = Path.home()
+        candidates = [
+            home / "Desktop",
+            home / "Downloads",
+            home / "OneDrive" / "Desktop",
+            home / "OneDrive" / "Downloads",
+        ]
+        added = 0
+        for p in candidates:
+            if p.is_dir() and p not in self._folders:
                 self._folders.append(p)
+                added += 1
         self._refresh_folder_chips()
-        self._bridge.show_snackbar("Quick folders added. You can start scanning now.", info=True)
+        if added:
+            self._bridge.show_snackbar("Desktop/Downloads added.", info=True)
+        else:
+            self._bridge.show_snackbar("No quick-add folders found.", info=True)
+
+    async def _flash_folder_validation(self) -> None:
+        original = self._folder_container.border
+        original_bg = self._folder_container.bgcolor
+        self._folder_container.border = ft.border.all(2, "#EF4444")
+        self._folder_container.bgcolor = ft.Colors.with_opacity(0.12, "#EF4444")
+        DashboardPage._safe_update(self._folder_container)
+        await asyncio.sleep(0.35)
+        self._folder_container.border = original
+        self._folder_container.bgcolor = original_bg
+        DashboardPage._safe_update(self._folder_container)
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
         if not self._folders:
-            self._status.value = "Please select at least one folder first."
+            self._status.value = "Please add a folder to continue."
             self._status.update()
+            try:
+                self._bridge.show_snackbar("Please add a folder to continue.", info=True)
+                self._bridge.flet_page.run_task(self._flash_folder_validation)
+            except Exception:
+                pass
             return
-        
+
+        root_drive = self._root_drive_selection()
+        if root_drive and not self._is_root_drive_warning_acknowledged(root_drive):
+            _log.info("root_drive_warning drive=%s", root_drive)
+            self._show_root_drive_warning(root_drive)
+            return
+        self._begin_scan()
+
+    def _begin_scan(self) -> None:
         self._was_cancelled = False
         self._pending_partial_results = []
-        self._pending_partial_mode = self._selected_mode
+        scan_modes = self._selected_modes_for_scan()
+        self._pending_partial_mode = "+".join(scan_modes)
+        self._hide_cancelled_results_banner()
+        self._io_failure_hits_by_root.clear()
+        self._io_pause_dialog_open = False
+        self._io_paused_root = ""
         self._scan_files_catalogued = 0
         self._bar_slices = 0
         self._bar_active_markers.clear()
@@ -1313,11 +1257,20 @@ class DashboardPage(ft.Column):
         self._ring.value = None  # indeterminate until first progress tick
         self._ring.color = self._heat_color_for_ratio(0.0)
         self._ring_phase_label.value = ""
+        self._scan_mode_run_label.value = self._scan_modes_display_label(scan_modes)
         self._ring_counter.value = "Files found so far: 0"
         self._ring_counter_tip.visible = False
         self._ring_timer.value = ""
+        self._hash_algo_label.value = ""
+        self._hash_algo_label.visible = False
         self._ring_path.value = ""
         self._ring_label.value = "Preparing scan…"
+        self._progress.value = 0.0
+        self._progress.visible = True
+        self._progress_label.visible = True
+        self._progress_detail.visible = True
+        self._progress_label.value = "0.0% complete"
+        self._progress_detail.value = "Candidates: 0"
         self._cancel_btn.text = "Cancel Scan"
         self._cancel_btn.disabled = False
         self._cancel_btn.visible = True
@@ -1329,9 +1282,18 @@ class DashboardPage(ft.Column):
             p.visible = False
         self._scan_view.visible = True
         DashboardPage._safe_update(self)
+        self._persist_incomplete_scan_session(status="in_progress")
+        _log.info(
+            "scan_start folders=%d modes=%s archives=%s",
+            len(self._folders),
+            scan_modes,
+            bool(self._scan_options.get("scan_archives", False)),
+        )
 
-        self._bridge.begin_scan_session(self._folders, self._selected_mode)
+        self._bridge.begin_scan_session(self._folders, "+".join(scan_modes))
         self._start_scan_elapsed_timer()
+        self._speed_points.clear()
+        self._last_path_paint_ts = 0.0
         self._ring_timer.value = self._build_scan_timer_line()
         try:
             if self._ring_timer.page is not None:
@@ -1344,9 +1306,173 @@ class DashboardPage(ft.Column):
             backend.set_on_progress(self._on_scan_progress)
             backend.set_on_complete(self._on_scan_complete)
             backend.set_on_error(self._on_scan_error)
-            backend.start_scan(self._folders, mode=self._selected_mode, options=dict(self._scan_options))
+            backend.start_scan(self._folders, mode=scan_modes, options=dict(self._scan_options))
         except Exception as err:
             self._on_scan_error(f"Backend communication error: {err}")
+
+    def _root_drive_selection(self) -> str:
+        for p in self._folders:
+            try:
+                resolved = Path(p).resolve()
+            except OSError:
+                resolved = Path(p)
+            anchor = str(resolved.anchor or "").upper()
+            if not anchor:
+                continue
+            norm = str(resolved).replace("/", "\\").rstrip("\\")
+            root = anchor.rstrip("\\")
+            if norm == root:
+                return anchor
+        return ""
+
+    def _is_root_drive_warning_acknowledged(self, drive_anchor: str) -> bool:
+        settings = self._bridge.get_settings()
+        scan_cfg = settings.get("scan") if isinstance(settings, dict) else {}
+        warned = scan_cfg.get("warned_root_drives") if isinstance(scan_cfg, dict) else []
+        if not isinstance(warned, list):
+            return False
+        needle = str(drive_anchor).upper()
+        return needle in [str(x).upper() for x in warned]
+
+    def _ack_root_drive_warning(self, drive_anchor: str) -> None:
+        settings = self._bridge.get_settings()
+        if not isinstance(settings, dict):
+            settings = {}
+        scan_cfg = settings.get("scan")
+        if not isinstance(scan_cfg, dict):
+            scan_cfg = {}
+        warned = scan_cfg.get("warned_root_drives")
+        if not isinstance(warned, list):
+            warned = []
+        anchor = str(drive_anchor).upper()
+        if anchor not in [str(x).upper() for x in warned]:
+            warned.append(anchor)
+            scan_cfg["warned_root_drives"] = warned
+            settings["scan"] = scan_cfg
+            self._bridge.save_settings(settings)
+
+    def _show_root_drive_warning(self, drive_anchor: str) -> None:
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Root drive scan warning"),
+            content=ft.Text(
+                f"Scanning {drive_anchor} can take hours and include many system files. Continue?"
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _e: self._bridge.dismiss_top_dialog()),
+                ft.FilledButton(
+                    "Continue",
+                    on_click=lambda _e, d=drive_anchor: self._confirm_root_drive_scan(d),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._bridge.show_modal_dialog(dialog)
+
+    def _confirm_root_drive_scan(self, drive_anchor: str) -> None:
+        self._bridge.dismiss_top_dialog()
+        self._ack_root_drive_warning(drive_anchor)
+        _log.info("root_drive_warning_acknowledged drive=%s", drive_anchor)
+        self._begin_scan()
+
+    def _persist_incomplete_scan_session(self, *, status: str) -> None:
+        payload = {
+            "status": str(status),
+            "timestamp": time.time(),
+            "folders": [str(p) for p in self._folders],
+            "mode": str(self._selected_mode or "files"),
+            "modes": list(self._selected_modes_for_scan()),
+            "options": dict(self._scan_options),
+        }
+        try:
+            _INCOMPLETE_SCAN_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _INCOMPLETE_SCAN_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError:
+            _log.exception("Failed writing incomplete scan snapshot")
+
+    def _clear_incomplete_scan_session(self) -> None:
+        try:
+            if _INCOMPLETE_SCAN_PATH.exists():
+                _INCOMPLETE_SCAN_PATH.unlink()
+        except OSError:
+            _log.exception("Failed clearing incomplete scan snapshot")
+
+    def prompt_resume_incomplete_scan_if_needed(self) -> None:
+        if not _INCOMPLETE_SCAN_PATH.exists():
+            return
+        try:
+            data = json.loads(_INCOMPLETE_SCAN_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            self._clear_incomplete_scan_session()
+            return
+        if not isinstance(data, dict):
+            self._clear_incomplete_scan_session()
+            return
+        folders = data.get("folders")
+        if not isinstance(folders, list) or not folders:
+            self._clear_incomplete_scan_session()
+            return
+        ts = float(data.get("timestamp", time.time()) or time.time())
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Resume incomplete scan?"),
+            content=ft.Text(f"An incomplete scan from {stamp} was found. Resume now?"),
+            actions=[
+                ft.TextButton("Discard", on_click=lambda _e: self._discard_incomplete_resume_prompt()),
+                ft.FilledButton("Resume", on_click=lambda _e, d=data: self._resume_incomplete_scan(d)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._bridge.show_modal_dialog(dialog)
+
+    def _discard_incomplete_resume_prompt(self) -> None:
+        self._bridge.dismiss_top_dialog()
+        self._clear_incomplete_scan_session()
+        _log.info("resume_incomplete_scan discarded")
+
+    def _resume_incomplete_scan(self, data: dict) -> None:
+        self._bridge.dismiss_top_dialog()
+        folders_raw = data.get("folders", [])
+        mode = str(data.get("mode", "files") or "files")
+        modes = data.get("modes", [])
+        options = data.get("options", {})
+        folders = [Path(str(p)) for p in folders_raw if Path(str(p)).exists()]
+        if not folders:
+            self._clear_incomplete_scan_session()
+            self._bridge.show_snackbar("Saved scan folders are unavailable. Resume skipped.", info=True)
+            return
+        self._folders = folders
+        if isinstance(modes, list):
+            restored_modes = {str(m).strip() for m in modes if str(m).strip()}
+        else:
+            restored_modes = set()
+        if not restored_modes:
+            restored_modes = {mode or "files"}
+        self._selected_modes = {"files"} if "files" in restored_modes else restored_modes
+        self._selected_mode = self._primary_selected_mode()
+        merged_options = dict(self._scan_options)
+        if isinstance(options, dict):
+            merged_options.update(options)
+        merged_options["scan_archives"] = bool(merged_options.get("scan_archives", False))
+        merged_options["min_size_bytes"] = int(merged_options.get("min_size_bytes", 0) or 0)
+        raw_ex = merged_options.get("exclude_paths", [])
+        merged_options["exclude_paths"] = [str(x) for x in raw_ex] if isinstance(raw_ex, list) else []
+        merged_options["include_subfolders"] = bool(merged_options.get("include_subfolders", True))
+        self._scan_options = merged_options
+
+        min_bytes = int(self._scan_options.get("min_size_bytes", 0) or 0)
+        min_mb = max(0, min(1024, min_bytes // (1024 * 1024)))
+        self._min_size_slider.value = min_mb
+        self._min_size_label.value = f"Min file size: {min_mb} MB"
+        self._exclude_paths_tf.value = "\n".join(self._scan_options.get("exclude_paths", []))
+        self._scan_archives_cb.value = bool(self._scan_options.get("scan_archives", False))
+        self._archives_warning.visible = bool(self._scan_options.get("scan_archives", False))
+        self._include_subfolders_sw.value = bool(self._scan_options.get("include_subfolders", True))
+        self._refresh_folder_chips()
+        self._update_modes_ui()
+        _log.info("resume_incomplete_scan folders=%d mode=%s", len(self._folders), self._selected_mode)
+        self._begin_scan()
 
     _RING_INDETERMINATE_STAGES = frozenset({ScanStage.DISCOVERING, ScanStage.GROUPING_BY_SIZE})
 
@@ -1410,7 +1536,7 @@ class DashboardPage(ft.Column):
         if stage == ScanStage.HASHING_PARTIAL:
             return (
                 "Comparing file contents…",
-                "Only matching-size copies are hashed as candidates.",
+                "",
                 f"Comparing candidates: {scanned:,} / {total:,}",
             )
         if stage == ScanStage.HASHING_FULL:
@@ -1446,9 +1572,34 @@ class DashboardPage(ft.Column):
         scanned = data.get("files_scanned", 0) or 0
         total = data.get("files_total", 0) or 0
         current_file = str(data.get("current_file", "") or "")
+        current_file_path = str(data.get("current_file_path", "") or current_file)
+        total_files_in_scope = int(
+            data.get("totalFilesInScope", data.get("total_files_in_scope", 0))
+            or data.get("files_total", 0)
+            or 0
+        )
+        files_processed = int(
+            data.get("filesProcessed", data.get("files_processed", 0))
+            or data.get("files_scanned", 0)
+            or 0
+        )
+        candidates_found = int(
+            data.get("candidatesFound", data.get("candidates_found", 0))
+            or data.get("duplicates_found", 0)
+            or 0
+        )
         rate = data.get("rate")  # None until backend has enough samples
+        active_hash_algorithm = str(
+            data.get("activeHashAlgorithm", data.get("active_hash_algorithm", "")) or ""
+        )
 
         _log.debug("UI progress recv: stage=%s scanned=%d total=%d", stage, scanned, total)
+
+        if stage == "network_error":
+            root = self._extract_unreachable_root(current_file)
+            if root:
+                self._handle_repeated_io_failure(root)
+            return
 
         # Ignore a late "complete" tick from the scanner after the user cancelled —
         # otherwise the HUD briefly shows "Finishing up…" with no terminal event.
@@ -1473,7 +1624,12 @@ class DashboardPage(ft.Column):
             self._cancel_btn.visible = False
             self._cancel_btn.text = "Cancel Scan"
             self._cancel_btn.disabled = False
-            self._partial_results_row.visible = True
+            # Return to Home automatically after cancellation terminal event.
+            self._scan_view.visible = False
+            for p in self._main_panels:
+                p.visible = True
+            self._partial_results_row.visible = False
+            self._show_cancelled_status()
             self._do_page_update()
             return
 
@@ -1510,6 +1666,11 @@ class DashboardPage(ft.Column):
             ),
             "files_catalogued": int(self._scan_files_catalogued),
             "current_file": current_file,
+            "current_file_path": current_file_path,
+            "total_files_in_scope": total_files_in_scope,
+            "files_processed": files_processed,
+            "candidates_found": candidates_found,
+            "active_hash_algorithm": active_hash_algorithm,
         }
 
         is_hs = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
@@ -1524,14 +1685,30 @@ class DashboardPage(ft.Column):
 
         self._ring_counter.value = counter
 
-        if current_file and stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
-            p = self._shorten_path(current_file)
-            body = p.replace("Current: ", "", 1) if p.startswith("Current: ") else p
-            self._ring_path.value = f"Now: {body}"
-        elif current_file:
-            self._ring_path.value = self._shorten_path(current_file)
+        now = time.monotonic()
+        if (now - self._last_path_paint_ts) >= 0.10:
+            self._last_path_paint_ts = now
+            if current_file_path:
+                self._ring_path.value = f"Scanning: {current_file_path}"
+            elif current_file:
+                self._ring_path.value = f"Scanning: {current_file}"
+            else:
+                self._ring_path.value = ""
+
+        if total_files_in_scope > 0:
+            progress_ratio = max(0.0, min(1.0, files_processed / total_files_in_scope))
+            self._progress.value = progress_ratio
+            self._progress_label.value = f"{progress_ratio * 100:.1f}% complete"
         else:
-            self._ring_path.value = ""
+            self._progress.value = None
+            self._progress_label.value = "Preparing scan…"
+        self._progress_detail.value = f"Candidates: {candidates_found:,}"
+        if active_hash_algorithm and stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+            self._hash_algo_label.value = f"Hash algorithm: {active_hash_algorithm}"
+            self._hash_algo_label.visible = True
+        else:
+            self._hash_algo_label.value = ""
+            self._hash_algo_label.visible = False
 
         self._ring_timer.value = self._build_scan_timer_line()
 
@@ -1641,6 +1818,9 @@ class DashboardPage(ft.Column):
         if not self._scan_view.visible:
             return
         try:
+            snap = self._scan_hud_snap or {}
+            fp = int(snap.get("files_processed") or 0)
+            self._speed_points.append((time.monotonic(), fp))
             self._ring_timer.value = self._build_scan_timer_line()
             DashboardPage._safe_update(self._ring_timer)
         except Exception:
@@ -1652,9 +1832,8 @@ class DashboardPage(ft.Column):
         elapsed = time.monotonic() - self._scan_elapsed_start
         el = DashboardPage._fmt_elapsed_compact(elapsed)
         snap = self._scan_hud_snap or {}
-        rate = snap.get("rate")
-        total = int(snap.get("total") or 0)
-        scanned = int(snap.get("scanned") or 0)
+        total = int(snap.get("total_files_in_scope") or snap.get("total") or 0)
+        scanned = int(snap.get("files_processed") or snap.get("scanned") or 0)
         st = str(snap.get("stage") or "")
 
         parts = [f"Elapsed {el}"]
@@ -1678,11 +1857,15 @@ class DashboardPage(ft.Column):
                 parts.append("Working…")
             return "  ·  ".join(parts)
 
-        if rate is not None and float(rate) > 0 and total > 0 and scanned < total:
-            eta_s = (float(total) - float(scanned)) / float(rate)
-            qual = " (estimating)" if elapsed < 5.0 else ""
-            parts.append(f"ETA ~{self._fmt_eta(eta_s)}{qual}")
-        elif rate is not None and float(rate) > 0 and total > 0:
+        rolling_rate = self._rolling_speed_files_per_sec()
+        if rolling_rate is not None and total > 0 and scanned < total:
+            eta_s = (float(total) - float(scanned)) / float(rolling_rate)
+            eta = self._fmt_eta(eta_s)
+            if eta:
+                parts.append(f"ETA ~{eta}")
+            else:
+                parts.append("Finishing…")
+        elif rolling_rate is not None and total > 0:
             parts.append("Finishing…")
         elif st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and total > 0 and scanned == 0:
             cf = str(snap.get("current_file") or "")
@@ -1699,12 +1882,20 @@ class DashboardPage(ft.Column):
                 parts.append("Still preparing first comparisons…")
         elif st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and total > 0 and 0 < scanned < total:
             cf = str(snap.get("current_file") or "")
-            if "Retrieving cached signatures" in cf and rate is not None and float(rate) > 0:
-                eta_s = (float(total) - float(scanned)) / float(rate)
-                parts.append(f"Retrieving cache — ETA ~{self._fmt_eta(eta_s)} (estimating)")
+            if "Retrieving cached signatures" in cf and rolling_rate is not None and float(rolling_rate) > 0:
+                eta_s = (float(total) - float(scanned)) / float(rolling_rate)
+                eta = self._fmt_eta(eta_s)
+                if eta:
+                    parts.append(f"Retrieving cache — ETA ~{eta} (estimating)")
+                else:
+                    parts.append("Retrieving cache…")
             elif elapsed >= 3.0 and scanned >= 200:
                 eta_s = (elapsed / float(scanned)) * (float(total) - float(scanned))
-                parts.append(f"ETA ~{self._fmt_eta(eta_s)} (estimating)")
+                eta = self._fmt_eta(eta_s)
+                if eta:
+                    parts.append(f"ETA ~{eta} (estimating)")
+                else:
+                    parts.append("Finishing…")
             elif elapsed >= 2.0:
                 parts.append("ETA stabilizing…")
             else:
@@ -1734,16 +1925,26 @@ class DashboardPage(ft.Column):
             self._pending_partial_results = list(results)
             self._pending_partial_mode = mode
             self._ring_timer.value = ""
+            self._scan_mode_run_label.value = ""
             has_groups = len(results) > 0
             self._view_partial_btn.visible = has_groups
             if not has_groups:
                 self._ring_phase_label.value = "No duplicate groups could be found before cancellation."
+            if has_groups:
+                self._show_cancelled_results_banner(
+                    f"Cancelled scan found {len(results):,} duplicate group(s)."
+                )
             self._scan_hud_snap = dict(self._scan_hud_snap)
             self._scan_hud_snap["rate"] = None
+            self._scan_view.visible = False
+            for p in self._main_panels:
+                p.visible = True
+            self._show_cancelled_status()
             DashboardPage._safe_update(self)
             return
 
         # Normal completion: show "View Results" button, then transition.
+        self._clear_incomplete_scan_session()
         self._ring.value = 1.0
         self._ring.color = self._heat_color_for_ratio(1.0)
         ng = len(results)
@@ -1752,6 +1953,7 @@ class DashboardPage(ft.Column):
         )
         self._ring_label.value = f"Scan complete — {ng:,} duplicate group(s) found." if ng > 0 else "Scan complete — no duplicates found."
         self._ring_counter.value = ""
+        self._scan_mode_run_label.value = ""
         self._ring_timer.value = ""
         self._ring_path.value = ""
         self._cancel_btn.visible = False
@@ -1769,19 +1971,6 @@ class DashboardPage(ft.Column):
         self._draw_bar()
         DashboardPage._safe_update(self)
 
-        # Refresh quick suggestions immediately with latest scanned folders.
-        seen_recent: set[str] = set()
-        recents: list[Path] = []
-        for p in self._folders:
-            key = str(p).lower()
-            if key in seen_recent:
-                continue
-            seen_recent.add(key)
-            recents.append(p)
-        self._session_recent_scan_paths = recents
-        self._refresh_recent_paths_bar()
-        self._refresh_quick_add_bar()
-
         self._bridge.dispatch_scan_complete(results, mode)
         try:
             reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
@@ -1795,9 +1984,15 @@ class DashboardPage(ft.Column):
         self._bridge.play_sound("success")
 
     def _on_scan_error(self, msg: str) -> None:
+        if "network path unreachable:" in str(msg or "").lower():
+            root = self._extract_unreachable_root(str(msg))
+            if root:
+                self._handle_repeated_io_failure(root)
+                return
         self._stop_scan_elapsed_timer()
         self._ring_timer.value = ""
         self._bar_row.visible = False
+        self._persist_incomplete_scan_session(status="error")
         self._bridge.abort_scan_session()
         self._scan_view.visible = False
         for p in self._main_panels:
@@ -1807,8 +2002,24 @@ class DashboardPage(ft.Column):
         self._bridge.play_sound("error")
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
-        # Immediately show "Cancelling..." and disable the button; keep the
-        # scan view visible so the user sees progress until the terminal event.
+        elapsed_minutes = max(0, int((time.monotonic() - self._scan_elapsed_start) / 60))
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Cancel scanning?"),
+            content=ft.Text(
+                f"{elapsed_minutes} minute(s) of progress will be lost."
+            ),
+            actions=[
+                ft.TextButton("Keep Scanning", on_click=lambda _ev: self._bridge.dismiss_top_dialog()),
+                ft.FilledButton("Cancel Scan", on_click=self._confirm_stop_scan),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._bridge.show_modal_dialog(dialog)
+
+    def _confirm_stop_scan(self, _e: ft.ControlEvent) -> None:
+        self._bridge.dismiss_top_dialog()
+        self._persist_incomplete_scan_session(status="cancel_requested")
         self._cancel_btn.text = "Cancelling…"
         self._cancel_btn.disabled = True
         self._was_cancelled = True
@@ -1823,6 +2034,75 @@ class DashboardPage(ft.Column):
             self._bridge.backend.cancel_scan()
         except Exception as err:
             _log.error("Failed to stop scan: %s", err)
+
+    @staticmethod
+    def _extract_unreachable_root(message: str) -> str:
+        text = str(message or "").strip()
+        m = re.search(r"Network path unreachable:\s*(.+)$", text)
+        if not m:
+            return ""
+        return str(m.group(1)).strip()
+
+    def _handle_repeated_io_failure(self, root: str) -> None:
+        key = str(root).strip()
+        if not key:
+            return
+        hits = int(self._io_failure_hits_by_root.get(key, 0)) + 1
+        self._io_failure_hits_by_root[key] = hits
+        self._status.value = f"I/O issue on {key} (attempt {hits})"
+        DashboardPage._safe_update(self._status)
+        if hits < 3 or self._io_pause_dialog_open:
+            return
+
+        self._io_pause_dialog_open = True
+        self._io_paused_root = key
+        try:
+            self._bridge.backend.pause_scan()
+        except Exception:
+            _log.exception("Failed to pause scan after repeated I/O failures")
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Drive disconnected"),
+            content=ft.Text(
+                f"Repeated read failures were detected at:\n{key}\n\n"
+                "The scan is paused. Choose Resume to keep trying, or Cancel to stop now and keep partial results."
+            ),
+            actions=[
+                ft.TextButton("Resume Scan", on_click=self._resume_after_io_pause),
+                ft.FilledButton("Cancel & Keep Partial Results", on_click=self._cancel_after_io_pause),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._bridge.show_modal_dialog(dialog)
+
+    def _resume_after_io_pause(self, _e: ft.ControlEvent) -> None:
+        self._bridge.dismiss_top_dialog()
+        self._io_pause_dialog_open = False
+        if self._io_paused_root:
+            self._io_failure_hits_by_root[self._io_paused_root] = 0
+        self._io_paused_root = ""
+        try:
+            self._bridge.backend.resume_scan()
+        except Exception:
+            _log.exception("Failed to resume scan after I/O pause")
+
+    def _cancel_after_io_pause(self, _e: ft.ControlEvent) -> None:
+        self._bridge.dismiss_top_dialog()
+        self._io_pause_dialog_open = False
+        paused_root = self._io_paused_root
+        self._io_paused_root = ""
+        self._persist_incomplete_scan_session(status="cancel_requested")
+        self._cancel_btn.text = "Cancelling…"
+        self._cancel_btn.disabled = True
+        self._was_cancelled = True
+        try:
+            self._bridge.backend.cancel_scan()
+        except Exception:
+            _log.exception("Failed to cancel scan after I/O pause")
+        if paused_root:
+            self._status.value = f"Drive disconnected at {paused_root}. Cancelling and preserving partial results."
+            DashboardPage._safe_update(self._status)
 
     def _go_to_results(self, e: ft.ControlEvent) -> None:
         """Navigate to results after a successful scan completion."""
@@ -1852,6 +2132,7 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
+        self._hide_cancelled_results_banner()
         self._status.value = f"Scan cancelled — {len(results):,} partial groups available."
         DashboardPage._safe_update(self)
         try:
@@ -1868,26 +2149,94 @@ class DashboardPage(ft.Column):
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
-        self._status.value = "Scan cancelled."
+        self._show_cancelled_status()
         DashboardPage._safe_update(self)
 
     @staticmethod
     def _fmt_eta(seconds: float) -> str:
         s = max(0, int(seconds))
+        if s < 60:
+            return ""
         m, s = divmod(s, 60)
         h, m = divmod(m, 60)
         if h > 0:
             return f"{h}h {m}m"
-        if m > 0:
-            return f"{m}m {s}s"
-        return f"{s}s"
+        return f"{m}m {s}s"
+
+    def _rolling_speed_files_per_sec(self) -> float | None:
+        if len(self._speed_points) < 2:
+            return None
+        points = list(self._speed_points)
+        t0, f0 = points[0]
+        t1, f1 = points[-1]
+        dt = t1 - t0
+        if dt <= 0.0:
+            return None
+        df = f1 - f0
+        if df <= 0:
+            return None
+        return df / dt
 
     @staticmethod
     def _format_folder_chip_label(path: Path) -> str:
-        parts = list(path.parts)
-        if len(parts) >= 3:
-            return f"{parts[0]}\\...\\{parts[-1]}"
         return str(path)
+
+    async def _clear_status_after(self, token: int, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        if token != self._status_token:
+            return
+        self._status.value = ""
+        DashboardPage._safe_update(self._status)
+
+    def _show_cancelled_status(self) -> None:
+        ts = time.strftime("%H:%M:%S")
+        self._status_token += 1
+        token = self._status_token
+        self._status.value = f"Scan cancelled at {ts}."
+        DashboardPage._safe_update(self._status)
+        try:
+            self._bridge.flet_page.run_task(self._clear_status_after, token, 5.0)
+        except Exception:
+            pass
+
+    async def _hide_cancelled_banner_after(self, token: int, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        if token != self._cancelled_banner_token:
+            return
+        self._cancelled_results_banner.visible = False
+        DashboardPage._safe_update(self._cancelled_results_banner)
+
+    def _cancelled_banner_timeout_settings(self) -> tuple[bool, float]:
+        auto_hide = True
+        timeout_seconds = 60.0
+        try:
+            settings = self._bridge.get_settings()
+            general = settings.get("general", {}) if isinstance(settings, dict) else {}
+            auto_hide = bool(general.get("partial_results_banner_auto_hide", True))
+            raw_timeout = int(general.get("partial_results_banner_timeout_seconds", 60) or 60)
+            timeout_seconds = 30.0 if raw_timeout == 30 else 60.0
+        except Exception:
+            pass
+        return auto_hide, timeout_seconds
+
+    def _show_cancelled_results_banner(self, message: str) -> None:
+        self._cancelled_banner_token += 1
+        token = self._cancelled_banner_token
+        self._cancelled_results_text.value = str(message)
+        self._cancelled_results_banner.visible = True
+        DashboardPage._safe_update(self._cancelled_results_banner)
+        auto_hide, timeout_seconds = self._cancelled_banner_timeout_settings()
+        if not auto_hide:
+            return
+        try:
+            self._bridge.flet_page.run_task(self._hide_cancelled_banner_after, token, timeout_seconds)
+        except Exception:
+            pass
+
+    def _hide_cancelled_results_banner(self) -> None:
+        self._cancelled_banner_token += 1
+        self._cancelled_results_banner.visible = False
+        DashboardPage._safe_update(self._cancelled_results_banner)
 
     @staticmethod
     def _shorten_path(path: str, max_len: int = 88) -> str:
@@ -1907,8 +2256,6 @@ class DashboardPage(ft.Column):
         now = time.monotonic()
         should_refresh_lists = (not self._initial_load_done) or ((now - self._last_on_show_ts) > 1.5)
         if should_refresh_lists:
-            self._refresh_recent_paths_bar()
-            self._refresh_quick_add_bar()
             self._last_on_show_ts = now
         self._initial_load_done = True
         # Do not call super().update() here unnecessarily if _fetch handled updates
@@ -1930,12 +2277,12 @@ class DashboardPage(ft.Column):
         self._mode_label.color = self._t.colors.fg_muted
         self._ring_label.color = self._t.colors.fg
         self._ring_phase_label.color = self._t.colors.fg_muted
+        self._scan_mode_run_label.color = self._t.colors.fg2
         self._ring_timer.color = self._t.colors.fg_muted
         self._ring_counter_tip.icon_color = self._t.colors.fg_muted
         self._update_stats_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
-        self._refresh_quick_add_bar()
 
         if self._is_mounted():
             self.update()

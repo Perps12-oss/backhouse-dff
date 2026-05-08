@@ -71,6 +71,8 @@ class SettingsPage(ft.Column):
         self._general_reduce_motion: ft.Checkbox
         self._general_sound: ft.Checkbox
         self._general_skip_results: ft.Checkbox
+        self._general_partial_banner_autohide: ft.Checkbox
+        self._general_partial_banner_timeout: ft.Dropdown
 
         # Control References (Appearance)
         self._appearance_font_slider: ft.Slider
@@ -242,6 +244,14 @@ class SettingsPage(ft.Column):
         self._general_reduce_motion.value = self._settings["accessibility"].get("reduce_motion", False)
         self._general_sound.value = self._settings["notifications"].get("sound_enabled", False)
         self._general_skip_results.value = bool(self._settings["general"].get("skip_results_after_scan", False))
+        self._general_partial_banner_autohide.value = bool(
+            self._settings["general"].get("partial_results_banner_auto_hide", True)
+        )
+        timeout = int(self._settings["general"].get("partial_results_banner_timeout_seconds", 60) or 60)
+        if timeout not in (30, 60):
+            timeout = 60
+        self._general_partial_banner_timeout.value = str(timeout)
+        self._general_partial_banner_timeout.disabled = not bool(self._general_partial_banner_autohide.value)
 
         # Appearance
         self._appearance_font_slider.value = self._settings["appearance"].get("font_size", 13)
@@ -316,6 +326,25 @@ class SettingsPage(ft.Column):
             label="Skip Results page after scan (open Review directly)",
             value=bool(self._settings["general"].get("skip_results_after_scan", False)),
         )
+        self._general_partial_banner_autohide = ft.Checkbox(
+            label="Auto-hide partial-results banner on Home",
+            value=bool(self._settings["general"].get("partial_results_banner_auto_hide", True)),
+            on_change=lambda e: self._on_partial_banner_autohide_change(bool(e.control.value)),
+        )
+        timeout_saved = int(self._settings["general"].get("partial_results_banner_timeout_seconds", 60) or 60)
+        timeout_saved = timeout_saved if timeout_saved in (30, 60) else 60
+        self._general_partial_banner_timeout = ft.Dropdown(
+            label="Partial-results banner duration",
+            options=[
+                ft.dropdown.Option(key="30", text="30 seconds"),
+                ft.dropdown.Option(key="60", text="60 seconds"),
+            ],
+            value=str(timeout_saved),
+            width=240,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
+            disabled=not bool(self._general_partial_banner_autohide.value),
+        )
         for cb in [
             self._general_confirm,
             self._general_remember,
@@ -324,8 +353,10 @@ class SettingsPage(ft.Column):
             self._general_reduce_motion,
             self._general_sound,
             self._general_skip_results,
+            self._general_partial_banner_autohide,
         ]:
             content.controls.append(cb)
+        content.controls.append(self._general_partial_banner_timeout)
 
         self._tab_contents["general"].content = content
 
@@ -413,6 +444,11 @@ class SettingsPage(ft.Column):
             self._appearance_font_label.update()
         # Live preview so slider has visible effect immediately.
         self._apply_font_size_to_page(value)
+
+    def _on_partial_banner_autohide_change(self, enabled: bool) -> None:
+        self._general_partial_banner_timeout.disabled = not bool(enabled)
+        if self._is_mounted():
+            self._general_partial_banner_timeout.update()
 
     def _build_performance_tab(self) -> None:
         t = self._t
@@ -660,6 +696,11 @@ class SettingsPage(ft.Column):
         self._settings["accessibility"]["reduce_motion"] = bool(self._general_reduce_motion.value)
         self._settings["notifications"]["sound_enabled"] = bool(self._general_sound.value)
         self._settings["general"]["skip_results_after_scan"] = bool(self._general_skip_results.value)
+        self._settings["general"]["partial_results_banner_auto_hide"] = bool(
+            self._general_partial_banner_autohide.value
+        )
+        timeout_raw = str(self._general_partial_banner_timeout.value or "60")
+        self._settings["general"]["partial_results_banner_timeout_seconds"] = 30 if timeout_raw == "30" else 60
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
         self._settings["appearance"]["ui_theme_preset"] = str(

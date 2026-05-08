@@ -6,6 +6,7 @@ from pathlib import Path
 from cerebro.engines.orchestrator import ScanOrchestrator
 from cerebro.engines.turbo_file_engine import TurboFileEngine
 from cerebro.engines.base_engine import ScanProgress, ScanState
+from cerebro.core.scanners.turbo_scanner import TurboScanner, TurboScanConfig
 
 
 def test_orchestrator_can_open_files_mode() -> None:
@@ -68,3 +69,39 @@ def test_turbo_progress_total_never_drops_below_scanned_across_phases() -> None:
     engine._on_turbo_progress("hashing_full", 5000, 22080)
     assert engine._progress.files_scanned >= 22487
     assert engine._progress.files_total >= engine._progress.files_scanned
+
+
+def test_turbo_cache_invalidates_when_scan_scope_options_change(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    scan_root = tmp_path / "scan"
+    scan_root.mkdir()
+    (scan_root / "a.txt").write_text("same-content", encoding="utf-8")
+    (scan_root / "b.txt").write_text("same-content", encoding="utf-8")
+
+    scanner_a = TurboScanner(
+        TurboScanConfig(
+            cache_dir=cache_dir,
+            use_cache=True,
+            incremental=True,
+            min_size=0,
+            exclude_paths=set(),
+            hash_algorithm="sha256",
+        )
+    )
+    list(scanner_a.scan([scan_root]))
+    assert scanner_a.hash_cache is not None
+    assert scanner_a.hash_cache.get_stats()["total_entries"] > 0
+
+    scanner_b = TurboScanner(
+        TurboScanConfig(
+            cache_dir=cache_dir,
+            use_cache=True,
+            incremental=True,
+            min_size=10 * 1024 * 1024,
+            exclude_paths={str(scan_root)},
+            hash_algorithm="sha256",
+        )
+    )
+    list(scanner_b.scan([scan_root]))
+    assert scanner_b.hash_cache is not None
+    assert scanner_b.hash_cache.get_stats()["total_entries"] == 0

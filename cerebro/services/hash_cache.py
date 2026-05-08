@@ -167,12 +167,20 @@ class HashCache:
     # Quick hash
     # ------------------------------------------------------------------
 
-    def get_quick(self, path: str | Path, sig: StatSignature) -> Optional[str]:
+    def get_quick(
+        self,
+        path: str | Path,
+        sig: StatSignature,
+        *,
+        expected_algo: Optional[str] = None,
+    ) -> Optional[str]:
         row = self._get_row(path)
         if not row:
             return None
-        size, mtime_ns, dev, inode, quick_hash = row
+        size, mtime_ns, dev, inode, quick_hash, quick_algo = row
         if (size, mtime_ns, dev, inode) != (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+            return None
+        if expected_algo and str(quick_algo or "").lower() != str(expected_algo).lower():
             return None
         return quick_hash
 
@@ -197,12 +205,20 @@ class HashCache:
     # Full hash
     # ------------------------------------------------------------------
 
-    def get_full(self, path: str | Path, sig: StatSignature) -> Optional[str]:
+    def get_full(
+        self,
+        path: str | Path,
+        sig: StatSignature,
+        *,
+        expected_algo: Optional[str] = None,
+    ) -> Optional[str]:
         row = self._get_row_full(path)
         if not row:
             return None
-        size, mtime_ns, dev, inode, full_hash = row
+        size, mtime_ns, dev, inode, full_hash, full_algo = row
         if (size, mtime_ns, dev, inode) != (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+            return None
+        if expected_algo and str(full_algo or "").lower() != str(expected_algo).lower():
             return None
         return full_hash
 
@@ -223,20 +239,26 @@ class HashCache:
     def _require_conn(self) -> sqlite3.Connection:
         return self.get_connection()
 
-    def _get_row(self, path: str | Path) -> Optional[Tuple[int, int, int, int, Optional[str]]]:
+    def _get_row(
+        self,
+        path: str | Path,
+    ) -> Optional[Tuple[int, int, int, int, Optional[str], Optional[str]]]:
         conn = self._require_conn()
         p = str(path)
         cur = conn.execute(
-            "SELECT size, mtime_ns, dev, inode, quick_hash FROM file_hashes WHERE path=?",
+            "SELECT size, mtime_ns, dev, inode, quick_hash, quick_algo FROM file_hashes WHERE path=?",
             (p,),
         )
         return cur.fetchone()
 
-    def _get_row_full(self, path: str | Path) -> Optional[Tuple[int, int, int, int, Optional[str]]]:
+    def _get_row_full(
+        self,
+        path: str | Path,
+    ) -> Optional[Tuple[int, int, int, int, Optional[str], Optional[str]]]:
         conn = self._require_conn()
         p = str(path)
         cur = conn.execute(
-            "SELECT size, mtime_ns, dev, inode, full_hash FROM file_hashes WHERE path=?",
+            "SELECT size, mtime_ns, dev, inode, full_hash, full_algo FROM file_hashes WHERE path=?",
             (p,),
         )
         return cur.fetchone()
@@ -313,6 +335,8 @@ class HashCache:
         self,
         paths: list,
         sigs: dict,
+        *,
+        expected_algo: Optional[str] = None,
     ) -> dict:
         """Batch lookup of quick hashes.
 
@@ -331,12 +355,14 @@ class HashCache:
             chunk = path_strs[i : i + self._SQLITE_MAX_VARS]
             ph = ",".join("?" * len(chunk))
             for row in conn.execute(
-                f"SELECT path, size, mtime_ns, dev, inode, quick_hash FROM file_hashes WHERE path IN ({ph})",
+                f"SELECT path, size, mtime_ns, dev, inode, quick_hash, quick_algo FROM file_hashes WHERE path IN ({ph})",
                 chunk,
             ):
-                p_str, size, mtime_ns, dev, inode, quick_hash = row
+                p_str, size, mtime_ns, dev, inode, quick_hash, quick_algo = row
                 sig = sigs.get(p_str)
                 if sig and (size, mtime_ns, dev, inode) == (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+                    if expected_algo and str(quick_algo or "").lower() != str(expected_algo).lower():
+                        continue
                     results[p_str] = quick_hash
         return results
 
@@ -344,6 +370,8 @@ class HashCache:
         self,
         paths: list,
         sigs: dict,
+        *,
+        expected_algo: Optional[str] = None,
     ) -> dict:
         """Batch lookup of full hashes.
 
@@ -358,12 +386,14 @@ class HashCache:
             chunk = path_strs[i : i + self._SQLITE_MAX_VARS]
             ph = ",".join("?" * len(chunk))
             for row in conn.execute(
-                f"SELECT path, size, mtime_ns, dev, inode, full_hash FROM file_hashes WHERE path IN ({ph})",
+                f"SELECT path, size, mtime_ns, dev, inode, full_hash, full_algo FROM file_hashes WHERE path IN ({ph})",
                 chunk,
             ):
-                p_str, size, mtime_ns, dev, inode, full_hash = row
+                p_str, size, mtime_ns, dev, inode, full_hash, full_algo = row
                 sig = sigs.get(p_str)
                 if sig and (size, mtime_ns, dev, inode) == (sig.size, sig.mtime_ns, sig.dev, sig.inode):
+                    if expected_algo and str(full_algo or "").lower() != str(expected_algo).lower():
+                        continue
                     results[p_str] = full_hash
         return results
 
@@ -389,3 +419,10 @@ class HashCache:
         conn = self._require_conn()
         conn.execute("VACUUM")
         conn.commit()
+
+    def clear_all(self) -> None:
+        """Delete all cached hash rows. Requires open()."""
+        with self._write_lock:
+            conn = self._require_conn()
+            conn.execute("DELETE FROM file_hashes")
+            conn.commit()

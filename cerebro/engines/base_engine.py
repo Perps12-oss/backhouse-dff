@@ -35,8 +35,13 @@ class ScanProgress:
     bytes_reclaimable: int = 0
     elapsed_seconds: float = 0.0
     current_file: str = ""  # path of file currently being processed
+    current_file_path: str = ""  # absolute path currently being iterated
     eta_seconds: Optional[float] = None  # estimated time to completion
     stage: str = ""  # human-readable phase, e.g. "discovering", "hashing_partial"
+    total_files_in_scope: int = 0  # static denominator for progress
+    files_processed: int = 0  # monotonic processed files against scope
+    candidates_found: int = 0  # monotonic candidate pool size discovered
+    active_hash_algorithm: str = ""  # currently selected hash algorithm
 
 
 @dataclass

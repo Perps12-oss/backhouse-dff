@@ -76,7 +76,7 @@ def _migrate_1_0_0_to_2_0_0(data: Dict[str, Any]) -> Dict[str, Any]:
             "default_mode": data.get("scan_mode", "standard"),
             "min_file_size_kb": data.get("min_file_size_kb", 100),
             "max_file_size_mb": data.get("max_file_size_mb", 0),
-            "default_hash_algorithm": data.get("hash_algorithm", "md5"),
+            "default_hash_algorithm": data.get("hash_algorithm", "auto"),
             "cache_mode": data.get("cache_mode", 1),
             "recursive": data.get("recursive", True),
             "follow_symlinks": data.get("follow_symlinks", False),

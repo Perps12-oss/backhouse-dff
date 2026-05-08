@@ -46,7 +46,7 @@ class AppLayout(ft.Row):
             ft.NavigationRailDestination(
                 icon=r.icon,
                 selected_icon=r.icon,
-                label=ft.Text(r.label, size=11, weight=ft.FontWeight.W_500, color="#D7E6FF"),
+                label=ft.Text(r.label, size=10, weight=ft.FontWeight.W_500, color="#D7E6FF"),
             )
             for r in ROUTES
         ]
@@ -57,38 +57,39 @@ class AppLayout(ft.Row):
         _wordmark = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, color="#22D3EE", size=22),
+                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, color="#22D3EE", size=18),
                     ft.Text(
                         "CEREBRO",
-                        size=8,
+                        size=7,
                         weight=ft.FontWeight.BOLD,
                         color="#22D3EE",
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=2,
+                spacing=1,
             ),
-            padding=ft.padding.only(top=8, bottom=4),
+            padding=ft.padding.only(top=4, bottom=1),
         )
 
         # Version badge pinned at the bottom of the rail
         _version_badge = ft.Container(
             content=ft.Text("v2.0", size=8, color="#6E7681"),
-            padding=ft.padding.only(bottom=8),
+            padding=ft.padding.only(bottom=6),
         )
 
         self._nav = ft.NavigationRail(
             selected_index=0,
             destinations=nav_destinations,
             on_change=self._on_nav_change,
-            min_width=72,
+            min_width=60,
             min_extended_width=200,
+            group_alignment=-0.96,
             label_type=ft.NavigationRailLabelType.ALL,
             bgcolor="#080C11",
-            indicator_color=ft.Colors.with_opacity(0.28, "#22D3EE"),
-            indicator_shape=ft.RoundedRectangleBorder(radius=8),
-            selected_label_text_style=ft.TextStyle(color="#22D3EE", size=12, weight=ft.FontWeight.W_700),
-            unselected_label_text_style=ft.TextStyle(color="#9FB4D6", size=11, weight=ft.FontWeight.W_500),
+            indicator_color=ft.Colors.with_opacity(0.09, "#22D3EE"),
+            indicator_shape=ft.RoundedRectangleBorder(radius=4),
+            selected_label_text_style=ft.TextStyle(color="#D7E6FF", size=11, weight=ft.FontWeight.W_700),
+            unselected_label_text_style=ft.TextStyle(color="#B7C8E4", size=10, weight=ft.FontWeight.W_500),
             leading=_wordmark,
             trailing=_version_badge,
         )

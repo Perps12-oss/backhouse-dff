@@ -22,7 +22,12 @@ def scan_progress_to_dict(p: ScanProgress) -> Dict[str, Any]:
         "bytes_reclaimable": p.bytes_reclaimable,
         "elapsed_seconds": p.elapsed_seconds,
         "current_file": p.current_file,
+        "current_file_path": p.current_file_path or p.current_file,
         "eta_seconds": p.eta_seconds,
         "stage": p.stage,
+        "total_files_in_scope": p.total_files_in_scope,
+        "files_processed": p.files_processed,
+        "candidates_found": p.candidates_found,
+        "active_hash_algorithm": p.active_hash_algorithm,
     }
     return d

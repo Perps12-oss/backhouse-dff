@@ -1171,7 +1171,10 @@ class ReviewPage(ft.Column):
                         success=True,
                     )
             if failed > 0:
-                self._bridge.show_snackbar(f"{failed:,} files could not be deleted.", error=True)
+                self._bridge.show_snackbar(
+                    f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
+                    error=True,
+                )
             if not self._groups:
                 self._enter_mode("empty")
             else:
@@ -1751,7 +1754,10 @@ class ReviewPage(ft.Column):
                         success=True,
                     )
             if failed > 0:
-                self._bridge.show_snackbar(f"Failed to delete {failed:,} file(s).", error=True)
+                self._bridge.show_snackbar(
+                    f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
+                    error=True,
+                )
             if not self._groups:
                 self._enter_mode("empty")
                 return

@@ -48,21 +48,33 @@ class DeleteService:
         if not paths:
             return 0, 0, 0, []
 
+        existing_paths: list[str] = []
+        missing_paths: list[str] = []
         sizes_by_path: dict[str, int] = {}
         for p in paths:
             try:
-                sizes_by_path[str(p)] = Path(p).stat().st_size
+                pp = Path(p)
+                if not pp.exists():
+                    missing_paths.append(str(p))
+                    sizes_by_path[str(p)] = 0
+                    continue
+                sizes_by_path[str(p)] = pp.stat().st_size
+                existing_paths.append(str(p))
             except OSError:
                 sizes_by_path[str(p)] = 0
+                missing_paths.append(str(p))
+
+        if not existing_paths:
+            return 0, len(paths), 0, []
 
         if policy == DeletionPolicy.TRASH:
-            deleted_paths = self._delete_to_managed_trash(paths, sizes_by_path, progress_cb)
+            deleted_paths = self._delete_to_managed_trash(existing_paths, sizes_by_path, progress_cb)
             deleted_n = len(deleted_paths)
-            failed_n = max(0, len(paths) - deleted_n)
+            failed_n = max(0, len(existing_paths) - deleted_n) + len(missing_paths)
             reclaimed = int(sum(sizes_by_path.get(p, 0) for p in deleted_paths))
             return deleted_n, failed_n, reclaimed, deleted_paths
 
-        operations = [SimpleNamespace(path=Path(p)) for p in paths]
+        operations = [SimpleNamespace(path=Path(p)) for p in existing_paths]
         plan = SimpleNamespace(
             scan_id="flet_ui",
             mode=policy.value,
@@ -82,6 +94,7 @@ class DeleteService:
         for p in result.deleted:
             log_deletion_event(str(p), sizes_by_path.get(str(p), 0), mode_tag)
         deleted_paths = [str(p) for p in result.deleted]
+        failed_n += len(missing_paths)
         return deleted_n, failed_n, int(result.bytes_reclaimed or 0), deleted_paths
 
     def delete_and_prune(
