@@ -2112,7 +2112,7 @@ class DashboardPage(ft.Column):
         self._status.value = "Scan complete."
         DashboardPage._safe_update(self)
         try:
-            self._bridge.navigate("duplicates")
+            self._bridge.navigate("review")
         except Exception:
             pass
 
@@ -2137,7 +2137,7 @@ class DashboardPage(ft.Column):
         DashboardPage._safe_update(self)
         try:
             self._bridge.dispatch_scan_complete(results, mode)
-            self._bridge.navigate("duplicates")
+            self._bridge.navigate("review")
         except Exception as err:
             _log.error("Navigate to partial results failed: %s", err)
 

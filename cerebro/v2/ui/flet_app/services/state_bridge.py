@@ -354,7 +354,7 @@ class StateBridge:
         if cached:
             mode = self.state.scan_mode or "files"
             self._coordinator.scan_completed(list(cached), mode)
-            self._coordinator.set_active_tab("duplicates")
+            self._coordinator.set_active_tab("review")
             self.show_snackbar("Restored the last scan from memory.", success=True)
             return
         self.show_snackbar("No scan results in memory. Run a new scan from Home.", info=True)

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Set
 from cerebro.engines.base_engine import DuplicateGroup
 
 VALID_MAIN_TAB_KEYS: frozenset[str] = frozenset(
-    ("dashboard", "duplicates", "review", "history", "settings")
+    ("dashboard", "review", "history", "settings")
 )
 
 
@@ -67,13 +67,7 @@ class AppState:
     history_filter: str = ""
     history_page: int = 0
     history_page_size: int = 30
-    # Duplicates — file-type filter + text search (FINAL PLAN §5.3)
-    results_file_filter: str = "all"
-    results_text_filter: str = ""
-    # Group grid sort
-    results_group_sort_column: str = "reclaimable"
-    results_group_sort_asc: bool = False
-    # Review file-type filter
+    # Workspace file-type filter (unified, was split across results_file_filter / review_file_filter)
     review_file_filter: str = "all"
     # Deletion History sub-tab
     history_deletion_rows: List[Dict[str, Any]] = field(default_factory=list)

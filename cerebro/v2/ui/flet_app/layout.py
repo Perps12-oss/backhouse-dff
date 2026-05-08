@@ -104,7 +104,7 @@ class AppLayout(ft.Row):
         idx = e.control.selected_index
         if 0 <= idx < len(ROUTES):
             route = ROUTES[idx]
-            if route.key in {"duplicates", "review"} and not bool(self._bridge.state.groups):
+            if route.key == "review" and not bool(self._bridge.state.groups):
                 self._nav.selected_index = next((i for i, r in enumerate(ROUTES) if r.key == "dashboard"), 0)
                 self._nav.update()
                 self._bridge.show_snackbar("Run a scan first to unlock Results and Review.", info=True)
@@ -117,7 +117,7 @@ class AppLayout(ft.Row):
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
-        if key in {"duplicates", "review"} and not bool(self._bridge.state.groups):
+        if key == "review" and not bool(self._bridge.state.groups):
             key = "dashboard"
         # If already on this key and content is mounted, skip redundant rebuild.
         # If content host is unexpectedly empty, force remount for resilience.

@@ -169,7 +169,6 @@ def _main(page: ft.Page) -> None:
 
     # Singleton pages so scan results / state survive tab switches.
     from cerebro.v2.ui.flet_app.pages.dashboard_page import DashboardPage
-    from cerebro.v2.ui.flet_app.pages.results_page import ResultsPage
     from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
     from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
@@ -181,8 +180,6 @@ def _main(page: ft.Page) -> None:
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
-    results_page = ResultsPage(bridge)
-    _log.info("init: results built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     review_page = ReviewPage(bridge)
     _log.info("init: review built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     history_page = HistoryPage(bridge)
@@ -195,9 +192,6 @@ def _main(page: ft.Page) -> None:
     except Exception:
         _log.debug("Could not register dashboard progress control", exc_info=True)
     try:
-        bridge.register_action_control("ResultsFilesRemoved", results_page._group_list)  # type: ignore[attr-defined]
-        bridge.register_action_control("ScanCompleted", results_page._group_list)  # type: ignore[attr-defined]
-        bridge.register_action_control("GroupsPruned", results_page._group_list)  # type: ignore[attr-defined]
         bridge.register_action_control("ResultsFilesRemoved", review_page._grid)  # type: ignore[attr-defined]
         bridge.register_action_control("ScanCompleted", review_page._grid)  # type: ignore[attr-defined]
         bridge.register_action_control("GroupsPruned", review_page._grid)  # type: ignore[attr-defined]
@@ -206,9 +200,6 @@ def _main(page: ft.Page) -> None:
 
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
-            "ScanCompleted": [getattr(results_page, "_results_grid", None), getattr(results_page, "_summary", None)],
-            "GroupsPruned": [getattr(results_page, "_results_grid", None), getattr(results_page, "_summary", None)],
-            "ResultsViewFilterChanged": [getattr(results_page, "_filter_seg", None), getattr(results_page, "_group_list", None)],
             "ReviewNavigate": [getattr(review_page, "_compare_view", None), getattr(review_page, "_cmp_bar", None)],
             "ReviewViewFilterChanged": [getattr(review_page, "_filter_seg", None), getattr(review_page, "_grid", None)],
             "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
@@ -222,7 +213,7 @@ def _main(page: ft.Page) -> None:
 
     builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
-        "duplicates": lambda: results_page,
+        "duplicates": lambda: review_page,
         "review": lambda: review_page,
         "history": lambda: history_page,
         "exclude": lambda: exclude_page,
@@ -334,7 +325,7 @@ def _main(page: ft.Page) -> None:
 
         actions: list[tuple[str, Callable[[], None]]] = [
             ("Go to Home", lambda: layout.navigate_to("dashboard")),
-            ("Go to Results", lambda: layout.navigate_to("duplicates")),
+            ("Go to Workspace", lambda: layout.navigate_to("review")),
             ("Go to Review", lambda: layout.navigate_to("review")),
             ("Go to History", lambda: layout.navigate_to("history")),
             ("Go to Exclude", lambda: layout.navigate_to("exclude")),
@@ -584,9 +575,9 @@ def _main(page: ft.Page) -> None:
         if key in ("arrowright", "right"):
             _cycle_tab(1)
             return
-        if key == "space" and layout.current_key == "duplicates":
+        if key == "space" and layout.current_key == "review":
             try:
-                if results_page.get_groups():
+                if review_page.get_groups():
                     layout.navigate_to("review")
             except Exception:
                 _log.exception("Failed opening Review from Space shortcut")
@@ -608,17 +599,16 @@ def _main(page: ft.Page) -> None:
     # Some Flet builds do not fire on_route_change for initial route assignment.
     # Force initial mount so the content host is never left blank on startup.
     layout.navigate_to(key_for_route(page.route or default_route()))
+    if store.state.groups:
+        layout.navigate_to("review")
 
     def _sync_groups_from_state(s: AppState) -> None:
         groups = list(s.groups)
         mode = s.scan_mode or "files"
         active = layout.current_key
         if not groups:
-            results_page.load_results([], mode, defer_render=(active != "duplicates"))
             review_page.load_results([], mode, defer_render=(active != "review"))
             return
-        # Only build the heavy card/grid list if the page is currently visible.
-        results_page.load_results(groups, mode, defer_render=(active != "duplicates"))
         if active == "review":
             review_page.apply_pruned_groups(groups, mode)
         else:
@@ -659,7 +649,6 @@ def _main(page: ft.Page) -> None:
     def _on_theme_change(mode: str) -> None:
         page_map = {
             "dashboard": dashboard_page,
-            "duplicates": results_page,
             "review": review_page,
             "history": history_page,
             "exclude": exclude_page,

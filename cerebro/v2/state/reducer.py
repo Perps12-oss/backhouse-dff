@@ -15,11 +15,9 @@ from cerebro.v2.state.actions import (
     HistorySubTabChanged,
     ReviewNavigate,
     ReviewViewFilterChanged,
-    ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
     GroupsPruned,
-    ResultsGroupGridSortChanged,
     SetDryRun,
     ScanCompleted,
     ScanEnded,
@@ -46,17 +44,12 @@ RESULTS_FILE_VALID_FILTERS: frozenset[str] = frozenset(
         "other",
     )
 )
-RESULTS_GROUP_VALID_SORT: frozenset[str] = frozenset(
-    ("reclaimable", "files", "group_id", "path")
-)
 HISTORY_PAGE_VALID_SUBTABS: frozenset[str] = frozenset(("scan", "deletion"))
 
 
 def _mode_for_main_tab(key: str) -> AppMode:
     if key in ("dashboard", "history", "settings"):
         return AppMode.IDLE
-    if key == "duplicates":
-        return AppMode.RESULTS
     if key == "review":
         return AppMode.REVIEW
     return AppMode.IDLE
@@ -142,16 +135,12 @@ def _reduce_scan(state: AppState, action: Action) -> AppState | None:
             groups=g,
             scan_mode=sm,
             selected_group_id=None,
-            active_tab="duplicates",
+            active_tab="review",
             review_unlocked=True,
             scan_progress={},
             scan_can_pause=False,
             scan_can_resume=False,
             scan_is_cancelled=False,
-            results_file_filter="all",
-            results_group_sort_column="reclaimable",
-            results_group_sort_asc=False,
-            results_text_filter="",
             review_file_filter="all",
             selected_files=set(),
         )
@@ -194,15 +183,7 @@ def _reduce_history(state: AppState, action: Action) -> AppState | None:
 
 
 def _reduce_results(state: AppState, action: Action) -> AppState | None:
-    """Duplicates / results page and delete-flow transitions."""
-    if isinstance(action, ResultsGroupGridSortChanged):
-        col = action.column if action.column in RESULTS_GROUP_VALID_SORT else "reclaimable"
-        return replace(state, results_group_sort_column=col, results_group_sort_asc=bool(action.sort_asc))
-
-    if isinstance(action, ResultsViewFilterChanged):
-        fk = action.filter_key if action.filter_key in RESULTS_FILE_VALID_FILTERS else "all"
-        return replace(state, results_file_filter=fk)
-
+    """Workspace / delete-flow transitions."""
     if isinstance(action, ResultsViewTextFilterChanged):
         raw = str(action.text) if action.text is not None else ""
         return replace(state, results_text_filter=raw[:2000])

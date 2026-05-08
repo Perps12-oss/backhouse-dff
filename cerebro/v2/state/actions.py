@@ -163,14 +163,14 @@ class HistorySubTabChanged:
 
 @dataclass(frozen=True)
 class ResultsGroupGridSortChanged:
-    """Duplicates page group rows: ``reclaimable`` | ``files`` | ``group_id`` | ``path``."""
+    """Retired — was Duplicates page sort. Kept for import compat; not in Action union."""
     column: str
     sort_asc: bool
 
 
 @dataclass(frozen=True)
 class ResultsViewFilterChanged:
-    """``all`` | ``pictures`` | ``music`` | ``videos`` | ``documents`` | ``archives`` | ``other``"""
+    """Retired — use ReviewViewFilterChanged. Kept for import compat; not in Action union."""
     filter_key: str
 
 
@@ -226,8 +226,6 @@ Action = Union[
     HistoryGridPageChanged,
     DeletionHistoryDataLoaded,
     HistorySubTabChanged,
-    ResultsGroupGridSortChanged,
-    ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     SetDryRun,
     ResultsFilesRemoved,
