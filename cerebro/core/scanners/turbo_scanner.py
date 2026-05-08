@@ -39,6 +39,7 @@ from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
 from cerebro.core.root_dedup import dedupe_roots
 from cerebro.core.group_invariants import _assert_no_self_duplicates
+from cerebro.engines.scan_stage import ScanStage
 
 logger = get_logger(__name__)
 _LAST_PROCESS_RSS_MB: Optional[float] = None
@@ -61,6 +62,15 @@ BATCH_SIZE = 1000  # Process files in batches
 # Cache settings
 DIRECTORY_CACHE_SIZE = 10000  # Keep 10K directory signatures in memory
 FILE_CACHE_SIZE = 50000  # Keep 50K file hashes in memory
+
+# Archive file extensions treated as opaque blobs by default.
+# When scan_archives=False these files are included in duplicate detection
+# but never extracted; their whole-file hash identifies them.
+ARCHIVE_EXTENSIONS: frozenset[str] = frozenset({
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".lz4",
+    ".zst", ".lzma", ".cab", ".iso", ".dmg", ".pkg", ".deb", ".rpm",
+    ".jar", ".war", ".ear", ".apk", ".ipa", ".crx",
+})
 
 
 # ============================================================================
@@ -177,6 +187,19 @@ class TurboScanConfig:
     # pause is intentionally not supported; ``use_multiprocessing=True``
     # bypasses these checks because threading.Event does not span processes.
     pause_event: Optional[threading.Event] = None
+
+    # Cancel control — when set, hash workers exit after the current file.
+    # Checked per-file in _compute_hashes_parallel; also checked at phase
+    # boundaries via the engine's scan loop.
+    cancel_event: Optional[threading.Event] = None
+
+    # Archive handling (off by default).
+    # When False, archive files are hashed as opaque binary blobs — fast and
+    # correct for whole-archive duplicate detection (.zip A == .zip B iff
+    # byte-for-byte identical). When True, the scanner will attempt to extract
+    # and hash each member file individually (very slow; not yet implemented
+    # beyond the config flag).
+    scan_archives: bool = False
     
 
 # ============================================================================
@@ -413,7 +436,7 @@ def compute_hash_cached(
 # PARALLEL DIRECTORY WALKER
 # ============================================================================
 
-def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
+def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]]:
     """Worker function for parallel directory traversal.
 
     Uses os.scandir to avoid redundant stat() calls — DirEntry.stat()
@@ -422,20 +445,41 @@ def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
     and on SMB/network mounts.
 
     Returns list of (path, size, mtime) tuples.
+
+    ``args`` is either a 7-tuple ending with optional ``cancel_event``
+    (:class:`threading.Event`, same process only) or a legacy 6-tuple
+    (process pool workers — no intra-walk cancel).
     """
-    directory, skip_hidden, exclude_dirs, min_size, max_size = args
+    if len(args) >= 7:
+        directory, skip_hidden, exclude_dirs, min_size, max_size, scan_archives, cancel_event = args[
+            :7
+        ]
+    else:
+        directory, skip_hidden, exclude_dirs, min_size, max_size, scan_archives = args[:6]
+        cancel_event = None
     results: List[Tuple[Path, int, float]] = []
+    listed_since_cancel_check = 0
 
     # Iterative DFS with an explicit stack. Avoids recursion-depth limits
     # on pathological trees and gives us tight control over symlink/junction
     # behaviour.
     stack: List[str] = [str(directory)]
 
+    def _want_cancel() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
     while stack:
+        if _want_cancel():
+            return results
         current = stack.pop()
         try:
             with os.scandir(current) as it:
                 for entry in it:
+                    listed_since_cancel_check += 1
+                    if listed_since_cancel_check >= 128:
+                        listed_since_cancel_check = 0
+                        if _want_cancel():
+                            return results
                     name = entry.name
                     try:
                         if entry.is_dir(follow_symlinks=False):
@@ -443,6 +487,19 @@ def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
                                 continue
                             if name in exclude_dirs:
                                 continue
+                            # Skip descending into dirs whose names look like
+                            # archive bundles (mounted/extracted trees) unless
+                            # scan_archives is enabled.
+                            # Known edge case: a *real* directory literally named
+                            # "backup.zip" will also be skipped here because the
+                            # name matches ARCHIVE_EXTENSIONS. This is intentional —
+                            # such names are vanishingly rare and almost always indicate
+                            # an extracted/mounted archive tree. If this becomes a problem,
+                            # add an explicit opt-out via exclude_dirs.
+                            if not scan_archives:
+                                suf = Path(name).suffix.lower()
+                                if suf in ARCHIVE_EXTENSIONS:
+                                    continue
                             stack.append(entry.path)
                             continue
 
@@ -450,6 +507,10 @@ def walk_directory_worker(args: Tuple) -> List[Tuple[Path, int, float]]:
                             continue
                         if skip_hidden and name.startswith('.'):
                             continue
+
+                        # Archive files are included as opaque blobs.
+                        # When scan_archives is True (opt-in) the engine layer
+                        # may add extraction later; the walker surfaces the path.
 
                         st = entry.stat(follow_symlinks=False)
                         size = st.st_size
@@ -539,12 +600,20 @@ class TurboScanner:
             }
         )
 
-        def _emit(stage: str, processed: int, total: int) -> None:
+        self._turbo_completed_normally = False
+        self._scan_last_emit_p = 0
+        self._scan_last_emit_t = 0
+        self._last_stage_emitted = ""
+
+        def _emit(stage: str, processed: int, total: int, current_file: str = "") -> None:
+            self._scan_last_emit_p = processed
+            self._scan_last_emit_t = max(self._scan_last_emit_t, total, processed)
             cb = self.config.progress_callback
             if cb is None:
                 return
             try:
-                cb(stage, processed, total)
+                cb(stage, processed, total, current_file)
+                self._last_stage_emitted = stage
             except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                 # Never allow UI callback errors to break scanning.
                 pass
@@ -565,16 +634,16 @@ class TurboScanner:
         scan_roots = dedupe_roots(user_roots)
         if len(scan_roots) != len(user_roots):
             collapsed = [str(r) for r in user_roots if Path(r).resolve() not in {Path(s).resolve() for s in scan_roots}]
-            logger.info(
+            logger.debug(
                 "[ROOT_DEDUP] user_roots=%d deduped_roots=%d collapsed=%s",
                 len(user_roots), len(scan_roots), collapsed,
             )
         else:
-            logger.info("[ROOT_DEDUP] user_roots=%d deduped_roots=%d (no overlap)", len(user_roots), len(scan_roots))
+            logger.debug("[ROOT_DEDUP] user_roots=%d deduped_roots=%d (no overlap)", len(user_roots), len(scan_roots))
         logger.info("[Turbo] Phase 1: Discovering files...")
-        _emit("discovering", 0, 0)
+        _emit(ScanStage.DISCOVERING, 0, 0)
         discovered_files = self._discover_files_parallel(scan_roots, emit=_emit)
-        _emit("discovering", len(discovered_files), len(discovered_files))
+        _emit(ScanStage.DISCOVERING, len(discovered_files), len(discovered_files))
         logger.info(
             "[Turbo] Discovered %d files in %.2fs",
             len(discovered_files),
@@ -582,9 +651,12 @@ class TurboScanner:
         )
         # Phase 2: Group by size (instant duplicate detection)
         _pause_gate()
-        _emit("grouping_by_size", len(discovered_files), len(discovered_files))
+        _emit(ScanStage.GROUPING_BY_SIZE, len(discovered_files), len(discovered_files))
         size_groups = defaultdict(list)
-        for path, size, mtime in discovered_files:
+        _ce = self.config.cancel_event
+        for gi, (path, size, mtime) in enumerate(discovered_files):
+            if gi % 128 == 0 and _ce is not None and _ce.is_set():
+                return
             size_groups[size].append((path, mtime))
         
         # Filter out unique sizes
@@ -600,7 +672,7 @@ class TurboScanner:
                 size_groups, 
                 quick=True,
                 emit=_emit,
-                stage_name="hashing_partial",
+                stage_name=ScanStage.HASHING_PARTIAL,
             )
             logger.info("[Turbo] Found %d quick-hash groups", len(quick_hash_groups))
         else:
@@ -614,7 +686,7 @@ class TurboScanner:
                 quick_hash_groups,
                 quick=False,
                 emit=_emit,
-                stage_name="hashing_full",
+                stage_name=ScanStage.HASHING_FULL,
             )
             logger.info("[Turbo] Found %d duplicate groups", len(final_groups))
         else:
@@ -650,7 +722,9 @@ class TurboScanner:
         _guard_checked = 0
         _guard_files_checked = 0
 
-        for h, group_paths in final_groups.items():
+        for yi, (h, group_paths) in enumerate(final_groups.items()):
+            if yi % 48 == 0 and _ce is not None and _ce.is_set():
+                return
             group_paths, _r = _assert_no_self_duplicates(group_paths, group_key=h)
             _guard_regressions += _r
             _guard_checked += 1
@@ -729,18 +803,44 @@ class TurboScanner:
                 logger.info("Process RSS after scan: %.1f MiB", rss_mb)
             else:
                 logger.info(
-                    "Process RSS after scan: %.1f MiB (delta %+,.1f MiB vs previous scan)",
+                    "Process RSS after scan: %.1f MiB (delta %+.1f MiB vs previous scan)",
                     rss_mb,
                     rss_mb - _LAST_PROCESS_RSS_MB,
                 )
             _LAST_PROCESS_RSS_MB = rss_mb
         except (OSError, ValueError, RuntimeError, AttributeError, ImportError, TypeError):
             pass
-        _emit("complete", discovered_count, discovered_count)
+        ce = self.config.cancel_event
+        if ce is None or not ce.is_set():
+            self._turbo_completed_normally = True
+            _emit(ScanStage.COMPLETE, discovered_count, discovered_count)
+
+    def force_emit_cancel_terminal_if_needed(self) -> None:
+        """Emit CANCELLED if cancel is set but COMPLETE never ran (consumer broke early).
+
+        Called from TurboFileEngine when the generator loop ends so UI never hangs
+        waiting for a terminal stage.
+        """
+        if getattr(self, "_turbo_completed_normally", False):
+            return
+        if getattr(self, "_last_stage_emitted", "") == ScanStage.CANCELLED:
+            return
+        evt = self.config.cancel_event
+        cb = self.config.progress_callback
+        if cb is None or evt is None or not evt.is_set():
+            return
+        lp = int(getattr(self, "_scan_last_emit_p", 0) or 0)
+        lt = max(int(getattr(self, "_scan_last_emit_t", 0) or 0), lp)
+        try:
+            cb(ScanStage.CANCELLED, lp, lt, "")
+            self._last_stage_emitted = ScanStage.CANCELLED
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            pass
+
     def _discover_files_parallel(
         self,
         roots: List[Path],
-        emit: Optional[Callable[[str, int, int], None]] = None,
+        emit: Optional[Callable[..., None]] = None,
     ) -> List[Tuple[Path, int, float]]:
         """
         Discover all files using parallel directory traversal.
@@ -777,29 +877,46 @@ class TurboScanner:
         if not dirs_to_scan:
             return all_files
 
-        worker_args = [
-            (
-                d,
-                self.config.skip_hidden,
-                self.config.exclude_dirs,
-                self.config.min_size,
-                self.config.max_size,
-            )
-            for d in dirs_to_scan
-        ]
+        worker_tpl = (
+            self.config.skip_hidden,
+            self.config.exclude_dirs,
+            self.config.min_size,
+            self.config.max_size,
+            self.config.scan_archives,
+        )
+        use_mp = bool(self.config.use_multiprocessing and len(dirs_to_scan) > 1)
+        worker_args = []
+        for d in dirs_to_scan:
+            tup: Tuple[Any, ...] = (d,) + worker_tpl
+            if not use_mp:
+                tup = tup + (self.config.cancel_event,)
+            worker_args.append(tup)
 
-        def _collect(future_to_root, warn_prefix: str) -> None:
-            """Drain futures, extend all_files, and populate dir/file caches."""
+        def _shutdown_exec(ex: Optional[Any]) -> None:
+            if ex is None:
+                return
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+
+        def _collect(
+            future_to_root: Dict[Any, Any],
+            executor: Optional[Any],
+            warn_prefix: str,
+        ) -> None:
+            """Drain futures; stop listing early when cancel_event is set."""
             nonlocal discovered_so_far
             for future in as_completed(future_to_root):
+                if self.config.cancel_event is not None and self.config.cancel_event.is_set():
+                    return
                 root_dir = future_to_root[future]
                 try:
                     results = future.result()
                     all_files.extend(results)
                     discovered_so_far += len(results)
                     if emit and discovered_so_far % 100 <= len(results):
-                        emit("discovering", discovered_so_far, 0)
-                    # Persist signature + file list so the next scan can skip this root.
+                        emit(ScanStage.DISCOVERING, discovered_so_far, 0)
                     if self.dir_cache and results:
                         sig = DirectorySignature.from_directory(root_dir)
                         if sig:
@@ -810,23 +927,32 @@ class TurboScanner:
 
         if self.config.use_multiprocessing and len(dirs_to_scan) > 1:
             workers = min(self.config.dir_workers, len(dirs_to_scan))
-            with ProcessPoolExecutor(max_workers=workers) as executor:
-                future_to_root = {
-                    executor.submit(walk_directory_worker, args): d
+            mp_exec = ProcessPoolExecutor(max_workers=workers)
+            try:
+                future_to_root_mp = {
+                    mp_exec.submit(walk_directory_worker, args): d
                     for args, d in zip(worker_args, dirs_to_scan)
                 }
-                _collect(future_to_root, "[Turbo] Worker error")
+                _collect(future_to_root_mp, mp_exec, "[Turbo] Worker error")
+            finally:
+                _shutdown_exec(mp_exec)
         else:
-            # Threads are sufficient and avoid the spawn overhead of processes.
-            # Hash work is GIL-bound but directory traversal is I/O-bound, so
-            # threads give true parallelism here.
+            # Threads share cancel_event end-to-end; avoid ``with ThreadPoolExecutor``
+            # alone so cancelled scans don't block on executor __exit__(wait=True).
             workers = min(self.config.dir_workers, max(1, len(dirs_to_scan)))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                future_to_root = {
-                    executor.submit(walk_directory_worker, args): d
+            th_exec = ThreadPoolExecutor(max_workers=workers)
+            try:
+                future_to_root_th = {
+                    th_exec.submit(walk_directory_worker, args): d
                     for args, d in zip(worker_args, dirs_to_scan)
                 }
-                _collect(future_to_root, "[Turbo] Worker error walking directory")
+                _collect(
+                    future_to_root_th,
+                    th_exec,
+                    "[Turbo] Worker error walking directory",
+                )
+            finally:
+                _shutdown_exec(th_exec)
 
         return all_files
     
@@ -834,8 +960,8 @@ class TurboScanner:
         self, 
         groups: Dict[Any, List[Tuple[Path, float]]],
         quick: bool = True,
-        emit: Optional[Callable[[str, int, int], None]] = None,
-        stage_name: str = "hashing_partial",
+        emit: Optional[Callable[..., None]] = None,
+        stage_name: str = ScanStage.HASHING_PARTIAL,
     ) -> Dict[str, List[Tuple[Path, float]]]:
         """
         Compute hashes in parallel with caching.
@@ -852,27 +978,110 @@ class TurboScanner:
         if not files_to_hash:
             return {}
 
+        total = len(files_to_hash)
+        # With hash cache: count stat/prep + hash as two halves so the progress bar
+        # never jumps backwards when the thread pool starts (prep reached N, then
+        # hash counted from 1 again).
+        work_total = total * 2 if self.hash_cache else total
+        prep_done = total if self.hash_cache else 0
+
+        pause_event = self.config.pause_event
+        cancel_event = self.config.cancel_event
+
+        if emit and total > 0:
+            try:
+                emit(stage_name, 0, work_total, "")
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                pass
+
         # Pre-fetch all cache entries in batch to avoid one SQLite query per file.
         # StatSignature.from_path() does a stat() per file but that is still far
         # cheaper than N individual "SELECT ... WHERE path=?" round-trips at scale.
+        # Emit progress here: this loop can take minutes on huge candidate sets and
+        # previously produced zero UI updates until the first hash completed.
         _batch_cache: Dict[str, Optional[str]] = {}
         if self.hash_cache:
             _batch_paths = [str(p) for p, _ in files_to_hash]
             _batch_sigs: Dict[str, Any] = {}
-            for p, _ in files_to_hash:
+            _prep_emit = time.monotonic()
+            for idx, (p, _) in enumerate(files_to_hash):
+                if cancel_event is not None and cancel_event.is_set():
+                    return {}
                 try:
                     _batch_sigs[str(p)] = StatSignature.from_path(p)
                 except OSError:
                     pass
-            if quick:
-                _batch_cache = self.hash_cache.get_many_quick(_batch_paths, _batch_sigs)
-            else:
-                _batch_cache = self.hash_cache.get_many_full(_batch_paths, _batch_sigs)
+                _now = time.monotonic()
+                if emit and (
+                    idx == 0
+                    or idx % 200 == 0
+                    or idx == len(files_to_hash) - 1
+                    or (_now - _prep_emit) >= 0.3
+                ):
+                    _prep_emit = _now
+                    try:
+                        emit(stage_name, min(idx + 1, total), work_total, str(p))
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                        pass
+            if cancel_event is not None and cancel_event.is_set():
+                return {}
+            # Page SQLite cache reads (cancel checked immediately before each query).
+            # Adaptive chunk sizing keeps cold / network disks responsive.
+            n_paths = len(_batch_paths)
+            chunk_sz = 2000
+            min_chunk = 400
+            slow_slice_s = 0.55
+            page_off = 0
+            max_pages = max(512, (n_paths // max(1, min_chunk)) + 64)
+            page_iter = 0
+
+            while page_off < n_paths:
+                if cancel_event is not None and cancel_event.is_set():
+                    return {}
+
+                slice_paths = _batch_paths[page_off : page_off + chunk_sz]
+                if not slice_paths:
+                    break
+                slice_sigs = {p: _batch_sigs[p] for p in slice_paths if p in _batch_sigs}
+
+                if cancel_event is not None and cancel_event.is_set():
+                    return {}
+
+                dt_sql = 0.0
+                if slice_sigs:
+                    t0_sql = time.monotonic()
+                    if quick:
+                        part = self.hash_cache.get_many_quick(slice_paths, slice_sigs)
+                    else:
+                        part = self.hash_cache.get_many_full(slice_paths, slice_sigs)
+                    dt_sql = time.monotonic() - t0_sql
+                    _batch_cache.update(part)
+
+                adv = len(slice_paths)
+                page_off += adv
+                page_iter += 1
+                if page_iter > max_pages:
+                    logger.warning(
+                        "[Turbo] hash-cache prefetch exceeded page budget (%s); stopping prefetch",
+                        max_pages,
+                    )
+                    break
+
+                if slice_sigs and dt_sql > slow_slice_s and chunk_sz > min_chunk:
+                    chunk_sz = max(min_chunk, chunk_sz // 2)
+
+                if emit:
+                    done = min(page_off, n_paths)
+                    tail = slice_paths[-1] if slice_paths else ""
+                    hint = f"Retrieving cached signatures ({done:,} / {n_paths:,})"
+                    msg = f"{hint} — {tail}" if tail else hint
+                    try:
+                        emit(stage_name, total, work_total, msg)
+                    except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                        pass
 
         # Use thread pool (not process pool) for hashing to share cache
         workers = min(self.config.hash_workers, len(files_to_hash))
-
-        pause_event = self.config.pause_event
 
         def hash_worker(path_mtime: Tuple[Path, float]) -> Tuple[Path, float, Optional[str]]:
             path, mtime = path_mtime
@@ -881,6 +1090,8 @@ class TurboScanner:
             # before any read so an interrupted file is never half-processed.
             if pause_event is not None and not pause_event.is_set():
                 pause_event.wait()
+            if cancel_event is not None and cancel_event.is_set():
+                return path, mtime, None
             path_str = str(path)
             # Fast path: batch pre-fetch already validated the sig.
             if path_str in _batch_cache:
@@ -906,24 +1117,38 @@ class TurboScanner:
                     hash_val = compute_full_hash_mmap(path, self.config.hash_algorithm)
 
             return path, mtime, hash_val
-        
+
         try:
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = [executor.submit(hash_worker, pm) for pm in files_to_hash]
-                total = len(futures)
                 processed = 0
-                
+                _last_emit_time = time.monotonic()
+                _current_file = ""
+
                 for future in as_completed(futures):
+                    _path_for_emit = ""
                     try:
                         path, mtime, hash_val = future.result()
+                        _path_for_emit = str(path)
                         if hash_val:
                             hash_groups[hash_val].append((path, mtime))
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                        continue
+                        pass
                     finally:
                         processed += 1
-                        if emit and (processed % 50 == 0 or processed == total):
-                            emit(stage_name, processed, total)
+                        _current_file = _path_for_emit
+                        _now = time.monotonic()
+                        # Every 200 completions or 0.3s — keeps UI + cancellation responsive.
+                        if emit and (
+                            processed <= 1
+                            or processed % 200 == 0
+                            or processed == total
+                            or (_now - _last_emit_time) >= 0.3
+                        ):
+                            _last_emit_time = _now
+                            emit(stage_name, prep_done + processed, work_total, _current_file)
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
         finally:
             # Hashing uses short-lived worker thread pools; each worker may create a
             # dedicated SQLite connection in HashCache. Proactively close those

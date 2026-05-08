@@ -24,11 +24,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from cerebro.core.paths import default_cerebro_cache_dir
 from cerebro.core.scanners.turbo_scanner import TurboScanConfig, TurboScanner
+from cerebro.engines.scan_stage import ScanStage
 from cerebro.engines.base_engine import (
     BaseEngine,
     DuplicateFile,
@@ -44,12 +46,13 @@ logger = logging.getLogger(__name__)
 # Stage -> ScanState mapping
 # ---------------------------------------------------------------------------
 _STAGE_MAP: Dict[str, ScanState] = {
-    "discovering": ScanState.SCANNING,
-    "grouping_by_size": ScanState.SCANNING,
-    "hashing_partial": ScanState.SCANNING,
-    "hashing_full": ScanState.SCANNING,
+    ScanStage.DISCOVERING: ScanState.SCANNING,
+    ScanStage.GROUPING_BY_SIZE: ScanState.SCANNING,
+    ScanStage.HASHING_PARTIAL: ScanState.SCANNING,
+    ScanStage.HASHING_FULL: ScanState.SCANNING,
+    ScanStage.CANCELLED: ScanState.CANCELLED,
     # Keep SCANNING until _do_scan emits the final ScanProgress(COMPLETED).
-    "complete": ScanState.SCANNING,
+    ScanStage.COMPLETE: ScanState.SCANNING,
 }
 
 
@@ -104,6 +107,17 @@ class TurboFileEngine(BaseEngine):
                     "Disable to force a full re-hash of every file."
                 ),
             ),
+            EngineOption(
+                name="scan_archives",
+                display_name="Scan inside archives (very slow)",
+                type="bool",
+                default=False,
+                tooltip=(
+                    "Extract and compare individual files inside .zip, .tar, .gz, .7z, etc. "
+                    "OFF by default: archives are compared as opaque files (fast). "
+                    "Enable only if you specifically need to find duplicate files hidden inside archives."
+                ),
+            ),
         ]
 
     # -- lifecycle -------------------------------------------------------------
@@ -120,6 +134,7 @@ class TurboFileEngine(BaseEngine):
         self._pause_event = threading.Event()
         self._pause_event.set()
         self._callback: Optional[Callable[[ScanProgress], None]] = None
+        self._scan_wall_t0: float = 0.0
 
     def configure(
         self,
@@ -138,6 +153,7 @@ class TurboFileEngine(BaseEngine):
         self._results = []
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
+        self._scan_wall_t0 = time.monotonic()
         # Run on the orchestrator scan thread (same as other engines). A nested
         # thread here used to return immediately so wait_for_completion() joined
         # before the turbo pipeline finished, leaving get_results() empty.
@@ -220,7 +236,15 @@ class TurboFileEngine(BaseEngine):
             # this catches mid-phase pauses where a single hashing phase
             # might otherwise run for minutes after pause() is called.
             pause_event=self._pause_event,
+            # Forward cancel so hash workers exit sub-second on cancel().
+            cancel_event=self._cancel_event,
+            scan_archives=bool(opts.get("scan_archives", False)),
         )
+        if cfg.scan_archives:
+            logger.warning(
+                "scan_archives=True: archives will be hashed as opaque blobs only "
+                "(internal extraction not yet implemented)."
+            )
 
         # Filter protected folders out of roots
         roots = [
@@ -267,22 +291,29 @@ class TurboFileEngine(BaseEngine):
 
         scanner = TurboScanner(cfg)
 
-        # Drain the generator ( TurboScanner.scan yields nothing but is a gen )
-        for _ in scanner.scan(reachable_roots):
-            # Block here while paused; wakes immediately when resumed.
-            self._pause_event.wait()
-            if self._cancel_event.is_set():
-                self._state = ScanState.CANCELLED
-                self._progress = ScanProgress(state=ScanState.CANCELLED)
-                self._emit_progress()
-                return
+        # Drain the generator (TurboScanner.scan yields FileMetadata rows).
+        _cancelled = False
+        try:
+            for _ in scanner.scan(reachable_roots):
+                # Block here while paused; wakes immediately when resumed.
+                self._pause_event.wait()
+                if self._cancel_event.is_set():
+                    _cancelled = True
+                    break
+        finally:
+            scanner.force_emit_cancel_terminal_if_needed()
 
         # Convert scanner.last_groups → DuplicateGroup list.
         # Drop paths that sit under a protected directory (root filtering above
         # only skips scan roots that are themselves inside protected paths).
         protected = self._protected
         filtered_groups: List[dict] = []
+        _asm_deadline = time.monotonic() + 10.0 if _cancelled else None
         for g in scanner.last_groups:
+            if _asm_deadline is not None and time.monotonic() > _asm_deadline:
+                break
+            if self._cancel_event.is_set():
+                break
             safe_paths = [
                 p
                 for p in g.get("paths", [])
@@ -290,41 +321,67 @@ class TurboFileEngine(BaseEngine):
             ]
             if len(safe_paths) >= 2:
                 filtered_groups.append({**g, "paths": safe_paths})
-        self._results = self._convert_groups(filtered_groups)
-        self._state = ScanState.COMPLETED
+        self._results = self._convert_groups(filtered_groups, self._cancel_event)
+        terminal_state = ScanState.CANCELLED if _cancelled else ScanState.COMPLETED
+        self._state = terminal_state
         stats_scanned = int(scanner.stats.get("files_scanned", 0) or 0)
         files_done = max(stats_scanned, self._progress.files_scanned)
+        terminal_stage = "cancelled" if _cancelled else "complete"
         self._progress = ScanProgress(
-            state=ScanState.COMPLETED,
+            state=terminal_state,
             files_scanned=files_done,
             files_total=max(files_done, self._progress.files_total or 0),
             duplicates_found=sum(len(g.files) for g in self._results),
             groups_found=len(self._results),
             bytes_reclaimable=sum(g.reclaimable for g in self._results),
-            stage="complete",
+            stage=terminal_stage,
         )
         self._emit_progress()
 
     # -- progress bridge -------------------------------------------------------
 
-    def _on_turbo_progress(self, stage: str, processed: int, total: int) -> None:
-        if self._cancel_event.is_set():
+    def _on_turbo_progress(
+        self, stage: str, processed: int, total: int, current_file: str = ""
+    ) -> None:
+        if self._cancel_event.is_set() and stage not in (
+            ScanStage.COMPLETE,
+            ScanStage.CANCELLED,
+        ):
             return
 
         state = _STAGE_MAP.get(stage, ScanState.SCANNING)
         self._state = state
         prev = self._progress
-        # Keep a monotonic scan counter; hashing phases report progress for the current
-        # batch only, which can be smaller than the discovery count — never shrink total.
-        scanned = max(processed, prev.files_scanned)
-        ft = total if total > 0 else (prev.files_total or 0)
-        ft = max(ft, prev.files_total or 0, scanned)
+        prev_stage = prev.stage or ""
+
+        is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+        was_hashing = prev_stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+        entering_hashing = is_hashing and not was_hashing
+
+        if stage == ScanStage.DISCOVERING:
+            # Indeterminate total during discovery.
+            scanned = processed
+            ft = 0
+        elif entering_hashing:
+            # Phase handoff: reset counter to 0 so the bar starts from the
+            # beginning of the hashing batch, never flash 100%.
+            scanned = 0
+            ft = total if total > 0 else 0
+        elif is_hashing:
+            scanned = processed
+            ft = total if total > 0 else (prev.files_total or 0)
+        else:
+            scanned = max(processed, prev.files_scanned)
+            ft = total if total > 0 else (prev.files_total or 0)
+            ft = max(ft, prev.files_total or 0)
 
         self._progress = ScanProgress(
             state=state,
             files_scanned=scanned,
             files_total=ft,
             stage=stage,
+            current_file=current_file,
+            elapsed_seconds=max(0.0, time.monotonic() - self._scan_wall_t0),
         )
         self._emit_progress()
 
@@ -338,15 +395,24 @@ class TurboFileEngine(BaseEngine):
     # -- result conversion -----------------------------------------------------
 
     @staticmethod
-    def _convert_groups(raw_groups: List[dict]) -> List[DuplicateGroup]:
+    def _convert_groups(
+        raw_groups: List[dict],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> List[DuplicateGroup]:
         results: List[DuplicateGroup] = []
         for idx, g in enumerate(raw_groups):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             paths: List[str] = g.get("paths", [])
             if len(paths) < 2:
                 continue
 
             files: List[DuplicateFile] = []
+            cancelled_mid_group = False
             for p in paths:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled_mid_group = True
+                    break
                 pp = Path(p)
                 try:
                     st = pp.stat()
@@ -363,6 +429,9 @@ class TurboFileEngine(BaseEngine):
                     )
                 except OSError:
                     continue
+
+            if cancelled_mid_group:
+                break
 
             if len(files) < 2:
                 continue

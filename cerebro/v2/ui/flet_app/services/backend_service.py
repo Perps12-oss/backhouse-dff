@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
+from cerebro.engines.scan_stage import ScanStage
 from cerebro.engines.orchestrator import ScanOrchestrator
 
 _log = logging.getLogger(__name__)
@@ -35,6 +36,14 @@ class BackendService:
         self._on_complete: Optional[Callable[[List[DuplicateGroup], str], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
         self._last_progress_time: float = 0.0  # throttle: emit at most 4×/s
+        # Rolling rate: list of (monotonic_time, files_scanned) samples; reset on phase change.
+        self._rate_samples: List[tuple] = []
+        self._rate_stage: str = ""
+        self._last_dispatched_scanned: int = -1
+        self._last_dispatched_path: str = ""
+        self._ema_rate: Optional[float] = None
+        self._prev_progress_cf: str = ""
+        self._ema_warm_ticks: int = 0
 
     @property
     def orchestrator(self) -> ScanOrchestrator:
@@ -70,6 +79,10 @@ class BackendService:
                 return False
             self._scanning = True
             self._cancel_event.clear()
+            self._ema_rate = None
+            self._rate_samples.clear()
+            self._prev_progress_cf = ""
+            self._ema_warm_ticks = 0
         engine_mode = self._resolve_engine_mode(mode)
 
         def _worker() -> None:
@@ -127,14 +140,98 @@ class BackendService:
 
     def _handle_progress(self, progress: ScanProgress) -> None:
         import time as _time
-        if self._cancel_event.is_set():
-            return
         is_terminal = progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR)
+        # Allow terminal events through even when cancel was requested.
+        if self._cancel_event.is_set() and not is_terminal:
+            return
         if self._on_progress:
-            # Throttle intermediate progress to ≤4 updates/second; always deliver terminal events.
+            stage = (progress.stage or "")
+            phase_changed = (stage != self._rate_stage)
+            moved = (
+                (progress.files_scanned or 0) != self._last_dispatched_scanned
+                or (progress.current_file or "") != self._last_dispatched_path
+            )
+            min_gap = 0.09 if stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) else 0.22
             now = _time.monotonic()
-            if is_terminal or (now - self._last_progress_time) >= 0.25:
+            if is_terminal or phase_changed or moved or (now - self._last_progress_time) >= min_gap:
                 self._last_progress_time = now
+                if phase_changed:
+                    self._last_dispatched_scanned = -1
+                    self._last_dispatched_path = ""
+                    self._ema_rate = None
+                    self._ema_warm_ticks = 0
+                self._last_dispatched_scanned = progress.files_scanned or 0
+                self._last_dispatched_path = progress.current_file or ""
+
+                # Rolling rate + EMA — append only when files_scanned advances so
+                # path-only ticks and cache bursts do not distort throughput.
+                is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+                if stage != self._rate_stage:
+                    _log.info(
+                        "scan phase transition: %r → %r  (scanned=%d total=%d)",
+                        self._rate_stage, stage,
+                        progress.files_scanned, progress.files_total,
+                    )
+                if is_hashing and self._rate_stage not in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+                    self._rate_samples = []
+                    self._ema_rate = None
+                    self._prev_progress_cf = ""
+                    self._ema_warm_ticks = 0
+                self._rate_stage = stage
+
+                scanned = progress.files_scanned or 0
+                prev_sample_scanned = self._rate_samples[-1][1] if self._rate_samples else -1
+                if scanned > prev_sample_scanned:
+                    self._rate_samples.append((now, scanned))
+                # Keep a 5-second sliding window.
+                cutoff = now - 5.0
+                self._rate_samples = [s for s in self._rate_samples if s[0] >= cutoff]
+
+                instant_rate: Optional[float] = None
+                if len(self._rate_samples) >= 2:
+                    dt = self._rate_samples[-1][0] - self._rate_samples[0][0]
+                    dc = self._rate_samples[-1][1] - self._rate_samples[0][1]
+                    if dt > 0.1 and dc > 0:
+                        instant_rate = dc / dt
+
+                cf_now = progress.current_file or ""
+                if is_hashing:
+                    prev_cf = self._prev_progress_cf
+                    slipped_cache = ("Retrieving cached signatures" not in cf_now and "Retrieving cached signatures" in prev_cf)
+                    if slipped_cache:
+                        self._ema_warm_ticks = max(self._ema_warm_ticks, 3)
+
+                rate_adj: Optional[float] = instant_rate
+
+                warm = False
+                if self._ema_warm_ticks > 0 and is_hashing:
+                    self._ema_warm_ticks -= 1
+                    warm = True
+
+                alpha = 0.25
+                if warm:
+                    alpha = 0.42
+
+                if not warm and rate_adj is not None and self._ema_rate is not None and self._ema_rate > 0:
+                    ceiling = max(3.0 * self._ema_rate, 850.0)
+                    if instant_rate is not None and instant_rate > ceiling:
+                        rate_adj = ceiling
+                        alpha *= 0.35
+
+                rate: Optional[float] = None
+                if is_hashing:
+                    if rate_adj is not None:
+                        if self._ema_rate is None:
+                            self._ema_rate = rate_adj
+                        else:
+                            self._ema_rate = alpha * rate_adj + (1.0 - alpha) * self._ema_rate
+                    if self._ema_rate is not None:
+                        rate = self._ema_rate
+                else:
+                    self._ema_rate = None
+
+                self._prev_progress_cf = cf_now if is_hashing else ""
+
                 data = {
                     "state": progress.state.value if progress.state else "",
                     "files_scanned": progress.files_scanned,
@@ -144,9 +241,15 @@ class BackendService:
                     "bytes_reclaimable": progress.bytes_reclaimable,
                     "elapsed_seconds": progress.elapsed_seconds,
                     "current_file": progress.current_file or "",
-                    "stage": progress.stage or "",
+                    "stage": stage,
+                    "rate": rate,
                 }
-                self._on_progress(data)
+                _log.debug(
+                    "progress dispatch: stage=%s scanned=%d total=%d",
+                    stage, progress.files_scanned, progress.files_total,
+                )
+                # Route to UI thread so page.update() runs safely.
+                self._deliver_on_ui_thread(self._on_progress, data)
         if is_terminal:
             with self._scan_lock:
                 self._scanning = False

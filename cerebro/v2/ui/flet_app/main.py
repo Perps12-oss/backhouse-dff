@@ -25,13 +25,58 @@ from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
 _log = logging.getLogger(__name__)
 
 
+def _clamp_window_to_virtual_screen(page: ft.Page) -> None:
+    """If restored geometry sits entirely off-screen (e.g. unplugged monitor), move back on-screen."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        vx = int(user32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+        vy = int(user32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+        vw = int(user32.GetSystemMetrics(78))  # SM_CXVIRTUALSCREEN
+        vh = int(user32.GetSystemMetrics(79))  # SM_CYVIRTUALSCREEN
+    except Exception:
+        return
+    try:
+        w = max(int(page.window.width or 1200), 1)
+        h = max(int(page.window.height or 800), 1)
+        raw_l, raw_t = page.window.left, page.window.top
+        if raw_l is None or raw_t is None:
+            return
+        left, top = int(raw_l), int(raw_t)
+    except Exception:
+        return
+    margin = 72
+    overlaps = (
+        left + w > vx + margin
+        and left < vx + vw - margin
+        and top + h > vy + margin
+        and top < vy + vh - margin
+    )
+    if overlaps:
+        return
+    new_left = vx + max(0, (vw - w) // 2)
+    new_top = vy + max(0, (vh - h) // 2)
+    page.window.left = new_left
+    page.window.top = new_top
+    _log.warning(
+        "Restored window was off-screen; moved to visible area (%s, %s)",
+        new_left,
+        new_top,
+    )
+
+
 def run_flet_app() -> None:
     """Launch the Cerebro Flet UI."""
-    ft.app(target=_main)
+    ft.app(target=_main, port=0)
 
 
 def _main(page: ft.Page) -> None:
     """Configure the page and wire up all services."""
+    import time as _time
+    _t0 = _time.monotonic()
     page.title = "Cerebro — Duplicate File Finder"
     page.window.width = 1200
     page.window.height = 800
@@ -44,11 +89,13 @@ def _main(page: ft.Page) -> None:
 
     page.theme = build_flet_theme("light")
     page.dark_theme = build_flet_theme("dark")
+    _log.info("init: theme built  +%.0fms", (_time.monotonic() - _t0) * 1000)
 
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
     backend = BackendService(page)
     bridge = StateBridge(page, store, coordinator, backend)
+    _log.info("init: services ready  +%.0fms", (_time.monotonic() - _t0) * 1000)
     settings = bridge.get_settings()
     if not isinstance(settings, dict):
         settings = {}
@@ -118,6 +165,7 @@ def _main(page: ft.Page) -> None:
                 page.window.maximized = True
         except Exception:
             _log.exception("Failed restoring persisted window state")
+        _clamp_window_to_virtual_screen(page)
 
     # Singleton pages so scan results / state survive tab switches.
     from cerebro.v2.ui.flet_app.pages.dashboard_page import DashboardPage
@@ -132,11 +180,15 @@ def _main(page: ft.Page) -> None:
     page.services.append(folder_picker)
 
     dashboard_page = DashboardPage(bridge, folder_picker)
+    _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     results_page = ResultsPage(bridge)
+    _log.info("init: results built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     review_page = ReviewPage(bridge)
+    _log.info("init: review built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
     exclude_page = ExcludeListPage(bridge)
+    _log.info("init: all pages built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     try:
         if hasattr(dashboard_page, "_progress"):
             bridge.register_progress_control(dashboard_page._progress)  # type: ignore[attr-defined]
@@ -178,6 +230,7 @@ def _main(page: ft.Page) -> None:
     }
 
     layout = AppLayout(page, bridge, builders)
+    _log.info("init: layout built  +%.0fms", (_time.monotonic() - _t0) * 1000)
 
     page.window.title_bar_hidden = True
 
@@ -214,6 +267,18 @@ def _main(page: ft.Page) -> None:
     )
 
     page.add(ft.Column([title_bar, layout], spacing=0, expand=True))
+
+    page.window.visible = True
+    page.window.skip_task_bar = False
+
+    async def _focus_app_window() -> None:
+        try:
+            await page.window.to_front()
+        except Exception:
+            _log.debug("window.to_front failed", exc_info=True)
+
+    if hasattr(page, "run_task"):
+        page.run_task(_focus_app_window)
 
     def _persist_window_state() -> None:
         try:
@@ -623,4 +688,4 @@ def _main(page: ft.Page) -> None:
     bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "arctic")))
     _show_onboarding_if_needed()
 
-    _log.info("Cerebro Flet UI initialized")
+    _log.info("Cerebro Flet UI initialized  (total %.0fms)", (_time.monotonic() - _t0) * 1000)

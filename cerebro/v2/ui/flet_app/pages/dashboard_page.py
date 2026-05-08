@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
 import flet as ft
+import flet.canvas as cv
 
 from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.engines.scan_stage import ScanStage
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 
 _log = logging.getLogger(__name__)
+
+_BAR_SLICES: int = 200
+_BAR_HEIGHT: int = 28
+_BAR_WIDTH: int = 520
+_BAR_MARKER_TTL: float = 0.30
 
 _SCAN_MODE_ICON_MAP = {
     "description": ft.icons.Icons.DESCRIPTION,
@@ -67,7 +77,9 @@ class DashboardPage(ft.Column):
         self._bridge = bridge
         self._folder_picker = folder_picker
         self._folders: list[Path] = []  # Enforce Path objects
+        self._picker_active: bool = False  # guard against concurrent picker opens
         self._selected_mode = "files"
+        self._scan_options: dict = {"scan_archives": False}
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
         self._initial_load_done = False
         self._stats_fetch_generation = 0
@@ -105,12 +117,41 @@ class DashboardPage(ft.Column):
         self._progress_detail: ft.Text
         self._status: ft.Text
         self._ring: ft.ProgressRing
+        self._ring_phase_label: ft.Text
         self._ring_label: ft.Text
         self._ring_counter: ft.Text
+        self._ring_timer: ft.Text
         self._ring_path: ft.Text
         self._cancel_btn: ft.OutlinedButton
+        self._view_results_btn: ft.FilledButton
+        self._partial_results_row: ft.Row
         self._scan_view: ft.Container
         self._main_panels: list
+        self._bar_canvas: cv.Canvas
+        self._bar_overlay: ft.Container
+        self._bar_stack: ft.Stack
+        self._bar_row: ft.Container
+        self._scan_archives_cb: ft.Checkbox
+        self._archives_warning: ft.Text
+        self._scan_options_row: ft.Container
+        # Cancellation state: track whether we're in a cancel flow and cache
+        # partial results so the user can choose to view them post-cancel.
+        self._was_cancelled: bool = False
+        self._pending_partial_results: list = []
+        self._pending_partial_mode: str = "files"
+        # Elapsed clock + ETA line (1 Hz); snapshot updated from progress callbacks.
+        self._scan_timer_active: bool = False
+        self._scan_elapsed_start: float = 0.0
+        self._scan_hud_snap: dict = {}
+        self._scan_hud_stop = threading.Event()
+        self._scan_timer_thread: Optional[threading.Thread] = None
+        # Largest file-catalogue count seen (discovery + grouping); explains hashing denominator.
+        self._scan_files_catalogued: int = 0
+        # Canvas chunk bar state
+        self._bar_slices: int = 0
+        self._bar_active_markers: Set[int] = set()
+        self._bar_is_complete: bool = False
+        self._bar_last_dupes: int = 0
         self._build_ui()
 
     def _is_mounted(self) -> bool:
@@ -359,24 +400,62 @@ class DashboardPage(ft.Column):
         self._progress_detail = ft.Text("", color=t.colors.fg_muted, size=t.typography.size_xs, visible=False)
 
         # Circular scan progress view — swaps in over main content during active scan
+        self._ring_default_color = "#00BFA5"
         self._ring = ft.ProgressRing(
             width=100, height=100,
             stroke_width=8,
-            color="#00BFA5",
+            color=self._ring_default_color,
             value=None,  # indeterminate until first progress callback
         )
         self._ring_label = ft.Text(
-            "Scanning your drive...",
+            "Preparing scan…",
             size=t.typography.size_xl,
             weight=ft.FontWeight.BOLD,
             color=t.colors.fg,
             text_align=ft.TextAlign.CENTER,
+        )
+        self._ring_phase_label = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
+            width=520,
         )
         self._ring_counter = ft.Text(
             "Processed: 0 / 0",
             size=t.typography.size_md,
             color=t.colors.fg2,
             font_family="Courier New",
+            text_align=ft.TextAlign.CENTER,
+        )
+        self._counter_help_tip_base = (
+            "Duplicate detection only reads files whose size matches at least one other file in "
+            "the scan. With the hash cache on, comparison progress counts each candidate twice "
+            "(cache prep plus content hashing)."
+        )
+        self._ring_counter_tip = ft.IconButton(
+            icon=ft.icons.Icons.INFO_OUTLINE,
+            tooltip=self._counter_help_tip_base,
+            icon_size=18,
+            icon_color=t.colors.fg_muted,
+            visible=False,
+            padding=ft.padding.only(left=2),
+            style=ft.ButtonStyle(padding=0),
+        )
+        self._ring_counter_row = ft.Row(
+            [
+                self._ring_counter,
+                self._ring_counter_tip,
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=2,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            tight=True,
+        )
+        self._ring_timer = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
         )
         self._ring_path = ft.Text(
@@ -387,6 +466,29 @@ class DashboardPage(ft.Column):
             no_wrap=True,
             overflow=ft.TextOverflow.ELLIPSIS,
             width=480,
+        )
+        self._view_results_btn = ft.FilledButton(
+            "View Results",
+            icon=ft.icons.Icons.CHECK_CIRCLE,
+            on_click=self._go_to_results,
+            visible=False,
+        )
+        self._view_partial_btn = ft.OutlinedButton(
+            "View Partial Results",
+            icon=ft.icons.Icons.CHECKLIST,
+            on_click=self._go_to_partial_results,
+        )
+        self._partial_results_row = ft.Row(
+            [
+                self._view_partial_btn,
+                ft.TextButton(
+                    "Back to Home",
+                    icon=ft.icons.Icons.HOME,
+                    on_click=self._go_to_home,
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            visible=False,
         )
         self._cancel_btn = ft.OutlinedButton(
             "Cancel Scan",
@@ -399,14 +501,44 @@ class DashboardPage(ft.Column):
                 padding=ft.padding.symmetric(horizontal=24, vertical=12),
             ),
         )
+        self._bar_canvas = cv.Canvas(shapes=[], width=_BAR_WIDTH, height=_BAR_HEIGHT)
+        self._bar_overlay = ft.Container(
+            content=ft.Text(
+                "",
+                color=ft.Colors.WHITE,
+                weight=ft.FontWeight.BOLD,
+                size=13,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            alignment=ft.Alignment(0, 0),
+            width=_BAR_WIDTH,
+            height=_BAR_HEIGHT,
+            visible=False,
+        )
+        self._bar_stack = ft.Stack(
+            [self._bar_canvas, self._bar_overlay],
+            width=_BAR_WIDTH,
+            height=_BAR_HEIGHT,
+        )
+        self._bar_row = ft.Container(
+            content=self._bar_stack,
+            visible=False,
+        )
+        self._draw_bar()
+
         self._scan_view = ft.Container(
             content=ft.Column(
                 [
-                    self._ring,
                     self._ring_label,
-                    self._ring_counter,
+                    self._ring,
+                    self._ring_phase_label,
+                    self._ring_counter_row,
+                    self._ring_timer,
                     self._ring_path,
+                    self._bar_row,
                     self._cancel_btn,
+                    self._view_results_btn,
+                    self._partial_results_row,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
@@ -425,6 +557,34 @@ class DashboardPage(ft.Column):
             text_align=ft.TextAlign.CENTER,
         )
 
+        # Scan options row — opt-in toggles shown between folder list and start button
+        self._scan_archives_cb = ft.Checkbox(
+            label="Scan inside archives",
+            value=False,
+            active_color="#F59E0B",
+            label_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
+            on_change=self._on_archives_cb_change,
+        )
+        self._archives_warning = ft.Text(
+            "⚠ Very slow — archives may be gigabytes. Use only for forensic or backup dedup.",
+            size=t.typography.size_xs,
+            color="#F59E0B",
+            italic=True,
+            visible=False,
+        )
+        self._scan_options_row = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Scan options", size=t.typography.size_sm, weight=ft.FontWeight.W_500, color=t.colors.fg_muted),
+                    self._scan_archives_cb,
+                    self._archives_warning,
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+        )
+
         # Assemble — main panels tracked so scan view can swap in/out
         self.controls = [
             self._hero,
@@ -440,6 +600,7 @@ class DashboardPage(ft.Column):
                 content=ft.Column([self._quick_scan_btn, self._recent_wrap, self._quick_add_wrap], spacing=s.sm),
                 padding=ft.padding.only(left=s.md, right=s.md, bottom=s.sm),
             ),
+            self._scan_options_row,
             ft.Container(content=self._actions, padding=ft.padding.only(top=s.md, bottom=s.md)),
             ft.Container(content=self._status, padding=ft.padding.only(top=s.md)),
         ]
@@ -699,6 +860,12 @@ class DashboardPage(ft.Column):
     # ------------------------------------------------------------------
     # User Interactions
     # ------------------------------------------------------------------
+    def _on_archives_cb_change(self, e: ft.ControlEvent) -> None:
+        enabled = bool(e.control.value)
+        self._scan_options["scan_archives"] = enabled
+        self._archives_warning.visible = enabled
+        DashboardPage._safe_update(self._archives_warning)
+
     def _select_mode(self, key: str) -> None:
         if self._selected_mode == key:
             return
@@ -997,22 +1164,30 @@ class DashboardPage(ft.Column):
         self._refresh_quick_add_bar()
 
     def _browse_folders(self, e: ft.ControlEvent) -> None:
-        # Use the bridge's page reference to run async task safely
-        if hasattr(self._bridge, 'flet_page') and self._bridge.flet_page:
-            self._bridge.flet_page.run_task(self._browse_folders_async)
-        else:
-            _log.warning("Bridge page not available for folder picker")
+        if self._picker_active:
+            return
+        page = getattr(self._bridge, "flet_page", None)
+        if page:
+            page.run_task(self._browse_folders_async)
 
     async def _browse_folders_async(self) -> None:
+        if self._picker_active:
+            return
+        self._picker_active = True
         try:
             result = await self._folder_picker.get_directory_path(
                 dialog_title="Select folder to scan"
             )
-            # Flet 0.25+ returns the folder path as str | None (not an object with .path).
             if result:
                 self._add_folder(Path(result))
-        except Exception as e:
-            _log.error(f"Folder picker failed: {e}")
+        except Exception as exc:
+            # "Session closed" is Flet's normal cancellation signal when the
+            # user dismisses the dialog — not a real error.
+            msg = str(exc).lower()
+            if "session" not in msg and "closed" not in msg:
+                _log.error("Folder picker failed: %s", exc)
+        finally:
+            self._picker_active = False
 
     def _add_folder(self, path: Path) -> None:
         if path in self._folders:
@@ -1124,55 +1299,476 @@ class DashboardPage(ft.Column):
             self._status.update()
             return
         
+        self._was_cancelled = False
+        self._pending_partial_results = []
+        self._pending_partial_mode = self._selected_mode
+        self._scan_files_catalogued = 0
+        self._bar_slices = 0
+        self._bar_active_markers.clear()
+        self._bar_is_complete = False
+        self._bar_last_dupes = 0
+        self._bar_row.visible = False
+        self._bar_overlay.visible = False
+        self._draw_bar()
         self._ring.value = None  # indeterminate until first progress tick
-        self._ring_counter.value = "Processed: 0 / 0"
+        self._ring.color = self._heat_color_for_ratio(0.0)
+        self._ring_phase_label.value = ""
+        self._ring_counter.value = "Files found so far: 0"
+        self._ring_counter_tip.visible = False
+        self._ring_timer.value = ""
         self._ring_path.value = ""
-        self._ring_label.value = "Scanning your drive..."
+        self._ring_label.value = "Preparing scan…"
+        self._cancel_btn.text = "Cancel Scan"
+        self._cancel_btn.disabled = False
+        self._cancel_btn.visible = True
+        self._view_results_btn.visible = False
+        self._partial_results_row.visible = False
+        self._view_partial_btn.visible = True
+        self._view_partial_btn.disabled = False
         for p in self._main_panels:
             p.visible = False
         self._scan_view.visible = True
         DashboardPage._safe_update(self)
 
         self._bridge.begin_scan_session(self._folders, self._selected_mode)
+        self._start_scan_elapsed_timer()
+        self._ring_timer.value = self._build_scan_timer_line()
+        try:
+            if self._ring_timer.page is not None:
+                self._ring_timer.update()
+        except Exception:
+            pass
 
         try:
             backend = self._bridge.backend
             backend.set_on_progress(self._on_scan_progress)
             backend.set_on_complete(self._on_scan_complete)
             backend.set_on_error(self._on_scan_error)
-            backend.start_scan(self._folders, mode=self._selected_mode)
+            backend.start_scan(self._folders, mode=self._selected_mode, options=dict(self._scan_options))
         except Exception as err:
             self._on_scan_error(f"Backend communication error: {err}")
 
+    _RING_INDETERMINATE_STAGES = frozenset({ScanStage.DISCOVERING, ScanStage.GROUPING_BY_SIZE})
+
+    @staticmethod
+    def _heat_color_for_ratio(ratio: float) -> str:
+        """Interpolate ring color red → amber → green as ratio goes 0 → 1."""
+        r = max(0.0, min(1.0, float(ratio)))
+        red = (0xEF, 0x44, 0x44)
+        amber = (0xF5, 0x9E, 0x0B)
+        green = (0x22, 0xC5, 0x55)
+        if r <= 0.5:
+            t = r * 2.0
+            rgb = tuple(int(red[i] + (amber[i] - red[i]) * t) for i in range(3))
+        else:
+            t = (r - 0.5) * 2.0
+            rgb = tuple(int(amber[i] + (green[i] - amber[i]) * t) for i in range(3))
+        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+    def _scan_ring_heat_ratio(self, stage: str, scanned: int, total: int) -> float:
+        """Map backend stage + counters to 0..1 for heat coloring."""
+        if stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and total > 0:
+            return scanned / total
+        if stage == ScanStage.DISCOVERING and total > 0:
+            return scanned / total
+        if stage == ScanStage.GROUPING_BY_SIZE:
+            # Full file count here is not "done"; keep mid-heat until hashing ratio drives color.
+            return 0.34
+        if stage == ScanStage.DISCOVERING:
+            return 0.06
+        if total > 0:
+            return min(scanned / total, 1.0)
+        return 0.05
+
+    def _scan_hud_strings(self, stage: str, scanned: int, total: int, files_catalogued: int) -> tuple[str, str, str]:
+        """Return (main headline, short subtitle, counter line without throughput)."""
+        cat = max(0, int(files_catalogued))
+        if stage == ScanStage.DISCOVERING:
+            if total == 0:
+                return (
+                    "Discovering files…",
+                    "Listing every file path under your selected folders. Large drives can take several minutes here.",
+                    f"Files found so far: {scanned:,}",
+                )
+            if scanned < total:
+                return (
+                    "Discovering files…",
+                    f"Still listing paths ({scanned:,} of {total:,} so far).",
+                    f"Files found so far: {scanned:,} / {total:,}",
+                )
+            return (
+                "Discovering files…",
+                f"Finished listing {scanned:,} file paths.",
+                f"Found {scanned:,} files",
+            )
+        if stage == ScanStage.GROUPING_BY_SIZE:
+            return (
+                "Grouping by size…",
+                f"Sorting {scanned:,} files into size buckets to find files that might be duplicates.",
+                f"Grouped {scanned:,} files — finding same-size matches…",
+            )
+        if stage == ScanStage.HASHING_PARTIAL:
+            return (
+                "Comparing file contents…",
+                "Only matching-size copies are hashed as candidates.",
+                f"Comparing candidates: {scanned:,} / {total:,}",
+            )
+        if stage == ScanStage.HASHING_FULL:
+            return (
+                "Verifying duplicates…",
+                "",
+                f"Deep comparison: {scanned:,} / {total:,}",
+            )
+        if stage == ScanStage.COMPLETE:
+            return ("Finishing up…", "Assembling duplicate groups from hash results.", "")
+        return ("Scanning…", "", "Working…")
+
+    def _update_counter_help_tooltip(self, stage: str, scanned: int, total: int, files_catalogued: int) -> None:
+        cat = max(0, int(files_catalogued))
+        show = stage in (
+            ScanStage.HASHING_PARTIAL,
+            ScanStage.HASHING_FULL,
+        ) and total > 0 and total > cat * 1.12
+        self._ring_counter_tip.visible = show
+        if show:
+            n_cand = total // 2 if total % 2 == 0 else 0
+            if n_cand <= 0:
+                n_cand = scanned if scanned > 0 else 0
+            self._ring_counter_tip.tooltip = (
+                f"{self._counter_help_tip_base}\n\n"
+                f"You listed {cat:,} file paths here. Roughly twice the comparing-total (~{total:,}) matches "
+                f"same-size duplicate candidates (~{n_cand:,}) when dual-pass cache prep is counted."
+            )
+
     def _on_scan_progress(self, data: dict) -> None:
         stage = data.get("stage", "")
-        scanned = data.get("files_scanned", 0)
-        total = data.get("files_total", 0)
-        elapsed = data.get("elapsed_seconds", 0.0)
+        state = data.get("state", "")
+        scanned = data.get("files_scanned", 0) or 0
+        total = data.get("files_total", 0) or 0
         current_file = str(data.get("current_file", "") or "")
-        
-        rate = (float(scanned) / float(elapsed)) if elapsed > 0 else 0.0
-        eta_s = ((float(total) - float(scanned)) / rate) if (total and rate > 0) else 0.0
-        self._ring_counter.value = (
-            f"Processed: {scanned:,} / {total:,}  ·  {rate:,.0f} files/s  ·  ETA {self._fmt_eta(eta_s)}"
-            if total
-            else f"Processed: {scanned:,}  ·  {rate:,.0f} files/s"
-        )
-        self._ring_path.value = self._shorten_path(current_file) if current_file else ""
-        if total > 0:
-            self._ring.value = scanned / total
+        rate = data.get("rate")  # None until backend has enough samples
 
+        _log.debug("UI progress recv: stage=%s scanned=%d total=%d", stage, scanned, total)
+
+        # Ignore a late "complete" tick from the scanner after the user cancelled —
+        # otherwise the HUD briefly shows "Finishing up…" with no terminal event.
+        if self._was_cancelled and stage == ScanStage.COMPLETE and state != "cancelled":
+            return
+
+        # Handle cancelled terminal event.
+        if state == "cancelled" or stage == ScanStage.CANCELLED:
+            self._was_cancelled = True
+            self._stop_scan_elapsed_timer()
+            self._ring.value = None
+            self._ring.color = "#F59E0B"
+            self._ring_label.value = "Scan cancelled"
+            self._ring_phase_label.value = (
+                "Processing stopped before full results were built. "
+                "You can open partial results if any duplicates were found before the stop."
+            )
+            self._ring_counter.value = f"Stopped after processing {scanned:,} files in this phase."
+            self._ring_timer.value = ""
+            self._ring_path.value = ""
+            self._ring_counter_tip.visible = False
+            self._cancel_btn.visible = False
+            self._cancel_btn.text = "Cancel Scan"
+            self._cancel_btn.disabled = False
+            self._partial_results_row.visible = True
+            self._do_page_update()
+            return
+
+        if stage in (ScanStage.DISCOVERING, ScanStage.GROUPING_BY_SIZE):
+            self._scan_files_catalogued = max(
+                self._scan_files_catalogued, int(scanned), int(total)
+            )
+
+        main, sub, counter_core = self._scan_hud_strings(
+            stage, int(scanned), int(total), self._scan_files_catalogued
+        )
+        self._ring_label.value = main
+        self._ring_phase_label.value = sub
+        self._update_counter_help_tooltip(stage, int(scanned), int(total), self._scan_files_catalogued)
+
+        # Indeterminate ring only during directory discovery and size grouping.
+        if stage in self._RING_INDETERMINATE_STAGES:
+            self._ring.value = None
+        elif total > 0 and scanned >= 0:
+            self._ring.value = min(scanned / total, 0.999)  # never pre-flash 100%
+        else:
+            self._ring.value = None
+
+        self._ring.color = self._heat_color_for_ratio(self._scan_ring_heat_ratio(stage, scanned, total))
+
+        self._scan_hud_snap = {
+            "stage": stage,
+            "scanned": int(scanned),
+            "total": int(total),
+            "rate": (
+                float(rate)
+                if (stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and rate is not None and float(rate) > 0)
+                else None
+            ),
+            "files_catalogued": int(self._scan_files_catalogued),
+            "current_file": current_file,
+        }
+
+        is_hs = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+        rate_str = ""
+        if is_hs:
+            if rate is not None and float(rate) > 0:
+                rate_str = f"{rate:,.0f} files/s"
+
+        counter = counter_core
+        if rate_str:
+            counter += f"  ·  {rate_str}"
+
+        self._ring_counter.value = counter
+
+        if current_file and stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+            p = self._shorten_path(current_file)
+            body = p.replace("Current: ", "", 1) if p.startswith("Current: ") else p
+            self._ring_path.value = f"Now: {body}"
+        elif current_file:
+            self._ring_path.value = self._shorten_path(current_file)
+        else:
+            self._ring_path.value = ""
+
+        self._ring_timer.value = self._build_scan_timer_line()
+
+        # Canvas chunk bar — visible only during hashing phases.
+        is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+        if is_hashing and total > 0:
+            self._bar_row.visible = True
+            new_slices = min(_BAR_SLICES, int(scanned / total * _BAR_SLICES))
+            self._bar_slices = new_slices
+            dupes = int(data.get("duplicates_found", 0) or 0)
+            if dupes > self._bar_last_dupes:
+                self._flash_bar_marker(max(0, new_slices - 1))
+                self._bar_last_dupes = dupes
+            else:
+                self._draw_bar()
+        else:
+            if not is_hashing:
+                self._bar_row.visible = False
+                self._bar_slices = 0
+                self._draw_bar()
+
+        self._do_page_update()
+
+    def _do_page_update(self) -> None:
+        """Call page.update() and log any failure instead of silently ignoring it."""
         try:
             self._bridge.flet_page.update()
+        except Exception as exc:
+            _log.debug("page.update() failed in progress callback: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Canvas chunk bar
+    # ------------------------------------------------------------------
+
+    def _draw_bar(self) -> None:
+        w = float(_BAR_WIDTH)
+        h = float(_BAR_HEIGHT)
+        if self._bar_is_complete:
+            self._bar_canvas.shapes = [
+                cv.Rect(0, 0, w, h, paint=ft.Paint(color=ft.Colors.GREEN)),
+            ]
+        else:
+            n = _BAR_SLICES
+            slice_w = max(2.0, w / n)
+            shapes: list = []
+            for i in range(n):
+                color = ft.Colors.AMBER_600 if i < self._bar_slices else ft.Colors.GREY_800
+                shapes.append(cv.Rect(i * slice_w, 0, slice_w - 1, h, paint=ft.Paint(color=color)))
+                if i in self._bar_active_markers:
+                    marker_w = max(2.0, slice_w / 2)
+                    shapes.append(cv.Rect(i * slice_w, 0, marker_w, 5, paint=ft.Paint(color=ft.Colors.PURPLE_400)))
+            self._bar_canvas.shapes = shapes
+        try:
+            self._bar_canvas.update()
         except Exception:
             pass
 
+    def _flash_bar_marker(self, slice_idx: int) -> None:
+        self._bar_active_markers.add(slice_idx)
+        self._draw_bar()
+        try:
+            self._bridge.flet_page.run_task(self._remove_bar_marker, slice_idx)
+        except Exception:
+            pass
+
+    async def _remove_bar_marker(self, slice_idx: int) -> None:
+        await asyncio.sleep(_BAR_MARKER_TTL)
+        self._bar_active_markers.discard(slice_idx)
+        self._draw_bar()
+        try:
+            await self._bridge.flet_page.update_async()
+        except Exception:
+            pass
+
+    def _stop_scan_elapsed_timer(self) -> None:
+        self._scan_timer_active = False
+        self._scan_hud_stop.set()
+        t = self._scan_timer_thread
+        self._scan_timer_thread = None
+        if t is not None and t.is_alive():
+            t.join(timeout=2.5)
+
+    def _start_scan_elapsed_timer(self) -> None:
+        self._stop_scan_elapsed_timer()
+        self._scan_hud_stop = threading.Event()
+        self._scan_timer_active = True
+        self._scan_elapsed_start = time.monotonic()
+        self._scan_hud_snap = {}
+        page = self._bridge.flet_page
+
+        def worker() -> None:
+            while not self._scan_hud_stop.wait(1.0):
+                if not self._scan_timer_active:
+                    break
+                try:
+                    page.run_thread(self._apply_tick_scan_hud)
+                except Exception:
+                    _log.debug("scan elapsed tick scheduling failed", exc_info=True)
+
+        th = threading.Thread(target=worker, daemon=True, name="cerebro-scan-elapsed")
+        self._scan_timer_thread = th
+        th.start()
+
+    def _apply_tick_scan_hud(self) -> None:
+        if not self._scan_timer_active:
+            return
+        if not self._scan_view.visible:
+            return
+        try:
+            self._ring_timer.value = self._build_scan_timer_line()
+            DashboardPage._safe_update(self._ring_timer)
+        except Exception:
+            _log.debug("scan elapsed tick update failed", exc_info=True)
+
+    def _build_scan_timer_line(self) -> str:
+        if not self._scan_timer_active:
+            return ""
+        elapsed = time.monotonic() - self._scan_elapsed_start
+        el = DashboardPage._fmt_elapsed_compact(elapsed)
+        snap = self._scan_hud_snap or {}
+        rate = snap.get("rate")
+        total = int(snap.get("total") or 0)
+        scanned = int(snap.get("scanned") or 0)
+        st = str(snap.get("stage") or "")
+
+        parts = [f"Elapsed {el}"]
+        if not st:
+            parts.append("Preparing scan…")
+            return "  ·  ".join(parts)
+
+        is_hs = st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+
+        # Hide ETA / throughput outside hashing phases (avoids stale files/s during assembly).
+        if not is_hs:
+            if st == ScanStage.COMPLETE:
+                parts.append("Assembling duplicate groups…")
+            elif st == ScanStage.CANCELLED:
+                parts.append("Stopping scan…")
+            elif st == ScanStage.GROUPING_BY_SIZE:
+                parts.append("Grouping same-size candidates…")
+            elif st == ScanStage.DISCOVERING:
+                parts.append("Listing file paths…")
+            else:
+                parts.append("Working…")
+            return "  ·  ".join(parts)
+
+        if rate is not None and float(rate) > 0 and total > 0 and scanned < total:
+            eta_s = (float(total) - float(scanned)) / float(rate)
+            qual = " (estimating)" if elapsed < 5.0 else ""
+            parts.append(f"ETA ~{self._fmt_eta(eta_s)}{qual}")
+        elif rate is not None and float(rate) > 0 and total > 0:
+            parts.append("Finishing…")
+        elif st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and total > 0 and scanned == 0:
+            cf = str(snap.get("current_file") or "")
+            if elapsed <= 2.0:
+                parts.append("Gathering speed data…")
+            elif "Retrieving cached signatures" in cf:
+                parts.append("Reading signature cache from disk…")
+            elif elapsed <= 5.0:
+                parts.append("Gathering speed data…")
+            elif cf:
+                tail = cf if len(cf) < 56 else "…" + cf[-52:]
+                parts.append(f"Still preparing — {tail}")
+            else:
+                parts.append("Still preparing first comparisons…")
+        elif st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) and total > 0 and 0 < scanned < total:
+            cf = str(snap.get("current_file") or "")
+            if "Retrieving cached signatures" in cf and rate is not None and float(rate) > 0:
+                eta_s = (float(total) - float(scanned)) / float(rate)
+                parts.append(f"Retrieving cache — ETA ~{self._fmt_eta(eta_s)} (estimating)")
+            elif elapsed >= 3.0 and scanned >= 200:
+                eta_s = (elapsed / float(scanned)) * (float(total) - float(scanned))
+                parts.append(f"ETA ~{self._fmt_eta(eta_s)} (estimating)")
+            elif elapsed >= 2.0:
+                parts.append("ETA stabilizing…")
+            else:
+                parts.append("Gathering speed data…")
+        elif total > 0 and scanned > 0:
+            parts.append("Throughput: stabilizing…")
+        elif st == ScanStage.DISCOVERING or total == 0:
+            parts.append("Indexing paths…")
+        else:
+            parts.append("Working…")
+        return "  ·  ".join(parts)
+
+    @staticmethod
+    def _fmt_elapsed_compact(seconds: float) -> str:
+        s = int(max(0.0, seconds))
+        h, rem = divmod(s, 3600)
+        m, sec = divmod(rem, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{sec:02d}"
+        return f"{m}:{sec:02d}"
+
     def _on_scan_complete(self, results: list, mode: str) -> None:
-        self._scan_view.visible = False
-        for p in self._main_panels:
-            p.visible = True
-        self._status.value = f"Scan complete — {len(results):,} duplicate groups found."
+        self._stop_scan_elapsed_timer()
+        # If cancel was clicked, the backend still calls on_complete with partial
+        # results (state=cancelled). Route those to the partial-results flow.
+        if self._was_cancelled:
+            self._pending_partial_results = list(results)
+            self._pending_partial_mode = mode
+            self._ring_timer.value = ""
+            has_groups = len(results) > 0
+            self._view_partial_btn.visible = has_groups
+            if not has_groups:
+                self._ring_phase_label.value = "No duplicate groups could be found before cancellation."
+            self._scan_hud_snap = dict(self._scan_hud_snap)
+            self._scan_hud_snap["rate"] = None
+            DashboardPage._safe_update(self)
+            return
+
+        # Normal completion: show "View Results" button, then transition.
+        self._ring.value = 1.0
+        self._ring.color = self._heat_color_for_ratio(1.0)
+        ng = len(results)
+        self._ring_phase_label.value = (
+            "Assembling duplicate groups from hash results." if ng else "Finished — nothing to compare."
+        )
+        self._ring_label.value = f"Scan complete — {ng:,} duplicate group(s) found." if ng > 0 else "Scan complete — no duplicates found."
+        self._ring_counter.value = ""
+        self._ring_timer.value = ""
+        self._ring_path.value = ""
+        self._cancel_btn.visible = False
+        self._view_results_btn.visible = True
+        # Complete the canvas bar.
+        self._bar_is_complete = True
+        self._bar_active_markers.clear()
+        self._bar_row.visible = True
+        self._ring_counter_tip.visible = False
+
+        cast = self._bar_overlay.content
+        if isinstance(cast, ft.Text):
+            cast.value = f"✓ {len(results):,} duplicate groups found" if ng > 0 else "✓ No duplicate groups detected"
+        self._bar_overlay.visible = True
+        self._draw_bar()
         DashboardPage._safe_update(self)
+
         # Refresh quick suggestions immediately with latest scanned folders.
         seen_recent: set[str] = set()
         recents: list[Path] = []
@@ -1185,7 +1781,7 @@ class DashboardPage(ft.Column):
         self._session_recent_scan_paths = recents
         self._refresh_recent_paths_bar()
         self._refresh_quick_add_bar()
-        
+
         self._bridge.dispatch_scan_complete(results, mode)
         try:
             reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
@@ -1199,6 +1795,9 @@ class DashboardPage(ft.Column):
         self._bridge.play_sound("success")
 
     def _on_scan_error(self, msg: str) -> None:
+        self._stop_scan_elapsed_timer()
+        self._ring_timer.value = ""
+        self._bar_row.visible = False
         self._bridge.abort_scan_session()
         self._scan_view.visible = False
         for p in self._main_panels:
@@ -1208,16 +1807,68 @@ class DashboardPage(ft.Column):
         self._bridge.play_sound("error")
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
+        # Immediately show "Cancelling..." and disable the button; keep the
+        # scan view visible so the user sees progress until the terminal event.
+        self._cancel_btn.text = "Cancelling…"
+        self._cancel_btn.disabled = True
+        self._was_cancelled = True
+        self._ring_label.value = "Cancelling…"
+        self._ring_phase_label.value = "Stopping the scan safely — this can take a moment on large files."
+        DashboardPage._safe_update(self)
+        try:
+            self._bridge.flet_page.update()
+        except Exception:
+            pass
         try:
             self._bridge.backend.cancel_scan()
         except Exception as err:
-            _log.error(f"Failed to stop scan: {err}")
+            _log.error("Failed to stop scan: %s", err)
 
+    def _go_to_results(self, e: ft.ControlEvent) -> None:
+        """Navigate to results after a successful scan completion."""
+        self._scan_view.visible = False
+        for p in self._main_panels:
+            p.visible = True
+        self._status.value = "Scan complete."
+        DashboardPage._safe_update(self)
+        try:
+            self._bridge.navigate("duplicates")
+        except Exception:
+            pass
+
+    def _go_to_partial_results(self, e: ft.ControlEvent) -> None:
+        """Navigate to results page with whatever groups the scanner found before cancel."""
+        results = self._pending_partial_results
+        mode = self._pending_partial_mode
+        if not results:
+            try:
+                self._bridge.show_snackbar(
+                    "No duplicate groups could be built before cancellation — nothing to review.",
+                    info=True,
+                )
+            except Exception:
+                pass
+            return
+        self._scan_view.visible = False
+        for p in self._main_panels:
+            p.visible = True
+        self._status.value = f"Scan cancelled — {len(results):,} partial groups available."
+        DashboardPage._safe_update(self)
+        try:
+            self._bridge.dispatch_scan_complete(results, mode)
+            self._bridge.navigate("duplicates")
+        except Exception as err:
+            _log.error("Navigate to partial results failed: %s", err)
+
+    def _go_to_home(self, e: ft.ControlEvent) -> None:
+        """Dismiss the scan view and return to the main panels."""
+        self._stop_scan_elapsed_timer()
+        self._ring_timer.value = ""
         self._bridge.abort_scan_session()
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
-        self._status.value = "Cancelling scan..."
+        self._status.value = "Scan cancelled."
         DashboardPage._safe_update(self)
 
     @staticmethod
@@ -1277,6 +1928,10 @@ class DashboardPage(ft.Column):
 
         # Refresh text colors and stats to match new theme
         self._mode_label.color = self._t.colors.fg_muted
+        self._ring_label.color = self._t.colors.fg
+        self._ring_phase_label.color = self._t.colors.fg_muted
+        self._ring_timer.color = self._t.colors.fg_muted
+        self._ring_counter_tip.icon_color = self._t.colors.fg_muted
         self._update_stats_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
