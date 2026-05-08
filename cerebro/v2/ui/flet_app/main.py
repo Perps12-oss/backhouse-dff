@@ -678,7 +678,7 @@ def _main(page: ft.Page) -> None:
     history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
 
     appearance = bridge.get_settings().get("appearance") or {}
-    bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "arctic")))
+    bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "count_byteula")))
     _show_onboarding_if_needed()
     try:
         dashboard_page.prompt_resume_incomplete_scan_if_needed()
