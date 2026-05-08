@@ -24,11 +24,10 @@ from cerebro.v2.state import (
     HistorySubTabChanged,
     ReviewNavigate,
     ReviewViewFilterChanged,
-    ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
     GroupsPruned,
-    ResultsGroupGridSortChanged,
+
     SetDryRun,
     ScanCompleted,
     ScanEnded,
@@ -163,11 +162,8 @@ class CerebroCoordinator:
     def review_set_filter(self, filter_key: str) -> None:
         self._store.dispatch(ReviewViewFilterChanged(filter_key))
 
-    def results_set_group_sort(self, column: str, sort_asc: bool) -> None:
-        self._store.dispatch(ResultsGroupGridSortChanged(column, sort_asc))
-
     def results_set_filter(self, filter_key: str) -> None:
-        self._store.dispatch(ResultsViewFilterChanged(filter_key))
+        self._store.dispatch(ReviewViewFilterChanged(filter_key))
 
     def results_set_text_filter(self, text: str) -> None:
         self._store.dispatch(ResultsViewTextFilterChanged(text))

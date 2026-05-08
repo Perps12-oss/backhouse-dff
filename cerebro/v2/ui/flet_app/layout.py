@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-class AppLayout(ft.Row):
-    """Root layout: navigation rail on the left, content area on the right."""
+class AppLayout(ft.Column):
+    """Root layout: top navigation bar and content area."""
 
     def __init__(
         self,
@@ -33,6 +33,8 @@ class AppLayout(ft.Row):
         self._page = page
         self._bridge = state_bridge
         self._builders = page_builders
+        self._theme_mode = "dark" if str(getattr(self._bridge, "app_theme", "dark")).lower() == "dark" else "light"
+        self._t = theme_for_mode(self._theme_mode)
         # Start "uninitialized" so first navigate_to("dashboard") mounts content.
         self._current_key: str = ""
 
@@ -42,91 +44,162 @@ class AppLayout(ft.Row):
         self._content_host = ft.Container(expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
         self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
-        nav_destinations = [
-            ft.NavigationRailDestination(
-                icon=r.icon,
-                selected_icon=r.icon,
-                label=ft.Text(r.label, size=10, weight=ft.FontWeight.W_500, color="#D7E6FF"),
+        # Keep power-user pages routable but remove low-frequency pages from top-level navbar.
+        self._nav_routes = [r for r in ROUTES if r.key != "exclude"]
+        self._brand_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16)
+        self._brand_text = ft.Text("CEREBRO", size=11, weight=ft.FontWeight.W_700)
+        self._version_badge = ft.Container(
+            content=ft.Text("v2.0", size=9),
+            padding=ft.padding.symmetric(horizontal=8, vertical=2),
+            border_radius=999,
+            border=ft.border.all(1, ft.Colors.TRANSPARENT),
+        )
+        self._nav_pills: dict[str, ft.Container] = {}
+        self._nav_labels: dict[str, ft.Text] = {}
+        self._nav_icons: dict[str, ft.Icon] = {}
+        self._nav_hover_key: str | None = None
+        nav_button_row = ft.Row(spacing=6, tight=True)
+        for route in self._nav_routes:
+            icon = ft.Icon(route.icon, size=16)
+            label = ft.Text(route.label, size=11, weight=ft.FontWeight.W_600)
+            pill = ft.Container(
+                border_radius=999,
+                padding=ft.padding.symmetric(horizontal=12, vertical=7),
+                ink=True,
+                animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+                content=ft.Row(
+                    [icon, label],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                on_click=lambda _e, k=route.key: self._on_nav_click(k),
+                on_hover=lambda e, k=route.key: self._on_nav_hover(e, k),
             )
-            for r in ROUTES
-        ]
+            self._nav_pills[route.key] = pill
+            self._nav_labels[route.key] = label
+            self._nav_icons[route.key] = icon
+            nav_button_row.controls.append(pill)
 
-        _t = theme_for_mode("dark")
-
-        # App wordmark shown at the top of the rail
-        _wordmark = ft.Container(
-            content=ft.Column(
+        self._top_nav = ft.Container(
+            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
+            content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, color="#22D3EE", size=18),
-                    ft.Text(
-                        "CEREBRO",
-                        size=7,
-                        weight=ft.FontWeight.BOLD,
-                        color="#22D3EE",
-                    ),
+                    ft.Row([self._brand_icon, self._brand_text], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Container(width=12),
+                    nav_button_row,
+                    ft.Container(expand=True),
+                    self._version_badge,
                 ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=1,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.only(top=4, bottom=1),
-        )
-
-        # Version badge pinned at the bottom of the rail
-        _version_badge = ft.Container(
-            content=ft.Text("v2.0", size=8, color="#6E7681"),
-            padding=ft.padding.only(bottom=6),
-        )
-
-        self._nav = ft.NavigationRail(
-            selected_index=0,
-            destinations=nav_destinations,
-            on_change=self._on_nav_change,
-            min_width=60,
-            min_extended_width=200,
-            group_alignment=-0.96,
-            label_type=ft.NavigationRailLabelType.ALL,
-            bgcolor="#080C11",
-            indicator_color=ft.Colors.with_opacity(0.09, "#22D3EE"),
-            indicator_shape=ft.RoundedRectangleBorder(radius=4),
-            selected_label_text_style=ft.TextStyle(color="#D7E6FF", size=11, weight=ft.FontWeight.W_700),
-            unselected_label_text_style=ft.TextStyle(color="#B7C8E4", size=10, weight=ft.FontWeight.W_500),
-            leading=_wordmark,
-            trailing=_version_badge,
         )
 
         self.controls = [
-            self._nav,
-            ft.VerticalDivider(width=1, color="#30363D", thickness=1),
+            self._top_nav,
             self._content_host,
         ]
+        self._apply_nav_theme()
 
-    def _on_nav_change(self, e: ft.ControlEvent) -> None:
-        idx = e.control.selected_index
-        if 0 <= idx < len(ROUTES):
-            route = ROUTES[idx]
-            if route.key in {"duplicates", "review"} and not bool(self._bridge.state.groups):
-                self._nav.selected_index = next((i for i, r in enumerate(ROUTES) if r.key == "dashboard"), 0)
-                self._nav.update()
-                self._bridge.show_snackbar("Run a scan first to unlock Results and Review.", info=True)
-                self.navigate_to("dashboard")
-                return
-            self.navigate_to(route.key)
+    def _on_nav_click(self, key: str) -> None:
+        if key == "review" and not bool(self._bridge.state.groups):
+            self._bridge.show_snackbar("Run a scan first to unlock Results and Review.", info=True)
+            self.navigate_to("dashboard")
+            return
+        self.navigate_to(key)
+
+    def _on_nav_hover(self, e: ft.ControlEvent, key: str) -> None:
+        self._nav_hover_key = key if str(e.data).lower() == "true" else None
+        self._sync_nav_selection()
+        if self.page is not None:
+            self.update()
+
+    def _selected_nav_index_for_key(self, key: str) -> int:
+        """Map route keys to rail indices, including hidden routes."""
+        key_for_nav = "settings" if key == "exclude" else key
+        return next((i for i, r in enumerate(self._nav_routes) if r.key == key_for_nav), 0)
+
+    def _apply_nav_theme(self) -> None:
+        c = self._t.colors
+        self._top_nav.bgcolor = c.nav_bg
+        self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
+        self._brand_icon.color = c.accent
+        self._brand_text.color = c.fg
+        badge_text = self._version_badge.content
+        if isinstance(badge_text, ft.Text):
+            badge_text.color = c.fg_muted
+        self._version_badge.bgcolor = ft.Colors.with_opacity(0.08, c.accent)
+        self._version_badge.border = ft.border.all(1, ft.Colors.with_opacity(0.20, c.accent))
+        self._sync_nav_selection()
+
+    def _sync_nav_selection(self) -> None:
+        c = self._t.colors
+        selected_key = "settings" if self._current_key == "exclude" else self._current_key
+        for key, pill in self._nav_pills.items():
+            is_selected = key == selected_key
+            is_hovered = (self._nav_hover_key == key) and not is_selected
+            label = self._nav_labels[key]
+            icon = self._nav_icons[key]
+            label.color = c.fg if (is_selected or is_hovered) else c.fg2
+            icon.color = c.accent if is_selected else (c.fg if is_hovered else c.fg_muted)
+            pill.bgcolor = (
+                ft.Colors.with_opacity(0.18, c.accent)
+                if is_selected
+                else ft.Colors.with_opacity(0.08, c.accent)
+                if is_hovered
+                else ft.Colors.TRANSPARENT
+            )
+            pill.border = ft.border.all(
+                1,
+                ft.Colors.with_opacity(0.44, c.accent)
+                if is_selected
+                else ft.Colors.with_opacity(0.26, c.accent)
+                if is_hovered
+                else ft.Colors.with_opacity(0.20, c.border),
+            )
+            pill.shadow = (
+                ft.BoxShadow(
+                    spread_radius=0,
+                    blur_radius=12,
+                    color=ft.Colors.with_opacity(0.18, c.accent),
+                    offset=ft.Offset(0, 2),
+                )
+                if is_selected
+                else ft.BoxShadow(
+                    spread_radius=0,
+                    blur_radius=8,
+                    color=ft.Colors.with_opacity(0.12, c.accent),
+                    offset=ft.Offset(0, 1),
+                )
+                if is_hovered
+                else None
+            )
+
+    def apply_theme(self, mode: str) -> None:
+        """Repaint shell controls when the app theme changes."""
+        self._theme_mode = "dark" if (mode or "").lower() == "dark" else "light"
+        self._t = theme_for_mode(self._theme_mode)
+        self._apply_nav_theme()
+        if self.page is not None:
+            self.update()
 
     def navigate_to(self, key: str) -> None:
         """Switch the content area to the page identified by *key*."""
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
-        if key in {"duplicates", "review"} and not bool(self._bridge.state.groups):
+        if key == "review" and not bool(self._bridge.state.groups):
             key = "dashboard"
         # If already on this key and content is mounted, skip redundant rebuild.
         # If content host is unexpectedly empty, force remount for resilience.
         if key == self._current_key and self._content_host.content is not None:
             return
         self._current_key = key
-        idx = next((i for i, r in enumerate(ROUTES) if r.key == key), 0)
-        self._nav.selected_index = idx
-        self._nav.update()
+        _ = self._selected_nav_index_for_key(key)
+        self._sync_nav_selection()
+        if self.page is not None:
+            self.update()
 
         builder = self._builders.get(key)
         inner = None

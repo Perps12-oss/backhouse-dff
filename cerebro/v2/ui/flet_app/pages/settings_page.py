@@ -231,7 +231,7 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("file_mode", {})
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
-        self._settings["appearance"].setdefault("ui_theme_preset", "arctic")
+        self._settings["appearance"].setdefault("ui_theme_preset", "count_byteula")
 
     def _apply_saved_values_to_controls(self) -> None:
         """Push current settings values into the UI controls."""
@@ -275,7 +275,7 @@ class SettingsPage(ft.Column):
         self._deletion_dhash_label.value = f"dHash threshold: {int(self._deletion_dhash_slider.value)}"
         self._deletion_similarity_label.value = f"Matching level: {int(self._deletion_similarity_slider.value)}%"
 
-        preset_id = str(self._settings["appearance"].get("ui_theme_preset", "arctic"))
+        preset_id = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
         self._bridge.apply_preset_theme(preset_id)
 
     # ------------------------------------------------------------------
@@ -385,7 +385,7 @@ class SettingsPage(ft.Column):
             )
         )
         self._theme_chips.clear()
-        selected_pid = str(self._settings["appearance"].get("ui_theme_preset", "arctic"))
+        selected_pid = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
         chips_wrap = ft.Row(wrap=True, spacing=t.spacing.sm, run_spacing=t.spacing.sm)
         for preset in PRESET_THEMES:
             is_sel = preset.id == selected_pid
@@ -704,7 +704,7 @@ class SettingsPage(ft.Column):
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
         self._settings["appearance"]["ui_theme_preset"] = str(
-            self._settings["appearance"].get("ui_theme_preset", "arctic")
+            self._settings["appearance"].get("ui_theme_preset", "count_byteula")
         )
 
         self._settings["performance"]["max_threads"] = int(self._perf_threads_slider.value)
@@ -824,7 +824,7 @@ class SettingsPage(ft.Column):
         )
         self._cancel_btn.style = ft.ButtonStyle(color=self._t.colors.fg2)
 
-        pid = str(self._settings.get("appearance", {}).get("ui_theme_preset", "arctic"))
+        pid = str(self._settings.get("appearance", {}).get("ui_theme_preset", "count_byteula"))
         self._update_theme_chip_highlights(pid)
 
         if self._is_mounted():
