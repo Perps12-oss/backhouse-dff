@@ -11,7 +11,7 @@ colors instead of the built-in fallbacks.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Dict, Optional
 
 import flet as ft
@@ -34,6 +34,54 @@ def set_active_preset(preset: "PalettePreset") -> None:
 
 def get_active_preset() -> Optional["PalettePreset"]:
     return _active_preset
+
+
+# ---------------------------------------------------------------------------
+# UI font scale (Settings → Appearance slider). Flet Page has no text_scale in
+# current builds; we scale Typography tokens consumed by all pages.
+# ---------------------------------------------------------------------------
+
+_UI_FONT_BASE_PX: int = 13
+_ui_font_scale: float = 1.0
+
+
+def set_ui_font_size_px(size: int) -> None:
+    """Map slider px (10–18) to a scale factor relative to base 13px body size."""
+    global _ui_font_scale
+    clamped = max(10, min(18, int(round(size))))
+    _ui_font_scale = round(clamped / float(_UI_FONT_BASE_PX), 3)
+
+
+def get_ui_font_scale() -> float:
+    return _ui_font_scale
+
+
+def _scaled_typography(base: Typography) -> Typography:
+    s = _ui_font_scale
+    if abs(s - 1.0) < 1e-6:
+        return base
+
+    def sc(n: int) -> int:
+        return max(6, min(56, int(round(int(n) * s))))
+
+    return Typography(
+        family=base.family,
+        size_xs=sc(base.size_xs),
+        size_sm=sc(base.size_sm),
+        size_base=sc(base.size_base),
+        size_md=sc(base.size_md),
+        size_lg=sc(base.size_lg),
+        size_xl=sc(base.size_xl),
+        size_xxl=sc(base.size_xxl),
+        size_xxxl=sc(base.size_xxxl),
+    )
+
+
+def _with_scaled_typography(tokens: ThemeTokens) -> ThemeTokens:
+    new_ty = _scaled_typography(tokens.typography)
+    if new_ty is tokens.typography:
+        return tokens
+    return replace(tokens, typography=new_ty)
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +293,12 @@ def theme_for_mode(mode: str) -> ThemeTokens:
     """Return theme tokens for the given mode string."""
     p = _active_preset
     if p is not None:
-        return ThemeTokens(colors=_tokens_from_preset(p))
-    if mode == "dark":
-        return dark_theme()
-    return light_theme()
+        tokens = ThemeTokens(colors=_tokens_from_preset(p))
+    elif mode == "dark":
+        tokens = dark_theme()
+    else:
+        tokens = light_theme()
+    return _with_scaled_typography(tokens)
 
 
 # ---------------------------------------------------------------------------

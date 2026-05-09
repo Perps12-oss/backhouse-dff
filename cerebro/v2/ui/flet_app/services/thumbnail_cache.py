@@ -17,6 +17,10 @@ _MAX_CACHE = 256
 _MAX_EDGE = 112
 _JPEG_QUALITY = 82
 
+# Side-by-side compare view: much larger decode than grid thumbnails.
+_COMPARE_MAX_EDGE = 2048
+_COMPARE_JPEG_QUALITY = 90
+
 _IMAGE_SUFFIXES = {
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff",
     ".ico", ".heic", ".heif",
@@ -70,6 +74,36 @@ class ThumbnailCache:
                 b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception:
             _log.debug("thumbnail failed for %s", path, exc_info=True)
+            self._remember(key, None)
+            return None
+
+        self._remember(key, b64)
+        return b64
+
+    def get_compare_preview_base64(self, path: Path) -> Optional[str]:
+        """High-res JPEG preview for compare mode (separate cache key from grid thumbnails)."""
+        p = Path(path)
+        key = f"cmp:{p.resolve()}"
+        if key in self._data:
+            self._data.move_to_end(key)
+            return self._data[key]
+
+        if not p.is_file() or not is_image_path(p):
+            self._remember(key, None)
+            return None
+
+        try:
+            from PIL import Image
+
+            with Image.open(p) as im:
+                im = _normalize_for_safe_convert(im)
+                im = im.convert("RGB")
+                im.thumbnail((_COMPARE_MAX_EDGE, _COMPARE_MAX_EDGE), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=_COMPARE_JPEG_QUALITY, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            _log.debug("compare preview failed for %s", path, exc_info=True)
             self._remember(key, None)
             return None
 

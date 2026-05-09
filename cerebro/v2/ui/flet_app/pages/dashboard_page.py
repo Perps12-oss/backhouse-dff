@@ -15,6 +15,11 @@ from typing import TYPE_CHECKING, Optional, Set
 import flet as ft
 import flet.canvas as cv
 
+from cerebro.v2.ui.flet_app.pill_button_styles import (
+    pill_filled_accent,
+    pill_outlined_button_style,
+    pill_text_button_style,
+)
 from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
 from cerebro.engines.scan_stage import ScanStage
 
@@ -65,6 +70,8 @@ class DashboardPage(ft.Column):
 
         # UI References (to update without rebuilding)
         self._hero: ft.Container
+        self._hero_tagline_icon: ft.Icon
+        self._folder_section_icon: ft.Icon
         self._stats_row: ft.Row
         self._mode_label: ft.Text
         self._mode_row: ft.Column
@@ -77,9 +84,14 @@ class DashboardPage(ft.Column):
         self._last_session_btn: ft.TextButton
         self._start_btn: ft.FilledButton
         self._stop_btn: ft.OutlinedButton
-        self._progress: ft.ProgressBar
-        self._progress_label: ft.Text
+        self._phase_prep_status: ft.Text
+        self._phase_hash_title: ft.Text
+        self._phase_hash_bar: ft.ProgressBar
+        self._phase_hash_caption: ft.Text
+        self._scan_phase_card: ft.Container
+        self._status_metric_row: ft.Row
         self._progress_detail: ft.Text
+        self._path_strip: ft.Container
         self._status: ft.Text
         self._cancelled_results_banner: ft.Container
         self._cancelled_results_text: ft.Text
@@ -95,6 +107,9 @@ class DashboardPage(ft.Column):
         self._cancel_btn: ft.OutlinedButton
         self._view_results_btn: ft.FilledButton
         self._partial_results_row: ft.Row
+        self._cancel_choice_panel: ft.Container
+        self._cancel_choice_headline: ft.Text
+        self._cancel_choice_sub: ft.Text
         self._scan_view: ft.Container
         self._main_panels: list
         self._bar_canvas: cv.Canvas
@@ -115,11 +130,16 @@ class DashboardPage(ft.Column):
         self._exclude_paths_browse_btn: ft.OutlinedButton
         self._include_subfolders_sw: ft.Switch
         self._scan_options_row: ft.Container
+        self._partial_back_home_btn: ft.OutlinedButton
         # Cancellation state: track whether we're in a cancel flow and cache
         # partial results so the user can choose to view them post-cancel.
         self._was_cancelled: bool = False
         self._pending_partial_results: list = []
         self._pending_partial_mode: str = "files"
+        self._cancel_complete_handled: bool = False
+        self._cancel_user_dismissed_choice: bool = False
+        self._resume_interrupted_scan_once: bool = False
+        self._last_incomplete_persist_ts: float = 0.0
         # Elapsed clock + ETA line (1 Hz); snapshot updated from progress callbacks.
         self._scan_timer_active: bool = False
         self._scan_elapsed_start: float = 0.0
@@ -140,6 +160,7 @@ class DashboardPage(ft.Column):
         self._bar_active_markers: Set[int] = set()
         self._bar_is_complete: bool = False
         self._bar_last_dupes: int = 0
+        self._headline_pulse_tick: int = 0
         self._build_ui()
         self._load_scan_options_for_mode(self._selected_mode)
 
@@ -170,10 +191,10 @@ class DashboardPage(ft.Column):
         if self._is_dark_theme():
             if variant == "secondary":
                 return "#A78BFA"
-            return "#22D3EE"
+            return str(self._t.colors.accent)
         if variant == "secondary":
             return "#4F46E5"
-        return str(self._t.colors.primary)
+        return str(self._t.colors.accent)
 
     def _hover_shadow(self, color: str, strong: bool = False) -> ft.BoxShadow:
         return ft.BoxShadow(
@@ -199,12 +220,15 @@ class DashboardPage(ft.Column):
             "Open Last Session",
             icon=ft.icons.Icons.HISTORY,
             on_click=self._open_last_session,
-            style=ft.ButtonStyle(color=t.colors.fg_muted),
+            style=pill_text_button_style(t, variant="muted"),
+        )
+        self._hero_tagline_icon = ft.Icon(
+            ft.icons.Icons.AUTO_AWESOME, size=16, color=t.colors.accent
         )
         self._hero = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
+                    self._hero_tagline_icon,
                     ft.Text(
                         "Scan intelligently. Review safely.",
                         size=t.typography.size_base,
@@ -250,12 +274,15 @@ class DashboardPage(ft.Column):
 
         # Folder list + clear drop target
         self._folder_chips_row = ft.Row([], wrap=True, spacing=s.xs)
+        self._folder_section_icon = ft.Icon(
+            ft.icons.Icons.FOLDER_OPEN, size=18, color=t.colors.accent
+        )
         self._folder_container = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=18, color="#22D3EE"),
+                            self._folder_section_icon,
                             ft.Text("Selected folders", color=t.colors.fg_muted, size=t.typography.size_sm, weight=ft.FontWeight.W_600),
                             ft.Container(expand=True),
                         ],
@@ -289,19 +316,18 @@ class DashboardPage(ft.Column):
             icon=ft.icons.Icons.STOP,
             on_click=self._stop_scan,
             visible=False,
-            style=ft.ButtonStyle(color=t.colors.danger),
+            style=pill_outlined_button_style(t, danger=True),
         )
         self._start_btn = ft.FilledButton(
             "START SCAN",
             icon=ft.icons.Icons.ROCKET_LAUNCH,
             on_click=self._start_scan,
-            style=ft.ButtonStyle(
-                bgcolor="#28C7D8",
-                color="#0A0E14",
-                overlay_color=ft.Colors.with_opacity(0.2, "#28C7D8"),
-                shape=ft.RoundedRectangleBorder(radius=14),
-                text_style=ft.TextStyle(size=t.typography.size_xl, weight=ft.FontWeight.W_800),
+            style=pill_filled_accent(
+                t,
                 padding=ft.padding.symmetric(horizontal=56, vertical=28),
+                text_size=t.typography.size_xl,
+                weight=ft.FontWeight.W_800,
+                border_radius=14,
             ),
             disabled=False,
             width=368,
@@ -326,15 +352,64 @@ class DashboardPage(ft.Column):
             spacing=s.xs,
         )
 
-        self._progress = ft.ProgressBar(width=400, bar_height=6, visible=False, color=t.colors.primary, bgcolor=t.colors.bg3)
-        self._progress_label = ft.Text("", color=t.colors.fg2, size=t.typography.size_sm, visible=False)
-        self._progress_detail = ft.Text("", color=t.colors.fg_muted, size=t.typography.size_xs, visible=False)
+        _phase_track_w = 560
+        self._phase_prep_status = ft.Text(
+            "Step 1 · Indexing — starting…",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_600,
+            color=t.colors.fg2,
+            width=_phase_track_w,
+        )
+        self._phase_hash_title = ft.Text(
+            "Step 2 — Compare contents (hash)",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_600,
+            color=t.colors.fg_muted,
+        )
+        self._phase_hash_bar = ft.ProgressBar(
+            width=_phase_track_w,
+            bar_height=8,
+            color="#00BFA5",
+            bgcolor=t.colors.bg3,
+            value=None,
+        )
+        self._phase_hash_caption = ft.Text(
+            "Waiting — runs after step 1 finishes.",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+        )
+        self._scan_phase_card = ft.Container(
+            content=ft.Column(
+                [
+                    self._phase_prep_status,
+                    ft.Container(height=s.xs),
+                    self._phase_hash_title,
+                    self._phase_hash_bar,
+                    self._phase_hash_caption,
+                ],
+                spacing=s.xs,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.START,
+            ),
+            width=600,
+            padding=s.md,
+            border_radius=12,
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border)),
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.bg3),
+        )
+        self._progress_detail = ft.Text(
+            "",
+            color=t.colors.fg_muted,
+            size=t.typography.size_xs,
+            text_align=ft.TextAlign.CENTER,
+        )
 
         # Circular scan progress view — swaps in over main content during active scan
         self._ring_default_color = "#00BFA5"
         self._ring = ft.ProgressRing(
-            width=100, height=100,
-            stroke_width=8,
+            width=80,
+            height=80,
+            stroke_width=7,
             color=self._ring_default_color,
             value=None,  # indeterminate until first progress callback
         )
@@ -344,6 +419,7 @@ class DashboardPage(ft.Column):
             weight=ft.FontWeight.BOLD,
             color=t.colors.fg,
             text_align=ft.TextAlign.CENTER,
+            animate_opacity=ft.Animation(800, ft.AnimationCurve.EASE_IN_OUT),
         )
         self._ring_phase_label = ft.Text(
             "",
@@ -399,52 +475,127 @@ class DashboardPage(ft.Column):
         )
         self._ring_timer = ft.Text(
             "",
-            size=t.typography.size_sm,
-            color=t.colors.fg_muted,
-            text_align=ft.TextAlign.CENTER,
+            size=t.typography.size_lg,
+            weight=ft.FontWeight.W_600,
+            color=t.colors.fg2,
+            text_align=ft.TextAlign.START,
         )
         self._ring_path = ft.Text(
             "",
             size=t.typography.size_sm,
             color=t.colors.fg_muted,
-            text_align=ft.TextAlign.CENTER,
+            text_align=ft.TextAlign.START,
             no_wrap=True,
             overflow=ft.TextOverflow.ELLIPSIS,
-            width=480,
+            expand=True,
+        )
+        self._path_strip = ft.Container(
+            content=self._ring_path,
+            height=48,
+            width=600,
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            border_radius=8,
+            border=ft.border.all(1, ft.Colors.with_opacity(0.28, t.colors.border)),
+            bgcolor=ft.Colors.with_opacity(0.14, t.colors.bg3),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        self._status_metric_row = ft.Row(
+            [
+                ft.Container(
+                    content=self._ring,
+                    alignment=ft.Alignment(0, 0),
+                    width=88,
+                    height=88,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "Time & estimate",
+                                size=t.typography.size_xs,
+                                color=t.colors.fg_muted,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            self._ring_timer,
+                        ],
+                        spacing=2,
+                        tight=True,
+                        horizontal_alignment=ft.CrossAxisAlignment.START,
+                    ),
+                    expand=True,
+                    padding=ft.padding.only(left=s.sm),
+                ),
+            ],
+            width=600,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._view_results_btn = ft.FilledButton(
             "View Results",
             icon=ft.icons.Icons.CHECK_CIRCLE,
             on_click=self._go_to_results,
             visible=False,
+            style=pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700),
         )
         self._view_partial_btn = ft.OutlinedButton(
-            "View Partial Results",
+            "View partial results",
             icon=ft.icons.Icons.CHECKLIST,
             on_click=self._go_to_partial_results,
+            style=pill_outlined_button_style(t),
+        )
+        self._partial_back_home_btn = ft.OutlinedButton(
+            "Back to home",
+            icon=ft.icons.Icons.HOME,
+            on_click=self._go_to_home,
+            style=pill_outlined_button_style(t),
         )
         self._partial_results_row = ft.Row(
             [
                 self._view_partial_btn,
-                ft.TextButton(
-                    "Back to Home",
-                    icon=ft.icons.Icons.HOME,
-                    on_click=self._go_to_home,
-                ),
+                self._partial_back_home_btn,
             ],
             alignment=ft.MainAxisAlignment.CENTER,
+            spacing=s.md,
+            wrap=True,
+            visible=False,
+        )
+        self._cancel_choice_headline = ft.Text(
+            "What would you like to do next?",
+            size=t.typography.size_xxl,
+            weight=ft.FontWeight.W_800,
+            color=t.colors.fg,
+            text_align=ft.TextAlign.CENTER,
+            width=560,
+        )
+        self._cancel_choice_sub = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg2,
+            text_align=ft.TextAlign.CENTER,
+            width=560,
+        )
+        self._cancel_choice_panel = ft.Container(
+            content=ft.Column(
+                [
+                    self._cancel_choice_headline,
+                    self._cancel_choice_sub,
+                    self._partial_results_row,
+                ],
+                spacing=s.md,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                tight=True,
+            ),
+            width=620,
+            padding=ft.padding.symmetric(horizontal=s.lg, vertical=s.lg + 4),
+            border_radius=16,
+            border=ft.border.all(2, ft.Colors.with_opacity(0.65, t.colors.warning)),
+            bgcolor=ft.Colors.with_opacity(0.14, t.colors.warning),
             visible=False,
         )
         self._cancel_btn = ft.OutlinedButton(
             "Cancel Scan",
             icon=ft.icons.Icons.STOP,
             on_click=self._stop_scan,
-            style=ft.ButtonStyle(
-                color=t.colors.danger,
-                side=ft.BorderSide(1, t.colors.danger),
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=24, vertical=12),
-            ),
+            style=pill_outlined_button_style(t, danger=True),
         )
         self._bar_canvas = cv.Canvas(shapes=[], width=_BAR_WIDTH, height=_BAR_HEIGHT)
         self._bar_overlay = ft.Container(
@@ -475,27 +626,25 @@ class DashboardPage(ft.Column):
             content=ft.Column(
                 [
                     self._ring_label,
-                    self._ring,
                     self._ring_phase_label,
                     self._scan_mode_run_label,
+                    self._status_metric_row,
+                    self._scan_phase_card,
                     self._ring_counter_row,
                     self._hash_algo_label,
-                    self._progress_label,
-                    self._progress,
                     self._progress_detail,
-                    self._ring_timer,
-                    self._ring_path,
+                    self._path_strip,
                     self._bar_row,
                     self._cancel_btn,
                     self._view_results_btn,
-                    self._partial_results_row,
+                    self._cancel_choice_panel,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                alignment=ft.MainAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.START,
                 spacing=s.lg,
             ),
             expand=True,
-            alignment=ft.Alignment(0, 0),
+            alignment=ft.Alignment(0, -0.25),
             visible=False,
         )
 
@@ -515,6 +664,7 @@ class DashboardPage(ft.Column):
             "View Partial Results",
             icon=ft.icons.Icons.CHECKLIST,
             on_click=self._go_to_partial_results,
+            style=pill_text_button_style(t, variant="primary"),
         )
         self._cancelled_results_banner = ft.Container(
             content=ft.Row(
@@ -576,6 +726,7 @@ class DashboardPage(ft.Column):
             "Browse",
             icon=ft.icons.Icons.FOLDER_OPEN,
             on_click=self._browse_exclude_path,
+            style=pill_outlined_button_style(t),
         )
         self._include_subfolders_sw = ft.Switch(
             label="Include subfolders",
@@ -640,10 +791,7 @@ class DashboardPage(ft.Column):
             "Advanced scan settings",
             icon=ft.icons.Icons.KEYBOARD_ARROW_DOWN,
             on_click=self._toggle_scan_options_dropdown,
-            style=ft.ButtonStyle(
-                color=t.colors.fg2,
-                shape=ft.RoundedRectangleBorder(radius=10),
-            ),
+            style=pill_outlined_button_style(t),
         )
         self._scan_options_dropdown = ft.Container(
             content=ft.Container(
@@ -697,6 +845,35 @@ class DashboardPage(ft.Column):
             **self._get_glass_style(0.035),
         )
 
+        # Paused scans section (shown when checkpoint DB has interrupted scans)
+        self._paused_scans_col = ft.Column([], spacing=s.xs, visible=False)
+        self._paused_scans_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.icons.Icons.PAUSE_CIRCLE, size=16, color=t.colors.warning),
+                            ft.Text(
+                                "PAUSED SCANS",
+                                size=t.typography.size_xs,
+                                weight=ft.FontWeight.W_700,
+                                color=t.colors.warning,
+                            ),
+                        ],
+                        spacing=s.xs,
+                    ),
+                    self._paused_scans_col,
+                ],
+                spacing=s.xs,
+            ),
+            width=620,
+            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            border_radius=10,
+            border=ft.border.all(1, ft.Colors.with_opacity(0.4, t.colors.warning)),
+            bgcolor=ft.Colors.with_opacity(0.07, t.colors.warning),
+            visible=False,
+        )
+
         # Assemble — main panels tracked so scan view can swap in/out
         home_content = ft.Container(
             alignment=ft.Alignment(0, -1),
@@ -704,6 +881,10 @@ class DashboardPage(ft.Column):
             content=ft.Column(
                 [
                     workflow_stack,
+                    ft.Container(
+                        content=self._paused_scans_section,
+                        padding=ft.padding.only(top=s.sm),
+                    ),
                     ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.sm)),
                     ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.sm)),
                     ft.Container(content=self._stats_row, width=360, padding=ft.padding.only(top=s.sm)),
@@ -716,7 +897,8 @@ class DashboardPage(ft.Column):
         self._main_panels = list(self.controls)  # snapshot for hide/show swap
         self.controls.append(self._scan_view)     # scan view always last, starts hidden
         self._refresh_folder_chips()
-        
+        self._apply_dashboard_pill_chrome()
+
         # Initial data fetch (async so first layout is not blocked)
         self._schedule_dashboard_data_fetch()
 
@@ -1079,6 +1261,26 @@ class DashboardPage(ft.Column):
         DashboardPage._safe_update(self._archives_warning)
         DashboardPage._safe_update(self._include_subfolders_sw)
 
+    def _effective_scan_options(self) -> dict:
+        """Merge per-mode Home options with global Performance settings for the turbo file engine."""
+        opts = dict(self._scan_options)
+        try:
+            s = self._bridge.get_settings()
+            perf = s.get("performance") if isinstance(s, dict) else None
+            if isinstance(perf, dict):
+                opts["max_threads"] = max(0, min(256, int(perf.get("max_threads", 0) or 0)))
+                opts["incremental_scan"] = bool(perf.get("hash_cache_enabled", True))
+        except Exception:
+            _log.debug("effective_scan_options: could not read performance settings", exc_info=True)
+        opts.setdefault("max_threads", 0)
+        opts.setdefault("incremental_scan", True)
+        # Full-file hashing with auto pick among xxhash / blake3 / sha256 (see turbo_scanner).
+        opts.setdefault("hash_algorithm", "auto")
+        if getattr(self, "_resume_interrupted_scan_once", False):
+            opts = dict(opts)
+            opts["resume_interrupted_scan"] = True
+        return opts
+
     def _select_mode(self, key: str) -> None:
         if self._selected_mode == key and key in self._selected_modes:
             return
@@ -1179,15 +1381,40 @@ class DashboardPage(ft.Column):
 
     def _sync_start_button_state(self) -> None:
         self._start_btn.disabled = False
-        self._start_btn.style = ft.ButtonStyle(
-            bgcolor="#28C7D8",
-            color="#0A0E14",
-            overlay_color=ft.Colors.with_opacity(0.2, "#28C7D8"),
-            shape=ft.RoundedRectangleBorder(radius=14),
-            text_style=ft.TextStyle(size=self._t.typography.size_xl, weight=ft.FontWeight.W_800),
+        self._start_btn.style = pill_filled_accent(
+            self._t,
             padding=ft.padding.symmetric(horizontal=56, vertical=28),
+            text_size=self._t.typography.size_xl,
+            weight=ft.FontWeight.W_800,
+            border_radius=14,
         )
         DashboardPage._safe_update(self._start_btn)
+
+    def _apply_dashboard_pill_chrome(self) -> None:
+        """Match shell nav pill styling; call after theme changes."""
+        t = self._t
+        self._last_session_btn.style = pill_text_button_style(t, variant="muted")
+        self._stop_btn.style = pill_outlined_button_style(t, danger=True)
+        self._sync_start_button_state()
+        self._view_results_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
+        self._view_partial_btn.style = pill_outlined_button_style(t)
+        self._partial_back_home_btn.style = pill_text_button_style(t, variant="muted")
+        self._cancel_btn.style = pill_outlined_button_style(t, danger=True)
+        self._exclude_paths_browse_btn.style = pill_outlined_button_style(t)
+        self._scan_options_toggle_btn.style = pill_outlined_button_style(t)
+        self._cancelled_results_btn.style = pill_text_button_style(t, variant="primary")
+        for ctrl in (
+            self._last_session_btn,
+            self._stop_btn,
+            self._view_results_btn,
+            self._view_partial_btn,
+            self._partial_back_home_btn,
+            self._cancel_btn,
+            self._exclude_paths_browse_btn,
+            self._scan_options_toggle_btn,
+            self._cancelled_results_btn,
+        ):
+            DashboardPage._safe_update(ctrl)
 
     def _quick_add_desktop_downloads(self, _e: ft.ControlEvent | None = None) -> None:
         home = Path.home()
@@ -1238,8 +1465,10 @@ class DashboardPage(ft.Column):
         self._begin_scan()
 
     def _begin_scan(self) -> None:
+        resume_interrupted = bool(getattr(self, "_resume_interrupted_scan_once", False))
         self._was_cancelled = False
         self._pending_partial_results = []
+        self._reset_cancel_choice_for_new_scan()
         scan_modes = self._selected_modes_for_scan()
         self._pending_partial_mode = "+".join(scan_modes)
         self._hide_cancelled_results_banner()
@@ -1265,29 +1494,28 @@ class DashboardPage(ft.Column):
         self._hash_algo_label.visible = False
         self._ring_path.value = ""
         self._ring_label.value = "Preparing scan…"
-        self._progress.value = 0.0
-        self._progress.visible = True
-        self._progress_label.visible = True
-        self._progress_detail.visible = True
-        self._progress_label.value = "0.0% complete"
-        self._progress_detail.value = "Candidates: 0"
+        self._ring_label.opacity = 1.0
+        self._headline_pulse_tick = 0
+        self._progress_detail.value = "Duplicate candidates tracked: 0"
+        self._update_dual_phase_bars(ScanStage.DISCOVERING, 0, 0)
         self._cancel_btn.text = "Cancel Scan"
         self._cancel_btn.disabled = False
         self._cancel_btn.visible = True
         self._view_results_btn.visible = False
-        self._partial_results_row.visible = False
         self._view_partial_btn.visible = True
         self._view_partial_btn.disabled = False
         for p in self._main_panels:
             p.visible = False
         self._scan_view.visible = True
         DashboardPage._safe_update(self)
+        self._last_incomplete_persist_ts = time.monotonic()
         self._persist_incomplete_scan_session(status="in_progress")
         _log.info(
-            "scan_start folders=%d modes=%s archives=%s",
+            "scan_start folders=%d modes=%s archives=%s resume_interrupted=%s",
             len(self._folders),
             scan_modes,
             bool(self._scan_options.get("scan_archives", False)),
+            resume_interrupted,
         )
 
         self._bridge.begin_scan_session(self._folders, "+".join(scan_modes))
@@ -1306,7 +1534,17 @@ class DashboardPage(ft.Column):
             backend.set_on_progress(self._on_scan_progress)
             backend.set_on_complete(self._on_scan_complete)
             backend.set_on_error(self._on_scan_error)
-            backend.start_scan(self._folders, mode=scan_modes, options=dict(self._scan_options))
+            scan_opts = self._effective_scan_options()
+            backend.start_scan(self._folders, mode=scan_modes, options=scan_opts)
+            self._resume_interrupted_scan_once = False
+            if resume_interrupted:
+                try:
+                    self._bridge.show_snackbar(
+                        "Continuing interrupted scan — hash and folder caches reuse finished work when paths and filters match.",
+                        info=True,
+                    )
+                except Exception:
+                    pass
         except Exception as err:
             self._on_scan_error(f"Backend communication error: {err}")
 
@@ -1375,15 +1613,37 @@ class DashboardPage(ft.Column):
         _log.info("root_drive_warning_acknowledged drive=%s", drive_anchor)
         self._begin_scan()
 
-    def _persist_incomplete_scan_session(self, *, status: str) -> None:
+    def _persist_incomplete_scan_session(
+        self,
+        *,
+        status: str,
+        progress_snapshot: Optional[dict] = None,
+    ) -> None:
+        snap = progress_snapshot if progress_snapshot is not None else dict(getattr(self, "_scan_hud_snap", None) or {})
+        last_progress: dict = {}
+        if snap:
+            last_progress = {
+                "stage": str(snap.get("stage") or ""),
+                "scanned": int(snap.get("scanned") or 0),
+                "total": int(snap.get("total") or 0),
+                "total_files_in_scope": int(snap.get("total_files_in_scope") or 0),
+                "files_processed": int(snap.get("files_processed") or 0),
+                "candidates_found": int(snap.get("candidates_found") or 0),
+            }
+        try:
+            modes_list = list(self._selected_modes_for_scan())
+        except (AttributeError, TypeError):
+            modes_list = [str(getattr(self, "_selected_mode", "files") or "files")]
         payload = {
             "status": str(status),
             "timestamp": time.time(),
-            "folders": [str(p) for p in self._folders],
-            "mode": str(self._selected_mode or "files"),
-            "modes": list(self._selected_modes_for_scan()),
-            "options": dict(self._scan_options),
+            "folders": [str(p) for p in getattr(self, "_folders", []) or []],
+            "mode": str(getattr(self, "_selected_mode", None) or "files"),
+            "modes": modes_list,
+            "options": dict(getattr(self, "_scan_options", {}) or {}),
         }
+        if last_progress:
+            payload["last_progress"] = last_progress
         try:
             _INCOMPLETE_SCAN_PATH.parent.mkdir(parents=True, exist_ok=True)
             _INCOMPLETE_SCAN_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1397,7 +1657,114 @@ class DashboardPage(ft.Column):
         except OSError:
             _log.exception("Failed clearing incomplete scan snapshot")
 
+    def _refresh_paused_scans(self) -> None:
+        """Populate the paused scans section from checkpoint DB (non-blocking)."""
+        try:
+            from cerebro.v2.core.checkpoint_db import get_checkpoint_db
+            ckpt = get_checkpoint_db()
+            manifests = ckpt.list_resumable_manifests()
+        except Exception:
+            manifests = []
+
+        t = self._t
+        s = t.spacing
+        self._paused_scans_col.controls.clear()
+
+        for m in manifests:
+            total, pending = 0, 0
+            try:
+                from cerebro.v2.core.checkpoint_db import get_checkpoint_db
+                total, pending = get_checkpoint_db().get_counts(m.scan_id)
+            except Exception:
+                pass
+            if total == 0:
+                continue
+            completed = total - pending
+            pct = int(completed / total * 100) if total else 0
+            stamp = time.strftime("%b %d %H:%M", time.localtime(m.created_at))
+            folders_preview = ", ".join(Path(p).name for p in m.root_paths[:2])
+            if len(m.root_paths) > 2:
+                folders_preview += f" +{len(m.root_paths) - 2}"
+
+            def _make_resume_cb(manifest=m):
+                return lambda _e: self._resume_checkpoint_manifest(manifest)
+
+            def _make_discard_cb(manifest=m):
+                return lambda _e: self._discard_checkpoint_manifest(manifest)
+
+            card = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    folders_preview,
+                                    size=t.typography.size_sm,
+                                    weight=ft.FontWeight.W_600,
+                                    color=t.colors.fg,
+                                    no_wrap=True,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                ),
+                                ft.Text(
+                                    f"{completed:,} of {total:,} files hashed ({pct}%) • {stamp}",
+                                    size=t.typography.size_xs,
+                                    color=t.colors.fg_muted,
+                                ),
+                                ft.ProgressBar(
+                                    value=completed / max(1, total),
+                                    width=240,
+                                    height=4,
+                                    color=t.colors.accent,
+                                    bgcolor=ft.Colors.with_opacity(0.2, t.colors.accent),
+                                ),
+                            ],
+                            spacing=3,
+                            expand=True,
+                        ),
+                        ft.Row(
+                            [
+                                ft.TextButton(
+                                    "Discard",
+                                    on_click=_make_discard_cb(),
+                                    style=ft.ButtonStyle(color=t.colors.fg_muted),
+                                ),
+                                ft.FilledButton(
+                                    f"Resume ({pending:,} left)",
+                                    on_click=_make_resume_cb(),
+                                    style=ft.ButtonStyle(
+                                        shape=ft.RoundedRectangleBorder(radius=8),
+                                    ),
+                                ),
+                            ],
+                            spacing=s.xs,
+                        ),
+                    ],
+                    spacing=s.md,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.padding.symmetric(horizontal=s.sm, vertical=s.xs),
+                border_radius=8,
+                bgcolor=ft.Colors.with_opacity(0.06, t.colors.fg),
+            )
+            self._paused_scans_col.controls.append(card)
+
+        has_items = bool(self._paused_scans_col.controls)
+        self._paused_scans_section.visible = has_items
+        self._paused_scans_col.visible = has_items
+        if self._is_mounted():
+            try:
+                self._paused_scans_section.update()
+            except Exception:
+                pass
+
     def prompt_resume_incomplete_scan_if_needed(self) -> None:
+        """Show resume prompt from checkpoint DB or fall back to incomplete_scan.json."""
+        try:
+            self._refresh_paused_scans()
+        except Exception:
+            pass
+
+        # Legacy JSON fallback for users upgrading from prior build
         if not _INCOMPLETE_SCAN_PATH.exists():
             return
         try:
@@ -1412,19 +1779,62 @@ class DashboardPage(ft.Column):
         if not isinstance(folders, list) or not folders:
             self._clear_incomplete_scan_session()
             return
-        ts = float(data.get("timestamp", time.time()) or time.time())
-        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Resume incomplete scan?"),
-            content=ft.Text(f"An incomplete scan from {stamp} was found. Resume now?"),
-            actions=[
-                ft.TextButton("Discard", on_click=lambda _e: self._discard_incomplete_resume_prompt()),
-                ft.FilledButton("Resume", on_click=lambda _e, d=data: self._resume_incomplete_scan(d)),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        self._bridge.show_modal_dialog(dialog)
+
+        # Migrate to checkpoint DB then clear the JSON file
+        try:
+            from cerebro.v2.core.checkpoint_db import get_checkpoint_db
+            import json as _json
+            _scope = {k: data.get("options", {}).get(k) for k in
+                      ("min_size_bytes", "max_size_bytes", "skip_hidden", "recursive", "exclude_paths", "scan_archives")}
+            get_checkpoint_db().create_manifest(folders, _scope, label="(migrated)")
+        except Exception:
+            pass
+        self._clear_incomplete_scan_session()
+        try:
+            self._refresh_paused_scans()
+        except Exception:
+            pass
+
+    def _discard_checkpoint_manifest(self, manifest) -> None:
+        try:
+            from cerebro.v2.core.checkpoint_db import get_checkpoint_db
+            ckpt = get_checkpoint_db()
+            ckpt.update_manifest_status(manifest.scan_id, "completed")
+        except Exception:
+            pass
+        self._refresh_paused_scans()
+        _log.info("checkpoint manifest discarded: scan_id=%s", manifest.scan_id)
+
+    def _resume_checkpoint_manifest(self, manifest) -> None:
+        folders = [Path(p) for p in manifest.root_paths if Path(p).exists()]
+        if not folders:
+            self._bridge.show_snackbar("Scan folders are no longer available.", info=True)
+            return
+        self._folders = folders
+        try:
+            scope = json.loads(manifest.scope_json)
+            min_bytes = int(scope.get("min_size_bytes") or scope.get("min_size") or 0)
+            merged = dict(self._scan_options)
+            merged["min_size_bytes"] = min_bytes
+            merged["scan_archives"] = bool(scope.get("scan_archives", False))
+            merged["include_subfolders"] = bool(scope.get("recursive", True))
+            ex = scope.get("exclude_paths", [])
+            merged["exclude_paths"] = list(ex) if isinstance(ex, list) else []
+            self._scan_options = merged
+            min_mb = max(0, min(1024, min_bytes // (1024 * 1024)))
+            self._min_size_slider.value = min_mb
+            self._min_size_label.value = f"Min file size: {min_mb} MB"
+            self._exclude_paths_tf.value = "\n".join(merged["exclude_paths"])
+            self._scan_archives_cb.value = merged["scan_archives"]
+            self._archives_warning.visible = merged["scan_archives"]
+            self._include_subfolders_sw.value = merged["include_subfolders"]
+        except Exception:
+            _log.debug("Could not restore scope from manifest (non-fatal)", exc_info=True)
+        self._refresh_folder_chips()
+        self._update_modes_ui()
+        self._resume_interrupted_scan_once = True
+        _log.info("resume_checkpoint_manifest scan_id=%s folders=%d", manifest.scan_id, len(folders))
+        self._begin_scan()
 
     def _discard_incomplete_resume_prompt(self) -> None:
         self._bridge.dismiss_top_dialog()
@@ -1471,6 +1881,7 @@ class DashboardPage(ft.Column):
         self._include_subfolders_sw.value = bool(self._scan_options.get("include_subfolders", True))
         self._refresh_folder_chips()
         self._update_modes_ui()
+        self._resume_interrupted_scan_once = True
         _log.info("resume_incomplete_scan folders=%d mode=%s", len(self._folders), self._selected_mode)
         self._begin_scan()
 
@@ -1566,6 +1977,197 @@ class DashboardPage(ft.Column):
                 f"same-size duplicate candidates (~{n_cand:,}) when dual-pass cache prep is counted."
             )
 
+    def _reset_cancel_choice_for_new_scan(self) -> None:
+        self._cancel_complete_handled = False
+        self._cancel_user_dismissed_choice = False
+        self._cancel_choice_panel.visible = False
+        self._cancel_choice_sub.value = ""
+        self._partial_results_row.visible = False
+        self._view_partial_btn.disabled = False
+        self._view_partial_btn.text = "View partial results"
+        try:
+            self._view_partial_btn.tooltip = None
+        except Exception:
+            pass
+        self._view_partial_btn.style = pill_outlined_button_style(self._t)
+
+    def _present_cancel_waiting_for_results(self, *, phase_files: int) -> None:
+        """Stop UI: stay on scan surface with a clear fork until the engine reports partial groups."""
+        t = self._t
+        self._stop_scan_elapsed_timer()
+        self._ring.value = None
+        self._ring.color = "#F59E0B"
+        self._ring_label.value = "Scan cancelled"
+        self._ring_label.opacity = 1.0
+        self._ring_phase_label.value = ""
+        self._ring_timer.value = ""
+        self._ring_path.value = ""
+        self._ring_counter_tip.visible = False
+        self._cancel_btn.visible = False
+        self._view_results_btn.visible = False
+        self._cancel_choice_headline.value = "What would you like to do next?"
+        self._cancel_choice_sub.value = (
+            "The scanner is finishing the stop. When partial duplicate groups are ready, "
+            "the primary button below will unlock. You can return home at any time — this screen stays here until you choose."
+        )
+        self._view_partial_btn.text = "View partial results"
+        self._view_partial_btn.disabled = True
+        self._view_partial_btn.tooltip = "Unlocks automatically when the engine reports what it found before the stop."
+        self._view_partial_btn.style = pill_outlined_button_style(t)
+        self._view_partial_btn.visible = True
+        self._partial_back_home_btn.visible = True
+        self._partial_results_row.visible = True
+        self._cancel_choice_panel.visible = True
+        self._scan_view.visible = True
+        for p in self._main_panels:
+            p.visible = False
+        self._ring_counter.value = (
+            f"Last reported step: {phase_files:,} files in this phase."
+            if phase_files
+            else "Scan interrupted by your request."
+        )
+        self._scan_hud_snap = dict(self._scan_hud_snap)
+        self._scan_hud_snap["rate"] = None
+
+    def _finalize_cancel_choice_with_results(self, results: list, mode: str) -> None:
+        """Engine has returned — present an explicit review vs home decision (stays on scan view)."""
+        self._stop_scan_elapsed_timer()
+        self._ring.value = None
+        self._ring.color = "#F59E0B"
+        self._ring_label.value = "Scan cancelled"
+        self._ring_label.opacity = 1.0
+        self._ring_path.value = ""
+        self._ring_counter_tip.visible = False
+        self._pending_partial_results = list(results)
+        self._pending_partial_mode = mode
+        self._cancel_complete_handled = True
+        t = self._t
+        ng = len(results)
+        self._cancel_choice_headline.value = "What would you like to do next?"
+        if ng > 0:
+            self._cancel_choice_sub.value = (
+                f"We found {ng:,} duplicate group(s) before the stop. "
+                "Open the review page to inspect them, or go home to return to the dashboard."
+            )
+            self._view_partial_btn.disabled = False
+            self._view_partial_btn.text = f"Open review — {ng:,} partial group(s)"
+            try:
+                self._view_partial_btn.tooltip = None
+            except Exception:
+                pass
+            self._view_partial_btn.style = pill_filled_accent(
+                t,
+                padding=ft.padding.symmetric(horizontal=22, vertical=12),
+                text_size=t.typography.size_md,
+                weight=ft.FontWeight.W_700,
+                border_radius=999,
+            )
+        else:
+            self._cancel_choice_sub.value = (
+                "No duplicate groups were ready when the scan stopped — there is nothing to open in review."
+            )
+            self._view_partial_btn.disabled = True
+            self._view_partial_btn.text = "View partial results"
+            self._view_partial_btn.tooltip = "Nothing to show for this cancelled run."
+            self._view_partial_btn.style = pill_outlined_button_style(t)
+        self._ring_phase_label.value = ""
+        self._ring_counter.value = ""
+        self._ring_timer.value = ""
+        self._scan_mode_run_label.value = ""
+        self._cancel_btn.visible = False
+        self._view_results_btn.visible = False
+        self._partial_results_row.visible = True
+        self._cancel_choice_panel.visible = True
+        self._scan_view.visible = True
+        for p in self._main_panels:
+            p.visible = False
+        self._scan_hud_snap = dict(self._scan_hud_snap)
+        self._scan_hud_snap["rate"] = None
+
+        if self._cancel_user_dismissed_choice:
+            self._cancel_user_dismissed_choice = False
+            self._cancel_choice_panel.visible = False
+            self._partial_results_row.visible = False
+            self._scan_view.visible = False
+            for p in self._main_panels:
+                p.visible = True
+            if ng > 0:
+                self._show_cancelled_results_banner(
+                    f"Partial scan: {ng:,} duplicate group(s) are ready — open from this banner when you want."
+                )
+            self._show_cancelled_status()
+            return
+
+    def _update_dual_phase_bars(
+        self,
+        stage: str,
+        scanned: int,
+        total: int,
+    ) -> None:
+        """Step 1 is text-only (no dead full bar). Step 2 keeps the live progress bar."""
+        t = self._t
+        sc = max(0, int(scanned))
+        tot = max(0, int(total))
+        catalogued = max(0, int(self._scan_files_catalogued))
+
+        if stage == ScanStage.DISCOVERING:
+            self._phase_prep_status.color = t.colors.accent
+            self._phase_hash_title.value = "Step 2 — Compare contents (hash)"
+            self._phase_hash_title.color = t.colors.fg_muted
+            if tot > 0:
+                self._phase_prep_status.value = (
+                    f"Step 1 · Indexing — {sc:,} / {tot:,} paths listed "
+                    "(estimate can still change while discovery runs)."
+                )
+            else:
+                self._phase_prep_status.value = f"Step 1 · Indexing — {sc:,} paths discovered so far…"
+            self._phase_hash_bar.value = None
+            self._phase_hash_caption.value = (
+                "Not started — hashing runs only after paths are indexed and same-size groups are built."
+            )
+        elif stage == ScanStage.GROUPING_BY_SIZE:
+            self._phase_prep_status.color = t.colors.accent
+            self._phase_hash_title.value = "Step 2 — Compare contents (hash)"
+            self._phase_hash_title.color = t.colors.fg_muted
+            self._phase_prep_status.value = (
+                f"Step 1 · Indexing — grouping {sc:,} files by size "
+                "(finding paths that could be duplicate candidates)."
+            )
+            self._phase_hash_bar.value = None
+            self._phase_hash_caption.value = "Not started — waits for grouping to finish."
+        elif stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+            self._phase_prep_status.color = t.colors.success
+            self._phase_prep_status.value = (
+                f"Step 1 · Indexing — complete ({catalogued:,} paths in scope). "
+                "No further work in this step."
+            )
+            self._phase_hash_title.value = "Step 2 — Compare contents (hash)"
+            self._phase_hash_title.color = t.colors.accent
+            if tot > 0:
+                ratio = min(max(sc / tot, 0.0), 1.0)
+                self._phase_hash_bar.value = ratio
+                self._phase_hash_caption.value = (
+                    f"Work units: {sc:,} / {tot:,} ({ratio * 100:.1f}% of this hashing step only — "
+                    f"not the whole scan until this fills)."
+                )
+            else:
+                self._phase_hash_bar.value = None
+                self._phase_hash_caption.value = "Preparing comparisons (total not reported yet)…"
+        elif stage == ScanStage.COMPLETE:
+            self._phase_prep_status.color = t.colors.success
+            self._phase_prep_status.value = (
+                f"Step 1 · Indexing — complete ({catalogued:,} paths in scope)."
+            )
+            self._phase_hash_title.color = t.colors.success
+            self._phase_hash_bar.value = 1.0
+            self._phase_hash_caption.value = "Hashing passes finished — assembling duplicate groups."
+        else:
+            self._phase_prep_status.color = t.colors.fg2
+            self._phase_prep_status.value = "Step 1 · Indexing — preparing…"
+            self._phase_hash_title.color = t.colors.fg_muted
+            self._phase_hash_bar.value = None
+            self._phase_hash_caption.value = "Waiting…"
+
     def _on_scan_progress(self, data: dict) -> None:
         stage = data.get("stage", "")
         state = data.get("state", "")
@@ -1606,30 +2208,30 @@ class DashboardPage(ft.Column):
         if self._was_cancelled and stage == ScanStage.COMPLETE and state != "cancelled":
             return
 
-        # Handle cancelled terminal event.
+        # Handle cancelled terminal event from progress stream (may arrive before on_complete).
         if state == "cancelled" or stage == ScanStage.CANCELLED:
+            if self._cancel_complete_handled:
+                self._do_page_update()
+                return
             self._was_cancelled = True
-            self._stop_scan_elapsed_timer()
-            self._ring.value = None
-            self._ring.color = "#F59E0B"
-            self._ring_label.value = "Scan cancelled"
-            self._ring_phase_label.value = (
-                "Processing stopped before full results were built. "
-                "You can open partial results if any duplicates were found before the stop."
-            )
-            self._ring_counter.value = f"Stopped after processing {scanned:,} files in this phase."
-            self._ring_timer.value = ""
-            self._ring_path.value = ""
-            self._ring_counter_tip.visible = False
-            self._cancel_btn.visible = False
             self._cancel_btn.text = "Cancel Scan"
             self._cancel_btn.disabled = False
-            # Return to Home automatically after cancellation terminal event.
-            self._scan_view.visible = False
-            for p in self._main_panels:
-                p.visible = True
-            self._partial_results_row.visible = False
-            self._show_cancelled_status()
+            interrupt_snap = {
+                "stage": str(stage or ""),
+                "scanned": int(scanned or 0),
+                "total": int(total or 0),
+                "total_files_in_scope": int(total_files_in_scope),
+                "files_processed": int(files_processed),
+                "candidates_found": int(candidates_found),
+            }
+            self._present_cancel_waiting_for_results(phase_files=int(scanned or 0))
+            try:
+                self._persist_incomplete_scan_session(
+                    status="interrupted",
+                    progress_snapshot=interrupt_snap,
+                )
+            except Exception:
+                _log.debug("persist interrupted snapshot failed", exc_info=True)
             self._do_page_update()
             return
 
@@ -1673,15 +2275,7 @@ class DashboardPage(ft.Column):
             "active_hash_algorithm": active_hash_algorithm,
         }
 
-        is_hs = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
-        rate_str = ""
-        if is_hs:
-            if rate is not None and float(rate) > 0:
-                rate_str = f"{rate:,.0f} files/s"
-
         counter = counter_core
-        if rate_str:
-            counter += f"  ·  {rate_str}"
 
         self._ring_counter.value = counter
 
@@ -1695,14 +2289,8 @@ class DashboardPage(ft.Column):
             else:
                 self._ring_path.value = ""
 
-        if total_files_in_scope > 0:
-            progress_ratio = max(0.0, min(1.0, files_processed / total_files_in_scope))
-            self._progress.value = progress_ratio
-            self._progress_label.value = f"{progress_ratio * 100:.1f}% complete"
-        else:
-            self._progress.value = None
-            self._progress_label.value = "Preparing scan…"
-        self._progress_detail.value = f"Candidates: {candidates_found:,}"
+        self._update_dual_phase_bars(stage, int(scanned), int(total))
+        self._progress_detail.value = f"Duplicate candidates tracked: {candidates_found:,}"
         if active_hash_algorithm and stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
             self._hash_algo_label.value = f"Hash algorithm: {active_hash_algorithm}"
             self._hash_algo_label.visible = True
@@ -1790,6 +2378,10 @@ class DashboardPage(ft.Column):
         self._scan_timer_thread = None
         if t is not None and t.is_alive():
             t.join(timeout=2.5)
+        try:
+            self._ring_label.opacity = 1.0
+        except Exception:
+            pass
 
     def _start_scan_elapsed_timer(self) -> None:
         self._stop_scan_elapsed_timer()
@@ -1819,10 +2411,24 @@ class DashboardPage(ft.Column):
             return
         try:
             snap = self._scan_hud_snap or {}
-            fp = int(snap.get("files_processed") or 0)
+            st = str(snap.get("stage") or "")
+            if st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+                fp = int(snap.get("scanned") or 0)
+            else:
+                fp = int(snap.get("files_processed") or snap.get("scanned") or 0)
             self._speed_points.append((time.monotonic(), fp))
+            self._headline_pulse_tick += 1
+            self._ring_label.opacity = 0.78 if (self._headline_pulse_tick % 2 == 1) else 1.0
             self._ring_timer.value = self._build_scan_timer_line()
             DashboardPage._safe_update(self._ring_timer)
+            DashboardPage._safe_update(self._ring_label)
+            now = time.monotonic()
+            if now - float(getattr(self, "_last_incomplete_persist_ts", 0.0) or 0.0) >= 15.0:
+                self._last_incomplete_persist_ts = now
+                try:
+                    self._persist_incomplete_scan_session(status="in_progress")
+                except Exception:
+                    _log.debug("throttled incomplete-scan persist failed", exc_info=True)
         except Exception:
             _log.debug("scan elapsed tick update failed", exc_info=True)
 
@@ -1832,8 +2438,6 @@ class DashboardPage(ft.Column):
         elapsed = time.monotonic() - self._scan_elapsed_start
         el = DashboardPage._fmt_elapsed_compact(elapsed)
         snap = self._scan_hud_snap or {}
-        total = int(snap.get("total_files_in_scope") or snap.get("total") or 0)
-        scanned = int(snap.get("files_processed") or snap.get("scanned") or 0)
         st = str(snap.get("stage") or "")
 
         parts = [f"Elapsed {el}"]
@@ -1856,6 +2460,10 @@ class DashboardPage(ft.Column):
             else:
                 parts.append("Working…")
             return "  ·  ".join(parts)
+
+        # Hashing ETA must use comparison work-unit counters, not catalogue / scope totals.
+        total = int(snap.get("total") or 0)
+        scanned = int(snap.get("scanned") or 0)
 
         rolling_rate = self._rolling_speed_files_per_sec()
         if rolling_rate is not None and total > 0 and scanned < total:
@@ -1922,29 +2530,19 @@ class DashboardPage(ft.Column):
         # If cancel was clicked, the backend still calls on_complete with partial
         # results (state=cancelled). Route those to the partial-results flow.
         if self._was_cancelled:
-            self._pending_partial_results = list(results)
-            self._pending_partial_mode = mode
-            self._ring_timer.value = ""
-            self._scan_mode_run_label.value = ""
-            has_groups = len(results) > 0
-            self._view_partial_btn.visible = has_groups
-            if not has_groups:
+            self._finalize_cancel_choice_with_results(list(results), mode)
+            if not results:
                 self._ring_phase_label.value = "No duplicate groups could be found before cancellation."
-            if has_groups:
-                self._show_cancelled_results_banner(
-                    f"Cancelled scan found {len(results):,} duplicate group(s)."
-                )
-            self._scan_hud_snap = dict(self._scan_hud_snap)
-            self._scan_hud_snap["rate"] = None
-            self._scan_view.visible = False
-            for p in self._main_panels:
-                p.visible = True
-            self._show_cancelled_status()
             DashboardPage._safe_update(self)
             return
 
         # Normal completion: show "View Results" button, then transition.
         self._clear_incomplete_scan_session()
+        try:
+            self._refresh_paused_scans()
+        except Exception:
+            pass
+        self._update_dual_phase_bars(ScanStage.COMPLETE, 0, 0)
         self._ring.value = 1.0
         self._ring.color = self._heat_color_for_ratio(1.0)
         ng = len(results)
@@ -1992,7 +2590,13 @@ class DashboardPage(ft.Column):
         self._stop_scan_elapsed_timer()
         self._ring_timer.value = ""
         self._bar_row.visible = False
-        self._persist_incomplete_scan_session(status="error")
+        try:
+            self._persist_incomplete_scan_session(
+                status="error",
+                progress_snapshot=dict(self._scan_hud_snap or {}),
+            )
+        except Exception:
+            self._persist_incomplete_scan_session(status="error")
         self._bridge.abort_scan_session()
         self._scan_view.visible = False
         for p in self._main_panels:
@@ -2129,6 +2733,8 @@ class DashboardPage(ft.Column):
             except Exception:
                 pass
             return
+        self._cancel_choice_panel.visible = False
+        self._partial_results_row.visible = False
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
@@ -2143,12 +2749,21 @@ class DashboardPage(ft.Column):
 
     def _go_to_home(self, e: ft.ControlEvent) -> None:
         """Dismiss the scan view and return to the main panels."""
+        self._cancel_user_dismissed_choice = True
         self._stop_scan_elapsed_timer()
         self._ring_timer.value = ""
+        pending = list(self._pending_partial_results or [])
+        had_partial = len(pending) > 0 and self._was_cancelled
         self._bridge.abort_scan_session()
+        self._cancel_choice_panel.visible = False
+        self._partial_results_row.visible = False
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
+        if had_partial:
+            self._show_cancelled_results_banner(
+                f"Partial scan: {len(pending):,} duplicate group(s) are still available — open from this banner when you are ready."
+            )
         self._show_cancelled_status()
         DashboardPage._safe_update(self)
 
@@ -2250,6 +2865,26 @@ class DashboardPage(ft.Column):
     def on_show(self) -> None:
         import time
 
+        # Home is a singleton page. If a scan already finished, returning to Home
+        # from top navigation should always restore the normal dashboard shell.
+        try:
+            is_scanning = bool(self._bridge.backend.is_scanning)
+        except Exception:
+            is_scanning = False
+        if self._scan_view.visible and not is_scanning:
+            self._scan_view.visible = False
+            for p in self._main_panels:
+                p.visible = True
+            self._view_results_btn.visible = False
+            self._partial_results_row.visible = False
+            self._cancel_btn.visible = False
+            self._ring_timer.value = ""
+            self._ring_path.value = ""
+            # Returning to Home after completion/cancel should not keep stale
+            # terminal status lines from the previous run.
+            self._status.value = ""
+            DashboardPage._safe_update(self)
+
         # F11: avoid repeated heavy refresh; first show does full async load,
         # later shows lightweight cache-backed refresh and throttled UI refreshes.
         self._schedule_dashboard_data_fetch()
@@ -2283,6 +2918,11 @@ class DashboardPage(ft.Column):
         self._update_stats_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
+        self._apply_dashboard_pill_chrome()
+        self._hero_tagline_icon.color = self._t.colors.accent
+        self._folder_section_icon.color = self._t.colors.accent
+        DashboardPage._safe_update(self._hero_tagline_icon)
+        DashboardPage._safe_update(self._folder_section_icon)
 
         if self._is_mounted():
             self.update()

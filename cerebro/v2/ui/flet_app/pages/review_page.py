@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -14,6 +15,13 @@ import flet as ft
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
+from cerebro.v2.ui.flet_app.pill_button_styles import (
+    pill_filled_accent,
+    pill_filled_danger,
+    pill_outlined_button_style,
+    pill_text_button_style,
+    pill_text_button_selected,
+)
 from cerebro.v2.ui.flet_app.theme import (
     FILTER_EXTS, EXT_ALL_KNOWN, fmt_size, theme_for_mode,
 )
@@ -55,6 +63,67 @@ _GRID_FIRST_SYNC_FILES = 20   # F5: 20 tiles sync, rest async
 _GRID_ASYNC_BATCH = 30
 _UI_SLOW_MS = 80.0
 
+_GROUP_STRIPE = ("#22D3EE", "#A78BFA", "#F472B6", "#34D399", "#FBBF24")
+
+
+def _file_mtime_ts(f: DuplicateFile) -> float:
+    for attr in ("mtime", "modified"):
+        v = getattr(f, attr, None)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _group_duplicate_summary(g: DuplicateGroup) -> str:
+    n = len(g.files)
+    sim = (getattr(g, "similarity_type", None) or "exact").lower()
+    names = list(dict.fromkeys(Path(str(f.path)).name for f in g.files))
+    if n < 2:
+        return f"{n} file in this group"
+    if sim == "exact":
+        if len(names) == 1:
+            return f'{n} byte-identical copies of "{names[0]}"'
+        head = ", ".join(names[:3])
+        tail = ", ..." if len(names) > 3 else ""
+        return f"{n} byte-identical files · {head}{tail}"
+    if len(names) == 1:
+        return f'{n} similar matches for "{names[0]}"'
+    head = ", ".join(names[:3])
+    tail = ", ..." if len(names) > 3 else ""
+    return f"{n} similar matches · {head}{tail}"
+
+
+def _group_path_hint(files: List[DuplicateFile]) -> str:
+    if not files:
+        return ""
+    paths = [Path(str(f.path)) for f in files]
+    if len(paths) == 1:
+        return str(paths[0].parent)
+    parents = [p.parent for p in paths]
+    uniq_parents = {str(p) for p in parents}
+    names = list(dict.fromkeys(p.name for p in paths))
+    if len(uniq_parents) == 1:
+        if len(names) <= 3:
+            return f"Same folder · {', '.join(names)}"
+        return f"Same folder · {', '.join(names[:3])}... (+{len(names) - 3} names)"
+    try:
+        common = os.path.commonpath([str(p) for p in paths])
+    except ValueError:
+        bits = [f"{p.parent.name}/{p.name}" for p in paths[:3]]
+        return " · ".join(dict.fromkeys(bits))
+    rel_bits: list[str] = []
+    for p in paths:
+        try:
+            rel_bits.append(os.path.relpath(str(p), common))
+        except ValueError:
+            rel_bits.append(str(p))
+    ordered = list(dict.fromkeys(rel_bits))
+    return " · ".join(ordered[:3]) + (" ..." if len(ordered) > 3 else "")
+
 
 class ReviewPage(ft.Column):
     """Grid and compare view for visual triage of duplicate groups."""
@@ -85,6 +154,8 @@ class ReviewPage(ft.Column):
         self._grid_build_generation = 0
         self._rendering_generation = 0
         self._pending_deferred_render: bool = False
+        self._cmp_smart_rule: str = "keep_largest"
+        self._filter_seg_lines: Dict[str, tuple[ft.Text, ft.Text, ft.Text]] = {}
         self._compare_render_generation = 0
         self._compare_thumb_slots: Dict[str, ft.Container] = {}
         self._compare_dims_labels: Dict[str, ft.Text] = {}
@@ -97,7 +168,9 @@ class ReviewPage(ft.Column):
         # UI References
         self._title_lbl: ft.Text
         self._summary_lbl: ft.Text
+        self._workflow_lbl: ft.Text
         self._stats_row: ft.Row
+        self._stats_row_wrap: ft.Row
         self._smart_apply_all_btn: ft.FilledButton
         self._top_bar: ft.Container
         self._smart_seg: ft.SegmentedButton
@@ -127,12 +200,41 @@ class ReviewPage(ft.Column):
         self._compare_view: ft.Column
         self._groups_overview: ft.ListView
         self._view_toggle_row: ft.Row
+        self._group_sort_dd: ft.Dropdown
+        self._group_sort_key: str
+        self._group_sort_row: ft.Row
+        self._btn_back: ft.TextButton
+        self._btn_view_groups: ft.TextButton
+        self._btn_view_tiles: ft.TextButton
+        self._btn_cmp_grid: ft.TextButton
+        self._btn_cmp_prev: ft.TextButton
+        self._btn_cmp_next: ft.TextButton
+        self._zoom_btn_s: ft.TextButton
+        self._zoom_btn_m: ft.TextButton
+        self._zoom_btn_l: ft.TextButton
+        self._empty_go_home_btn: ft.FilledButton
+        self._marked_delete_b_btn: ft.FilledButton
+        self._marked_delete_marked_btn: ft.FilledButton
+        self._marked_safety_lbl: ft.Text
+        self._cmp_apply_rule_btn: ft.FilledButton
 
         self._build_ui()
 
     # ------------------------------------------------------------------
     # Glass & Style Helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _hwrap_strip(strip: ft.Control) -> ft.Row:
+        """Center a control horizontally within the full page width."""
+        return ft.Row(
+            [
+                ft.Container(expand=True),
+                strip,
+                ft.Container(expand=True),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
     def _get_glass_style(self, opacity: float = 0.06) -> dict:
         is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
         cache_key = (opacity, is_light)
@@ -150,52 +252,148 @@ class ReviewPage(ft.Column):
         self._glass_cache[cache_key] = result
         return result
 
-    def _build_zoom_row(self) -> ft.Row:
-        """Three-level zoom control for the grid density."""
-        def _set_size(extent: int) -> None:
-            self._grid_extent = extent
-            self._grid.max_extent = extent
-            ReviewPage._safe_update(self._grid)
+    def _on_zoom_size_click(self, extent: int, _e: ft.ControlEvent | None = None) -> None:
+        self._grid_extent = extent
+        self._grid.max_extent = extent
+        self._sync_zoom_pill_styles()
+        ReviewPage._safe_update(self._grid)
 
+    def _sync_zoom_pill_styles(self) -> None:
+        t = self._t
+        for extent, btn in ((120, self._zoom_btn_s), (160, self._zoom_btn_m), (210, self._zoom_btn_l)):
+            btn.style = pill_text_button_selected(t) if self._grid_extent == extent else pill_text_button_style(t, variant="muted")
+            ReviewPage._safe_update(btn)
+
+    def _build_zoom_row(self) -> ft.Row:
+        """Three-level zoom control for the grid density (nav-matched pill toggles)."""
+        t = self._t
+        self._zoom_btn_s = ft.TextButton(
+            "S",
+            on_click=lambda e: self._on_zoom_size_click(120, e),
+            style=pill_text_button_selected(t) if self._grid_extent == 120 else pill_text_button_style(t, variant="muted"),
+        )
+        self._zoom_btn_m = ft.TextButton(
+            "M",
+            on_click=lambda e: self._on_zoom_size_click(160, e),
+            style=pill_text_button_selected(t) if self._grid_extent == 160 else pill_text_button_style(t, variant="muted"),
+        )
+        self._zoom_btn_l = ft.TextButton(
+            "L",
+            on_click=lambda e: self._on_zoom_size_click(210, e),
+            style=pill_text_button_selected(t) if self._grid_extent == 210 else pill_text_button_style(t, variant="muted"),
+        )
         return ft.Row(
             [
                 ft.Text("Size:", size=9, color=self._t.colors.fg_muted),
-                ft.TextButton("S", on_click=lambda e: _set_size(120),
-                    style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
-                ft.TextButton("M", on_click=lambda e: _set_size(160),
-                    style=ft.ButtonStyle(color="#22D3EE", padding=ft.padding.symmetric(horizontal=6, vertical=2))),
-                ft.TextButton("L", on_click=lambda e: _set_size(210),
-                    style=ft.ButtonStyle(color=self._t.colors.fg_muted, padding=ft.padding.symmetric(horizontal=6, vertical=2))),
+                self._zoom_btn_s,
+                self._zoom_btn_m,
+                self._zoom_btn_l,
             ],
-            spacing=0,
+            spacing=4,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+
+    def _sync_view_toggle_pills(self) -> None:
+        t = self._t
+        if self._mode == "groups":
+            self._btn_view_groups.style = pill_text_button_selected(t)
+            self._btn_view_tiles.style = pill_text_button_style(t, variant="muted")
+        elif self._mode == "grid":
+            self._btn_view_groups.style = pill_text_button_style(t, variant="muted")
+            self._btn_view_tiles.style = pill_text_button_selected(t)
+        else:
+            self._btn_view_groups.style = pill_text_button_style(t, variant="primary")
+            self._btn_view_tiles.style = pill_text_button_style(t, variant="muted")
+        for b in (self._btn_view_groups, self._btn_view_tiles):
+            ReviewPage._safe_update(b)
+
+    def _apply_pill_chrome(self) -> None:
+        """Reapply nav-matched pill styles (call after theme change or mode switch)."""
+        t = self._t
+        self._btn_back.style = pill_text_button_style(t, variant="primary")
+        self._smart_apply_all_btn.style = pill_filled_accent(
+            t,
+            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+            text_size=12,
+            weight=ft.FontWeight.W_700,
+        )
+        self._delete_btn.style = pill_outlined_button_style(t, danger=True)
+        self._keep_btn.style = pill_outlined_button_style(t, success=True)
+        self._btn_cmp_grid.style = pill_text_button_style(t)
+        self._btn_cmp_prev.style = pill_text_button_style(t)
+        self._btn_cmp_next.style = pill_text_button_style(t, variant="primary")
+        self._empty_go_home_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
+        self._cmp_apply_rule_btn.style = pill_filled_accent(
+            t,
+            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            text_size=11,
+            weight=ft.FontWeight.W_600,
+        )
+        self._marked_delete_b_btn.style = pill_filled_danger(t)
+        self._marked_delete_marked_btn.style = pill_outlined_button_style(t, danger=True)
+        self._sync_view_toggle_pills()
+        self._sync_zoom_pill_styles()
+        for b in (
+            self._btn_back,
+            self._smart_apply_all_btn,
+            self._delete_btn,
+            self._keep_btn,
+            self._cmp_apply_rule_btn,
+            self._btn_cmp_grid,
+            self._btn_cmp_prev,
+            self._btn_cmp_next,
+            self._empty_go_home_btn,
+            self._marked_delete_b_btn,
+            self._marked_delete_marked_btn,
+        ):
+            ReviewPage._safe_update(b)
 
     # ------------------------------------------------------------------
     # Build (Runs Once)
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         t = self._t
+        self._btn_back = ft.TextButton(
+            "← Back",
+            on_click=self._go_back,
+            style=pill_text_button_style(t, variant="primary"),
+            tooltip="Group list when reviewing groups; returns here from Compare or Grid.",
+        )
         # Top bar
         self._title_lbl = ft.Text("Review Workspace", size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.fg)
         self._summary_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
-        self._stats_row = ft.Row(spacing=t.spacing.sm, wrap=True)
+        self._workflow_lbl = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            color=t.colors.fg_muted,
+            italic=True,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self._stats_row = ft.Row(
+            spacing=t.spacing.xs,
+            tight=True,
+            scroll=ft.ScrollMode.AUTO,
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self._stats_row_wrap = ReviewPage._hwrap_strip(self._stats_row)
         self._top_bar = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.TextButton("← Back", on_click=self._go_back,
-                                          style=ft.ButtonStyle(color=t.colors.primary)),
+                            self._btn_back,
                             self._title_lbl,
                             self._summary_lbl,
                         ],
-                        alignment=ft.MainAxisAlignment.START,
+                        alignment=ft.MainAxisAlignment.CENTER,
                         wrap=True,
                     ),
-                    self._stats_row,
+                    self._stats_row_wrap,
+                    self._workflow_lbl,
                 ],
                 spacing=t.spacing.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=t.spacing.lg,
             **self._get_glass_style(0.04),
@@ -216,11 +414,11 @@ class ReviewPage(ft.Column):
             "Apply Rule to Visible",
             icon=ft.icons.Icons.AUTO_FIX_HIGH,
             on_click=self._apply_smart_select_review,
-            style=ft.ButtonStyle(
-                bgcolor="#22D3EE",
-                color="#081019",
-                shape=ft.RoundedRectangleBorder(radius=8),
-                text_style=ft.TextStyle(size=12, weight=ft.FontWeight.W_700),
+            style=pill_filled_accent(
+                t,
+                padding=ft.padding.symmetric(horizontal=16, vertical=10),
+                text_size=12,
+                weight=ft.FontWeight.W_700,
             ),
         )
         self._smart_row = ft.Row(
@@ -243,27 +441,46 @@ class ReviewPage(ft.Column):
             ],
         )
         self._delete_btn = ft.OutlinedButton(
-            "Delete B", icon=ft.icons.Icons.DELETE_OUTLINE,
+            "Delete side B",
+            icon=ft.icons.Icons.DELETE_OUTLINE,
             on_click=lambda e: self._delete_compare_side("b"),
-            style=ft.ButtonStyle(
-                color=t.colors.danger,
-                side=ft.BorderSide(width=1, color=t.colors.danger),
-                shape=ft.RoundedRectangleBorder(radius=8),
-            ),
+            style=pill_outlined_button_style(t, danger=True),
+            tooltip="After confirmation, removes the right-hand file (side B).",
         )
         self._keep_btn = ft.OutlinedButton(
-            "Keep A", icon=ft.icons.Icons.CHECK,
+            "Keep side A",
+            icon=ft.icons.Icons.CHECK,
             on_click=lambda e: self._delete_compare_side("a"),
-            style=ft.ButtonStyle(color=t.colors.success),
+            style=pill_outlined_button_style(t, success=True),
+            tooltip="After confirmation, removes the left-hand file (side A).",
+        )
+        self._cmp_apply_rule_btn = ft.FilledButton(
+            "Mark by rule",
+            icon=ft.icons.Icons.FLAG,
+            on_click=self._on_cmp_apply_rule_click,
+            style=pill_filled_accent(
+                t,
+                padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                text_size=11,
+                weight=ft.FontWeight.W_600,
+            ),
+            tooltip="Uses the selected smart rule to mark extras in this group for deletion (checkboxes).",
+        )
+        self._btn_cmp_grid = ft.TextButton("← Grid", on_click=self._to_grid, style=pill_text_button_style(t))
+        self._btn_cmp_prev = ft.TextButton("← Prev", on_click=self._prev_group, style=pill_text_button_style(t))
+        self._btn_cmp_next = ft.TextButton(
+            "Next →",
+            on_click=self._next_group,
+            style=pill_text_button_style(t, variant="primary"),
         )
         self._cmp_bar = ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.TextButton("← Grid", on_click=self._to_grid),
-                            ft.TextButton("← Prev", on_click=self._prev_group),
-                            ft.TextButton("Next →", on_click=self._next_group),
+                            self._btn_cmp_grid,
+                            self._btn_cmp_prev,
+                            self._btn_cmp_next,
                             self._cmp_title,
                         ],
                         wrap=True,
@@ -273,12 +490,19 @@ class ReviewPage(ft.Column):
                     ft.Row(
                         [
                             self._cmp_smart_seg,
+                            self._cmp_apply_rule_btn,
                             self._keep_btn,
                             self._delete_btn,
                         ],
                         wrap=True,
-                        spacing=t.spacing.xs,
+                        spacing=t.spacing.sm,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        "Smart rule only chooses marks in this group. Keep side A / Delete side B remove one pane at a time (confirmed).",
+                        size=t.typography.size_xs,
+                        color=t.colors.fg_muted,
+                        italic=True,
                     ),
                 ],
                 spacing=t.spacing.xs,
@@ -288,32 +512,41 @@ class ReviewPage(ft.Column):
             **self._get_glass_style(0.04),
         )
 
-        # Filter bar
-        self._filter_seg = ft.SegmentedButton(
-            selected=["all"],
-            allow_multiple_selection=False,
-            on_change=self._on_filter_seg_change,
-            segments=[
+        # Filter bar (keep Text refs so counts survive SegmentedButton internal updates)
+        filter_segments: list[ft.Segment] = []
+        self._filter_seg_lines.clear()
+        for key, label in _FILTER_TABS:
+            t0 = ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#DDE8FF")
+            t1 = ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE"))
+            t2 = ft.Text("0 B", size=10, color="#9FB0D0")
+            self._filter_seg_lines[key] = (t0, t1, t2)
+            filter_segments.append(
                 ft.Segment(
                     value=key,
                     label=ft.Column(
-                        [
-                            ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#DDE8FF"),
-                            ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE")),
-                            ft.Text("0 B", size=10, color="#9FB0D0"),
-                        ],
+                        [t0, t1, t2],
                         spacing=1,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         tight=True,
                     ),
                 )
-                for key, label in _FILTER_TABS
-            ],
+            )
+        self._filter_seg = ft.SegmentedButton(
+            selected=["all"],
+            allow_multiple_selection=False,
+            on_change=self._on_filter_seg_change,
+            segments=filter_segments,
         )
 
         # Content area
         self._content = ft.Column(expand=True)
 
+        self._empty_go_home_btn = ft.FilledButton(
+            "Go Home",
+            icon=ft.icons.Icons.LIST_ALT,
+            on_click=lambda e: self._bridge.navigate("dashboard"),
+            style=pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700),
+        )
         # Empty state
         self._empty_state = ft.Container(
             content=ft.Column(
@@ -331,16 +564,7 @@ class ReviewPage(ft.Column):
                         color=t.colors.fg_muted,
                         text_align=ft.TextAlign.CENTER,
                     ),
-                    ft.FilledButton(
-                        "Go Home",
-                        icon=ft.icons.Icons.LIST_ALT,
-                        on_click=lambda e: self._bridge.navigate("dashboard"),
-                        style=ft.ButtonStyle(
-                            bgcolor="#22D3EE",
-                            color="#0A0E14",
-                            shape=ft.RoundedRectangleBorder(radius=8),
-                        ),
-                    ),
+                    self._empty_go_home_btn,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.lg,
@@ -412,7 +636,7 @@ class ReviewPage(ft.Column):
             padding=t.spacing.sm,
             content=ft.Column(
                 [
-                    ft.Text("Groups", size=t.typography.size_md, weight=ft.FontWeight.W_700),
+                    ft.Text("Jump to group", size=t.typography.size_md, weight=ft.FontWeight.W_700),
                     self._group_list_scroll_host,
                 ],
                 spacing=t.spacing.xs,
@@ -427,32 +651,63 @@ class ReviewPage(ft.Column):
             content=ft.Row(
                 [
                     self._compare_panel_a,
-                    ft.VerticalDivider(width=1, color="#30363D", thickness=1),
+                    ft.Container(
+                        content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
+                        padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                    ),
                     self._compare_panel_b,
                 ],
                 expand=True,
+                spacing=0,
             ),
             expand=True,
         )
-        self._progress_bar = ft.ProgressBar(value=0, color="#22D3EE", bgcolor=ft.Colors.with_opacity(0.14, ft.Colors.WHITE))
+        self._progress_bar = ft.ProgressBar(
+            value=0,
+            color=t.colors.accent,
+            bgcolor=ft.Colors.with_opacity(0.14, t.colors.border),
+        )
         self._progress_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
         self._marked_lbl = ft.Text("", size=t.typography.size_sm, color="#FCA5A5")
+        self._marked_delete_b_btn = ft.FilledButton(
+            "Delete side B",
+            on_click=lambda _e: self._delete_compare_side("b"),
+            style=pill_filled_danger(t),
+        )
+        self._marked_delete_marked_btn = ft.OutlinedButton(
+            "Delete marked files",
+            on_click=self._delete_marked_files,
+            style=pill_outlined_button_style(t, danger=True),
+            tooltip="Deletes every file you marked for removal (separate from side B).",
+        )
+        self._marked_safety_lbl = ft.Text(
+            "Deletion always asks for confirmation. Prefer Move to Trash / Recycle Bin when offered.",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+        )
         self._marked_bar = ft.Container(
             visible=False,
             padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
             bgcolor=ft.Colors.with_opacity(0.95, "#1A0C0C"),
             border=ft.border.only(top=ft.BorderSide(1, "#EF4444")),
-            content=ft.Row(
+            content=ft.Column(
                 [
-                    self._marked_lbl,
-                    ft.FilledButton(
-                        "Delete side B",
-                        on_click=lambda _e: self._delete_compare_side("b"),
-                        style=ft.ButtonStyle(bgcolor="#DC2626", color="#FFFFFF"),
+                    ft.Row(
+                        [
+                            ft.Container(content=self._marked_lbl, expand=True),
+                            ft.Row(
+                                [self._marked_delete_b_btn, self._marked_delete_marked_btn],
+                                spacing=t.spacing.md,
+                                tight=True,
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        spacing=t.spacing.sm,
                     ),
-                    ft.FilledButton("Delete marked files", on_click=self._delete_marked_files, style=ft.ButtonStyle(bgcolor="#EF4444", color="#FFFFFF")),
+                    self._marked_safety_lbl,
                 ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                spacing=t.spacing.xs,
+                tight=True,
             ),
         )
         self._compare_main_row = ft.Row(
@@ -476,32 +731,72 @@ class ReviewPage(ft.Column):
             padding=ft.padding.all(16),
         )
 
+        self._btn_view_groups = ft.TextButton(
+            "Groups",
+            on_click=lambda e: self._enter_mode("groups"),
+            style=pill_text_button_style(t, variant="primary"),
+        )
+        self._btn_view_tiles = ft.TextButton(
+            "Tiles",
+            on_click=lambda e: self._enter_mode("grid"),
+            style=pill_text_button_style(t, variant="muted"),
+        )
         self._view_toggle_row = ft.Row(
-            [
-                ft.TextButton(
-                    "Groups",
-                    on_click=lambda e: self._enter_mode("groups"),
-                    style=ft.ButtonStyle(color=t.colors.primary),
-                ),
-                ft.TextButton(
-                    "Tiles",
-                    on_click=lambda e: self._enter_mode("grid"),
-                    style=ft.ButtonStyle(color=t.colors.fg_muted),
-                ),
-            ],
+            [self._btn_view_groups, self._btn_view_tiles],
             spacing=t.spacing.sm,
             visible=False,
         )
+        self._group_sort_key = "reclaimable_desc"
+        self._group_sort_dd = ft.Dropdown(
+            width=240,
+            value=self._group_sort_key,
+            options=[
+                ft.dropdown.Option("reclaimable_desc", "Highest reclaimable"),
+                ft.dropdown.Option("files_desc", "Most copies"),
+                ft.dropdown.Option("path_asc", "Folder A-Z"),
+            ],
+            on_select=self._on_group_sort_changed,
+            text_size=12,
+            dense=True,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=8),
+        )
+        self._group_sort_row = ft.Row(
+            [
+                ft.Text("Sort groups:", size=t.typography.size_sm, color=t.colors.fg_muted, weight=ft.FontWeight.W_600),
+                self._group_sort_dd,
+            ],
+            spacing=t.spacing.sm,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
+        )
 
+        _strip_pad = ft.padding.symmetric(horizontal=t.spacing.lg)
         self.controls = [
             self._top_bar,
-            ft.Container(content=self._view_toggle_row, padding=ft.padding.only(left=t.spacing.lg)),
-            ft.Container(content=self._smart_row, padding=ft.padding.only(left=t.spacing.lg)),
-            ft.Container(content=self._cmp_bar, padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg)),
-            ft.Container(content=self._filter_seg, padding=ft.padding.only(left=t.spacing.lg, bottom=t.spacing.sm)),
+            ft.Container(
+                content=ReviewPage._hwrap_strip(self._view_toggle_row),
+                padding=_strip_pad,
+            ),
+            ft.Container(
+                content=ReviewPage._hwrap_strip(self._group_sort_row),
+                padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.xs),
+            ),
+            ft.Container(
+                content=ReviewPage._hwrap_strip(self._smart_row),
+                padding=_strip_pad,
+            ),
+            ft.Container(
+                content=ReviewPage._hwrap_strip(self._cmp_bar),
+                padding=ft.padding.symmetric(horizontal=t.spacing.lg),
+            ),
+            ft.Container(
+                content=ReviewPage._hwrap_strip(self._filter_seg),
+                padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.sm),
+            ),
             self._content,
             self._rendering_badge,
         ]
+        self._apply_pill_chrome()
 
     # ------------------------------------------------------------------
     # Public API
@@ -683,6 +978,7 @@ class ReviewPage(ft.Column):
         if mode == "empty" and bool(self._groups):
             mode = "groups"
         self._mode = mode
+        self._group_sort_row.visible = False
         # Compare layout needs a bounded viewport: page-level scroll + unbounded ListView made the
         # compare Row as tall as all groups and vertically centered A/B (~mid-list).
         self.scroll = None if mode == "compare" else ft.ScrollMode.AUTO
@@ -715,6 +1011,8 @@ class ReviewPage(ft.Column):
             self._cmp_bar.visible = False
             self._smart_row.visible = False
             self._view_toggle_row.visible = True
+            self._group_sort_row.visible = True
+            self._refresh_filter_labels()
             self._refresh_groups_overview()
             self._content.controls.append(self._groups_overview)
         elif mode == "grid":
@@ -722,6 +1020,7 @@ class ReviewPage(ft.Column):
             self._cmp_bar.visible = False
             self._smart_row.visible = True
             self._view_toggle_row.visible = True
+            self._group_sort_row.visible = False
             self._refresh_grid()
             self._content.controls.append(self._grid)
         elif mode == "compare":
@@ -729,6 +1028,7 @@ class ReviewPage(ft.Column):
             self._cmp_bar.visible = True
             self._smart_row.visible = False
             self._view_toggle_row.visible = False
+            self._group_sort_row.visible = False
             self._content.controls.append(self._compare_view)
             self._bind_keys()
 
@@ -737,7 +1037,9 @@ class ReviewPage(ft.Column):
         self._safe_update(self._cmp_bar)
         self._safe_update(self._smart_row)
         self._safe_update(self._view_toggle_row)
+        self._safe_update(self._group_sort_row)
         self._update_top_stats()
+        self._apply_pill_chrome()
 
     async def _finish_load_to_grid_async(self) -> None:
         import asyncio
@@ -775,56 +1077,95 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     # Groups Overview
     # ------------------------------------------------------------------
-    def _build_group_card(self, g: DuplicateGroup, idx: int) -> ft.Container:
-        from pathlib import Path
-        first_path = str(g.files[0].path) if g.files else ""
-        folder = str(Path(first_path).parent) if first_path else ""
+    def _build_group_card(self, g: DuplicateGroup, idx: int, total_reclaim_scan: int) -> ft.Container:
+        reclaim = int(getattr(g, "reclaimable", 0) or 0)
+        reviewed = g.group_id in self._reviewed_group_ids
+        title_color = "#A7F3D0" if reviewed else self._t.colors.fg
+        pct = (100.0 * reclaim / total_reclaim_scan) if total_reclaim_scan > 0 else 0.0
+        pct_s = f" · {pct:.1f}% of scan reclaim" if total_reclaim_scan > 0 and reclaim > 0 else ""
+        stripe = _GROUP_STRIPE[g.group_id % len(_GROUP_STRIPE)]
+        line_dup = _group_duplicate_summary(g)
+        line_path = _group_path_hint(list(g.files))
+        glass = self._get_glass_style(0.05)
+        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, "app_theme") else False
+        edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
+        thin = ft.BorderSide(1, edge)
         return ft.Container(
-            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            padding=ft.padding.only(left=10, right=16, top=12, bottom=12),
             ink=True,
+            border=ft.Border(left=ft.BorderSide(4, stripe), top=thin, right=thin, bottom=thin),
+            tooltip='Open compare for this group (tap row or "Review").',
             on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
             content=ft.Row(
                 [
+                    ft.Icon(ft.icons.Icons.LAYERS_OUTLINED, size=18, color=stripe),
                     ft.Column(
                         [
                             ft.Text(
-                                f"Group {idx + 1} · {fmt_size(g.reclaimable)} reclaimable",
-                                size=self._t.typography.size_sm,
+                                f"Group {idx + 1} · {fmt_size(reclaim)} reclaimable{pct_s}",
+                                size=self._t.typography.size_base,
                                 weight=ft.FontWeight.W_700,
-                                color=self._t.colors.fg,
+                                color=title_color,
                             ),
                             ft.Text(
-                                f"{len(g.files)} copies · {folder}",
+                                line_dup,
+                                size=self._t.typography.size_sm,
+                                color=self._t.colors.fg2,
+                                max_lines=2,
+                            ),
+                            ft.Text(
+                                line_path,
                                 size=self._t.typography.size_xs,
                                 color=self._t.colors.fg_muted,
                                 overflow=ft.TextOverflow.ELLIPSIS,
-                                max_lines=1,
+                                max_lines=2,
                             ),
                         ],
                         spacing=4,
                         expand=True,
                     ),
                     ft.TextButton(
-                        "Review →",
-                        style=ft.ButtonStyle(color=self._t.colors.primary),
+                        "Review",
+                        icon=ft.icons.Icons.CHEVRON_RIGHT,
+                        style=pill_text_button_style(self._t, variant="primary"),
                         on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
                     ),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=8,
+                spacing=10,
             ),
-            **self._get_glass_style(0.05),
+            bgcolor=glass["bgcolor"],
+            border_radius=glass["border_radius"],
         )
 
-    def _refresh_groups_overview(self) -> None:
-        filtered_groups = [
+    def _sorted_groups_for_current_filter(self) -> List[DuplicateGroup]:
+        filtered = [
             g for g in self._groups
             if self._filter_key == "all" or any(self._passes_filter(f) for f in g.files)
         ]
+        key = str(self._group_sort_key or "reclaimable_desc")
+        if key == "files_desc":
+            return sorted(filtered, key=lambda g: len(g.files), reverse=True)
+        if key == "path_asc":
+            return sorted(
+                filtered,
+                key=lambda g: str(Path(str(g.files[0].path)).parent).lower() if g.files else "",
+            )
+        return sorted(filtered, key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)
+
+    def _refresh_groups_overview(self) -> None:
+        filtered_groups = self._sorted_groups_for_current_filter()
+        total_r = sum(int(getattr(x, "reclaimable", 0) or 0) for x in self._groups) or 1
         self._groups_overview.controls = [
-            self._build_group_card(g, i) for i, g in enumerate(filtered_groups)
+            self._build_group_card(g, i, total_r) for i, g in enumerate(filtered_groups)
         ]
         self._safe_update(self._groups_overview)
+
+    def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
+        self._group_sort_key = str(e.control.value or "reclaimable_desc")
+        if self._mode == "groups":
+            self._refresh_groups_overview()
+            self._update_top_stats()
 
     # ------------------------------------------------------------------
     # Grid
@@ -1118,7 +1459,10 @@ class ReviewPage(ft.Column):
 
     def _on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"keep_largest"}
-        self._apply_smart_select_compare_current_with_rule(next(iter(sel), "keep_largest"))
+        self._cmp_smart_rule = next(iter(sel), "keep_largest")
+
+    def _on_cmp_apply_rule_click(self, e=None) -> None:
+        self._apply_smart_select_compare_current_with_rule(self._cmp_smart_rule)
 
     def _apply_smart_select_compare_current_with_rule(self, rule: str) -> None:
         """Apply keep rule to files in the current compare group."""
@@ -1133,9 +1477,9 @@ class ReviewPage(ft.Column):
         elif rule == "keep_smallest":
             keep = min(files, key=lambda f: f.size)
         elif rule == "keep_newest":
-            keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            keep = max(files, key=_file_mtime_ts)
         elif rule == "keep_oldest":
-            keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            keep = min(files, key=_file_mtime_ts)
         else:
             keep = max(files, key=lambda f: f.size)
         to_delete = [str(f.path) for f in files if f is not keep]
@@ -1181,9 +1525,9 @@ class ReviewPage(ft.Column):
             elif rule == "keep_smallest":
                 keep = min(files, key=lambda f: f.size)
             elif rule == "keep_newest":
-                keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+                keep = max(files, key=_file_mtime_ts)
             elif rule == "keep_oldest":
-                keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+                keep = min(files, key=_file_mtime_ts)
             else:
                 keep = max(files, key=lambda f: f.size)
             for f in files:
@@ -1203,7 +1547,7 @@ class ReviewPage(ft.Column):
         gid = self._compare_gid
         if gid is None:
             return
-        rule = next(iter(getattr(self._cmp_smart_seg, "selected", None) or {"keep_largest"}), "keep_largest")
+        rule = self._cmp_smart_rule
         files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
         if len(files) < 2:
             return
@@ -1212,9 +1556,9 @@ class ReviewPage(ft.Column):
         elif rule == "keep_smallest":
             keep = min(files, key=lambda f: f.size)
         elif rule == "keep_newest":
-            keep = max(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            keep = max(files, key=_file_mtime_ts)
         elif rule == "keep_oldest":
-            keep = min(files, key=lambda f: getattr(f, "mtime", 0) or 0)
+            keep = min(files, key=_file_mtime_ts)
         else:
             keep = max(files, key=lambda f: f.size)
         to_delete = [str(f.path) for f in files if f is not keep]
@@ -1345,6 +1689,10 @@ class ReviewPage(ft.Column):
             self._compare_a = files[0]
             self._compare_b = files[1] if len(files) > 1 else None
             self._enter_mode("compare")
+            self._cmp_smart_rule = next(
+                iter(getattr(self._cmp_smart_seg, "selected", None) or {"keep_largest"}),
+                "keep_largest",
+            )
             self._refresh_group_list_panel()
             self._update_compare_panels()
             self._update_compare_chrome()
@@ -1358,10 +1706,25 @@ class ReviewPage(ft.Column):
         gen = self._compare_render_generation
         self._compare_panel_a.content = self._build_compare_side(self._compare_a, "A", gen)
         self._compare_panel_b.content = self._build_compare_side(self._compare_b, "B", gen)
+        self._apply_compare_panel_tints()
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
         self._update_progress_and_marked_bar()
         self._log_if_slow("review:compare_panel_update", _t0)
+
+    def _apply_compare_panel_tints(self) -> None:
+        """Visually separate side A and side B (compare mode only)."""
+        self._compare_panel_a.bgcolor = ft.Colors.with_opacity(0.10, "#22D3EE")
+        self._compare_panel_a.border = ft.border.all(1, ft.Colors.with_opacity(0.38, "#22D3EE"))
+        self._compare_panel_b.bgcolor = ft.Colors.with_opacity(0.10, "#A78BFA")
+        self._compare_panel_b.border = ft.border.all(1, ft.Colors.with_opacity(0.38, "#A78BFA"))
+
+    def _reset_compare_panels_idle_chrome(self) -> None:
+        g = self._get_glass_style(0.04)
+        self._compare_panel_a.bgcolor = g.get("bgcolor")
+        self._compare_panel_a.border = g.get("border")
+        self._compare_panel_b.bgcolor = g.get("bgcolor")
+        self._compare_panel_b.border = g.get("border")
 
     def _build_compare_file_column(self, f: DuplicateFile, idx: int) -> ft.Container:
         p = Path(str(f.path))
@@ -1378,7 +1741,7 @@ class ReviewPage(ft.Column):
                     self._thumb_widget(p, 180),
                     ft.Text(p.name, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     ft.Text(f"Path: {p.parent}", size=self._t.typography.size_xs, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, color="#93C5FD"),
-                    ft.Text(f"Modified: {self._fmt_mtime(getattr(f, 'mtime', None))}", size=self._t.typography.size_xs, color="#BFD5FF"),
+                    ft.Text(f"Modified: {self._fmt_mtime(_file_mtime_ts(f))}", size=self._t.typography.size_xs, color="#BFD5FF"),
                     ft.Text(f"Size: {fmt_size(f.size)}", size=self._t.typography.size_xs, color="#4ADE80"),
                     ft.Row(
                         [
@@ -1440,7 +1803,19 @@ class ReviewPage(ft.Column):
                     content=ft.Column(
                         [
                             ft.Text(f"Group {i + 1} · {fmt_size(g.reclaimable)}", size=self._t.typography.size_sm, weight=ft.FontWeight.W_700),
-                            ft.Text(f"{len(g.files)} copies", size=self._t.typography.size_xs, color=self._t.colors.fg_muted),
+                            ft.Text(
+                                _group_duplicate_summary(g),
+                                size=self._t.typography.size_xs,
+                                color=self._t.colors.fg_muted,
+                                max_lines=2,
+                            ),
+                            ft.Text(
+                                _group_path_hint(list(g.files)),
+                                size=self._t.typography.size_xs,
+                                color=self._t.colors.fg2,
+                                max_lines=2,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
                         ],
                         spacing=2,
                     ),
@@ -1483,11 +1858,11 @@ class ReviewPage(ft.Column):
         self._progress_lbl.value = f"{reviewed} of {len(self._groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
         if self._mode == "compare":
             self._marked_lbl.value = (
-                f"Group action: keep side A and delete side B, or use smart rule. "
-                f"{fmt_size(marked_bytes)} marked across {len(self._marked_paths)} files."
+                f"{fmt_size(marked_bytes)} marked for removal across {len(self._marked_paths)} file(s). "
+                "Use Keep side A / Delete side B for one-off deletes, or clear marks with each file's checkbox."
             )
         else:
-            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked across {len(self._marked_paths)} files"
+            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked for removal across {len(self._marked_paths)} file(s)"
         self._marked_bar.visible = bool(self._marked_paths) or self._mode == "compare"
         self._safe_update(self._progress_bar)
         self._safe_update(self._progress_lbl)
@@ -1536,9 +1911,8 @@ class ReviewPage(ft.Column):
         name = p.name
         thumb_slot = ft.Container(
             content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
-            width=340,
-            height=260,
-            alignment=ft.Alignment(0, 0),
+            expand=True,
+            alignment=ft.Alignment.CENTER,
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             border_radius=8,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
@@ -1579,7 +1953,7 @@ class ReviewPage(ft.Column):
             )
 
         meta_rows: list = []
-        date_str = self._fmt_mtime(getattr(f, "mtime", None))
+        date_str = self._fmt_mtime(_file_mtime_ts(f))
         if date_str:
             meta_rows.append(_meta_row(ft.icons.Icons.SCHEDULE, date_str, "#BFD5FF"))
         dims_txt = ft.Text("", size=t.typography.size_xs, color="#C084FC")
@@ -1600,7 +1974,7 @@ class ReviewPage(ft.Column):
             padding=ft.padding.symmetric(horizontal=10, vertical=6),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             border_radius=6,
-            width=340,
+            width=400,
         )
 
         key = f"{label}:{gen}"
@@ -1610,9 +1984,31 @@ class ReviewPage(ft.Column):
         if hasattr(page, "run_task"):
             page.run_task(self._populate_compare_media_async, f, p, key, gen)
 
+        head: list[ft.Control] = [label_badge]
+        if (
+            label == "A"
+            and self._compare_a
+            and self._compare_b
+            and self._compare_a.size == self._compare_b.size
+            and Path(str(self._compare_a.path)).name == Path(str(self._compare_b.path)).name
+        ):
+            grp = next((g for g in self._groups if g.group_id == self._compare_gid), None)
+            if grp is not None and (getattr(grp, "similarity_type", None) or "exact").lower() == "exact":
+                head.append(
+                    ft.Container(
+                        content=ft.Text(
+                            "Same name and size — engine matched these as exact duplicates. Compare folders below.",
+                            size=t.typography.size_xs,
+                            color=t.colors.fg_muted,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                    )
+                )
+
         return ft.Column(
-            [
-                label_badge,
+            head
+            + [
                 thumb_slot,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 size_badge,
@@ -1626,7 +2022,8 @@ class ReviewPage(ft.Column):
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
-            alignment=ft.MainAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.START,
+            expand=True,
         )
 
     async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
@@ -1646,7 +2043,9 @@ class ReviewPage(ft.Column):
         b64 = None
         if is_image_path(p):
             try:
-                b64 = await loop.run_in_executor(None, lambda: get_thumbnail_cache().get_base64(p))
+                b64 = await loop.run_in_executor(
+                    None, lambda: get_thumbnail_cache().get_compare_preview_base64(p)
+                )
             except Exception:
                 b64 = None
         dims = await loop.run_in_executor(None, _read_dims)
@@ -1658,10 +2057,12 @@ class ReviewPage(ft.Column):
         if slot is not None and b64:
             slot.content = ft.Image(
                 src=f"data:image/jpeg;base64,{b64}",
-                width=340,
-                height=260,
-                fit=ft.BoxFit.CONTAIN,
+                expand=True,
+                fit=ft.BoxFit.COVER,
+                filter_quality=ft.FilterQuality.HIGH,
                 border_radius=8,
+                cache_width=1600,
+                cache_height=1200,
             )
             self._safe_update(slot)
         if dims_lbl is not None:
@@ -1677,7 +2078,15 @@ class ReviewPage(ft.Column):
         count = len(self._group_files.get(gid, []))
         name_a = Path(str(getattr(self._compare_a, "path", ""))).name if self._compare_a else "(A)"
         name_b = Path(str(getattr(self._compare_b, "path", ""))).name if self._compare_b else "(no peer)"
-        self._cmp_title.value = f"Group {idx + 1}/{total} · {count} copies · {name_a} ↔ {name_b}"
+        g = self._groups[idx] if 0 <= idx < len(self._groups) else None
+        sim_note = ""
+        if g is not None:
+            sim = (getattr(g, "similarity_type", None) or "exact").lower()
+            sim_note = " · exact match" if sim == "exact" else f" · {sim}"
+        self._cmp_title.value = (
+            f"Group {idx + 1}/{total} · {count} files{sim_note} · {name_a}"
+            + (f" vs {name_b}" if name_b != name_a else "")
+        )
         self._safe_update(self._cmp_title)
 
     def _prev_group(self, e=None) -> None:
@@ -1725,6 +2134,7 @@ class ReviewPage(ft.Column):
         if self._mode == "grid":
             self._refresh_grid()
         elif self._mode == "groups":
+            self._refresh_filter_labels()
             self._refresh_groups_overview()
         elif self._mode == "compare":
             self._refresh_filter_labels()
@@ -1758,40 +2168,41 @@ class ReviewPage(ft.Column):
         self._filter_counts = {k: len(v) for k, v in by_filter.items()}
         self._filter_sizes = file_sizes
         self._filter_group_counts = group_counts
+        self._refresh_filter_labels()
         self._update_top_stats()
 
     def _refresh_filter_labels(self) -> None:
         selected = set(self._filter_seg.selected or [])
-        for seg in self._filter_seg.segments:
-            key = seg.value
+        for key, (t0, t1, t2) in self._filter_seg_lines.items():
             base = next((label for k, label in _FILTER_TABS if k == key), key.title())
             files_n = self._filter_counts.get(key, 0)
             size_n = self._filter_sizes.get(key, 0)
-            col = seg.label
-            if isinstance(col, ft.Column) and len(col.controls) >= 3:
-                is_active = key in selected
-                accent = _FILTER_ACCENT.get(key, "#C7D2FE")
-                col.controls[0].value = base
-                col.controls[0].color = "#FFFFFF" if is_active else "#DDE8FF"
-                col.controls[0].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
-                col.controls[1].value = f"{files_n:,}"
-                col.controls[1].color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
-                col.controls[1].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
-                col.controls[2].value = fmt_size(size_n)
-                col.controls[2].color = "#B7C6E6" if is_active else "#9FB0D0"
+            is_active = key in selected
+            accent = _FILTER_ACCENT.get(key, "#C7D2FE")
+            t0.value = base
+            t0.color = "#FFFFFF" if is_active else "#CEDAF0"
+            t0.weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
+            t1.value = f"{files_n:,}"
+            t1.size = 12
+            t1.color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
+            t1.weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
+            t2.value = fmt_size(size_n)
+            t2.color = "#B7C6E6" if is_active else "#9FB0D0"
         self._update_top_stats()
+        self._safe_update(self._filter_seg)
 
     def _metric_chip(self, label: str, value: str, accent: str) -> ft.Container:
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Text(label, size=self._t.typography.size_xs, color="#9FB0D0"),
-                    ft.Text(value, size=self._t.typography.size_sm, weight=ft.FontWeight.W_700, color=accent),
+                    ft.Text(label, size=10, color="#9FB0D0", weight=ft.FontWeight.W_500),
+                    ft.Text(value, size=11, weight=ft.FontWeight.W_700, color=accent),
                 ],
-                spacing=6,
+                spacing=4,
+                tight=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            padding=ft.padding.symmetric(horizontal=7, vertical=4),
             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
             border=ft.border.all(1, ft.Colors.with_opacity(0.18, ft.Colors.WHITE)),
             border_radius=999,
@@ -1801,6 +2212,12 @@ class ReviewPage(ft.Column):
         selected_files = len(self._files_by_filter.get(self._filter_key, []))
         selected_groups = self._filter_group_counts.get(self._filter_key, 0)
         reclaimable = fmt_size(self._filter_sizes.get(self._filter_key, 0))
+        filtered_groups = self._sorted_groups_for_current_filter()
+        reviewed_in_filter = sum(1 for g in filtered_groups if g.group_id in self._reviewed_group_ids)
+        total_filtered = len(filtered_groups)
+        remaining_reclaimable = int(
+            sum(int(getattr(g, "reclaimable", 0) or 0) for g in filtered_groups if g.group_id not in self._reviewed_group_ids)
+        )
         mode_label_map = {
             "compare": "Compare",
             "grid": "Grid",
@@ -1809,14 +2226,29 @@ class ReviewPage(ft.Column):
             "empty": "Empty",
         }
         mode_label = mode_label_map.get(self._mode, "Grid")
-        self._summary_lbl.value = f"Filter: {self._filter_key.title()} · Mode: {mode_label}"
+        filter_lbl = next((lab for k, lab in _FILTER_TABS if k == self._filter_key), self._filter_key.title())
+        self._summary_lbl.value = f"Filter: {filter_lbl} · Mode: {mode_label}"
+        if self._mode == "compare":
+            self._summary_lbl.value += " · Back returns to the group list"
         self._stats_row.controls = [
             self._metric_chip("Groups", f"{selected_groups:,}", "#A78BFA"),
             self._metric_chip("Files", f"{selected_files:,}", "#7DD3FC"),
             self._metric_chip("Total Size", reclaimable, "#4ADE80"),
+            self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", "#FBBF24"),
+            self._metric_chip("Remaining", fmt_size(remaining_reclaimable), "#F87171"),
         ]
+        if self._mode == "compare":
+            self._workflow_lbl.value = (
+                "Shortcuts: arrows change group; 1 or K deletes side A; 2 or D deletes side B; "
+                "Enter next group; Space opens delete for extras the smart rule would remove."
+            )
+        elif filtered_groups:
+            self._workflow_lbl.value = f"Progress: {reviewed_in_filter:,}/{total_filtered:,} groups reviewed"
+        else:
+            self._workflow_lbl.value = "Progress: no groups in current filter"
         self._safe_update(self._summary_lbl)
         self._safe_update(self._stats_row)
+        self._safe_update(self._workflow_lbl)
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -1966,11 +2398,14 @@ class ReviewPage(ft.Column):
         self._empty_state.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._empty_state.border = self._get_glass_style(0.04).get('border')
 
-        self._compare_panel_a.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._compare_panel_a.border = self._get_glass_style(0.04).get('border')
+        if self._mode == "compare":
+            self._apply_compare_panel_tints()
+        else:
+            self._reset_compare_panels_idle_chrome()
 
-        self._compare_panel_b.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._compare_panel_b.border = self._get_glass_style(0.04).get('border')
+        self._marked_safety_lbl.color = self._t.colors.fg_muted
+
+        self._apply_pill_chrome()
 
         if self._is_mounted():
             self.update()

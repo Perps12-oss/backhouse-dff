@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict
 import flet as ft
 
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
-from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -232,6 +232,10 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
         self._settings["appearance"].setdefault("ui_theme_preset", "count_byteula")
+        perf = self._settings.setdefault("performance", {})
+        perf.setdefault("max_threads", 0)
+        perf.setdefault("hash_cache_enabled", True)
+        perf.setdefault("hash_cache_max_mb", 500)
 
     def _apply_saved_values_to_controls(self) -> None:
         """Push current settings values into the UI controls."""
@@ -425,20 +429,26 @@ class SettingsPage(ft.Column):
         return round(clamped / float(self._BASE_FONT_SIZE), 2)
 
     def _apply_font_size_to_page(self, size: int) -> None:
-        page = self._bridge.flet_page
-        scale = self._font_scale_for_size(size)
+        """Apply font size globally (Flet Page no longer exposes text_scale)."""
         try:
-            if hasattr(page, "text_scale"):
-                page.text_scale = scale
-            elif hasattr(page, "text_scale_factor"):
-                page.text_scale_factor = scale
+            set_ui_font_size_px(int(size))
+            self._bridge.refresh_app_typography()
+        except Exception:
+            _log.debug("Could not apply font scale", exc_info=True)
+        try:
+            page = self._bridge.flet_page
             if self._is_mounted():
                 page.update()
         except Exception:
-            _log.debug("Could not apply font scale", exc_info=True)
+            _log.debug("Could not page.update after font scale", exc_info=True)
 
     def _on_font_size_change(self, e: ft.ControlEvent) -> None:
-        value = int(getattr(e.control, "value", self._BASE_FONT_SIZE))
+        raw = getattr(e.control, "value", self._BASE_FONT_SIZE)
+        try:
+            value = int(round(float(raw)))
+        except (TypeError, ValueError):
+            value = int(self._BASE_FONT_SIZE)
+        value = max(10, min(18, value))
         self._appearance_font_label.value = f"Font size: {value}"
         if self._is_mounted():
             self._appearance_font_label.update()
@@ -454,10 +464,23 @@ class SettingsPage(ft.Column):
         t = self._t
         content = ft.Column(spacing=t.spacing.md)
 
-        # Max threads
-        content.controls.append(ft.Text("Max Threads (0 = auto)", weight=ft.FontWeight.W_600, color=t.colors.fg))
+        # Max threads (caps TurboScanner discovery + hashing parallelism for Files mode)
+        content.controls.append(
+            ft.Text("Max worker threads (0 = fastest auto)", weight=ft.FontWeight.W_600, color=t.colors.fg)
+        )
+        content.controls.append(
+            ft.Text(
+                "0 lets the engine use its built-in limits (typically tens of parallel hashers). "
+                "Set 1–64 to cap CPU or reduce disk contention on HDDs.",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                italic=True,
+            )
+        )
         self._perf_threads_slider = ft.Slider(
-            min=0, max=16, divisions=16,
+            min=0,
+            max=64,
+            divisions=64,
             value=self._settings["performance"].get("max_threads", 0),
             on_change=lambda e: setattr(self._perf_threads_label, 'value', f"Threads: {int(e.control.value)}"),
         )
@@ -683,6 +706,33 @@ class SettingsPage(ft.Column):
         if self._is_mounted():
             self.update()
 
+    def _selected_settings_tab_key(self) -> str:
+        sel = getattr(self._tabs, "selected", None) or ["general"]
+        if isinstance(sel, (set, frozenset)):
+            key = str(next(iter(sel))) if sel else "general"
+        elif isinstance(sel, list) and sel:
+            key = str(sel[0])
+        else:
+            key = str(sel) if sel else "general"
+        return key if key in self._tab_keys else "general"
+
+    def _select_settings_tab(self, key: str) -> None:
+        """Sync SegmentedButton selection and tab panel visibility."""
+        if key not in self._tab_keys:
+            key = "general"
+        idx = self._tab_keys.index(key)
+        try:
+            self._tabs.selected = [key]
+        except Exception:
+            _log.debug("Could not set settings SegmentedButton selection", exc_info=True)
+        for i, k in enumerate(self._tab_keys):
+            self._tab_contents[k].visible = i == idx
+        if self._is_mounted():
+            try:
+                self._tabs.update()
+            except Exception:
+                self.update()
+
     # ------------------------------------------------------------------
     # Save / Cancel
     # ------------------------------------------------------------------
@@ -725,19 +775,26 @@ class SettingsPage(ft.Column):
             self._bridge.show_snackbar(f"Save failed: {exc}", error=True)
             return
         self._apply_font_size_to_page(self._settings["appearance"]["font_size"])
-        self._bridge.show_snackbar("Settings saved successfully.", success=True)
-        # If settings is opened as a modal chooser, close it after save.
+        # Close any modal overlay first (e.g. theme chooser opened as a dialog).
         try:
             self._bridge.dismiss_top_dialog()
         except Exception:
             pass
+        if self._selected_settings_tab_key() == "appearance":
+            self._bridge.show_snackbar("Theme and settings saved.", success=True)
+            self._select_settings_tab("general")
+        else:
+            self._bridge.show_snackbar("Settings saved successfully.", success=True)
 
     def _on_cancel(self, e):
+        key = self._selected_settings_tab_key()
         # Reload original settings to discard changes
         self._load_settings()
         self._apply_saved_values_to_controls()
         self.update()
         self._bridge.show_snackbar("Changes discarded.", info=True)
+        if key == "appearance":
+            self._select_settings_tab("general")
 
     # ------------------------------------------------------------------
     # Clear cache
