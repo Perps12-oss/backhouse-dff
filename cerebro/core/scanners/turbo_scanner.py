@@ -206,14 +206,17 @@ class TurboScanConfig:
     # boundaries via the engine's scan loop.
     cancel_event: Optional[threading.Event] = None
 
-    # Archive handling (off by default).
-    # When False, archive files are hashed as opaque binary blobs — fast and
-    # correct for whole-archive duplicate detection (.zip A == .zip B iff
-    # byte-for-byte identical). When True, the scanner will attempt to extract
-    # and hash each member file individually (very slow; not yet implemented
-    # beyond the config flag).
+    # When False, archives are hashed as opaque blobs. When True, member-file
+    # extraction will be attempted (not yet implemented beyond this flag).
     scan_archives: bool = False
-    
+
+    # Checkpoint integration — set by TurboFileEngine when resume_from_checkpoint=True.
+    # If provided and resume_from_checkpoint is True, Phase 1 (os.walk) is skipped;
+    # pending files are loaded from the DB instead, saving 30-90 s on 1 M-file trees.
+    checkpoint_db: Optional[object] = None   # CheckpointDB instance
+    scan_id: Optional[str] = None
+    resume_from_checkpoint: bool = False
+
 
 # ============================================================================
 # DIRECTORY CACHE
@@ -376,6 +379,20 @@ def _available_hash_algorithms() -> List[str]:
         if a not in seen:
             seen.add(a)
             out.append(a)
+    return out
+
+
+def _algorithms_for_auto_pick() -> List[str]:
+    """Candidates when ``hash_algorithm`` is ``auto``: fast, strong enough for full-file dedup.
+
+    MD5 is excluded from auto-selection (legacy / weaker); it remains available if chosen explicitly.
+    """
+    out: List[str] = []
+    if xxhash is not None:
+        out.append("xxhash")
+    if blake3 is not None:
+        out.append("blake3")
+    out.append("sha256")
     return out
 
 
@@ -612,7 +629,7 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
                         continue
         except OSError as exc:
             # Directory unreadable as a whole — skip and continue.
-            if str(current_dir) == root_dir_s:
+            if str(current) == root_dir_s:
                 raise OSError(f"Network path unreachable: {root_dir_s}") from exc
             continue
 
@@ -741,6 +758,39 @@ class TurboScanner:
         self._last_stage_emitted = ""
         self._invalidate_caches_if_scope_changed()
 
+        ckpt = self.config.checkpoint_db
+        scan_id = self.config.scan_id
+        resume_mode = bool(self.config.resume_from_checkpoint and ckpt and scan_id)
+        _ckpt_total: int = 0
+        _ckpt_completed_at_start: int = 0
+
+        if resume_mode:
+            _ckpt_total, _ckpt_pending = ckpt.get_counts(scan_id)
+            _ckpt_completed_at_start = _ckpt_total - _ckpt_pending
+            logger.info(
+                "[Turbo] checkpoint resume state: scan_id=%s total=%d pending=%d completed=%d",
+                scan_id,
+                _ckpt_total,
+                _ckpt_pending,
+                _ckpt_completed_at_start,
+            )
+        elif ckpt and scan_id:
+            ckpt.mark_stale_as_crashed()
+            ckpt.purge_old_scans()
+
+        # Heartbeat thread keeps the session alive every 10 s while scanning.
+        _hb_stop = threading.Event()
+        def _heartbeat_loop():
+            while not _hb_stop.wait(10):
+                try:
+                    ckpt.beat(scan_id)
+                except Exception:
+                    pass
+        _hb_thread = None
+        if ckpt and scan_id:
+            _hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="ckpt-hb")
+            _hb_thread.start()
+
         def _emit(
             stage: str,
             processed: int,
@@ -770,7 +820,7 @@ class TurboScanner:
             if ev is not None and not ev.is_set():
                 ev.wait()
 
-        # Phase 1: Parallel directory discovery
+        # Phase 1: Discovery — skip os.walk when resuming from checkpoint DB.
         _pause_gate()
         user_roots = list(roots)
         scan_roots = dedupe_roots(user_roots)
@@ -782,38 +832,88 @@ class TurboScanner:
             )
         else:
             logger.debug("[ROOT_DEDUP] user_roots=%d deduped_roots=%d (no overlap)", len(user_roots), len(scan_roots))
-        logger.info("[Turbo] Phase 1: Discovering files...")
-        _emit(
-            ScanStage.DISCOVERING,
-            0,
-            0,
-            metrics={"total_files_in_scope": 0, "files_processed": 0, "candidates_found": 0},
-        )
-        discovered_files = self._discover_files_parallel(scan_roots, emit=_emit)
-        _emit(
-            ScanStage.DISCOVERING,
-            len(discovered_files),
-            len(discovered_files),
-            metrics={
-                "total_files_in_scope": len(discovered_files),
-                "files_processed": len(discovered_files),
-                "candidates_found": 0,
-            },
-        )
-        logger.info(
-            "[Turbo] Discovered %d files in %.2fs",
-            len(discovered_files),
-            time.time() - start_time,
-        )
+
+        if resume_mode:
+            # Load pending files first, then also load completed files from checkpoint
+            # so size-grouping can detect cross-pairs across both sets.
+            logger.info("[Turbo] Resume mode: loading pending files from checkpoint (skipping os.walk)")
+            _emit(
+                ScanStage.DISCOVERING,
+                _ckpt_completed_at_start,
+                _ckpt_total,
+                metrics={
+                    "total_files_in_scope": _ckpt_total,
+                    "files_processed": _ckpt_completed_at_start,
+                    "candidates_found": 0,
+                    "checkpoint_resume": True,
+                    "checkpoint_completed_offset": _ckpt_completed_at_start,
+                },
+            )
+            discovered_files: List[Tuple[Path, int, float]] = []
+            for batch in ckpt.iter_pending_files(scan_id):
+                for path_str, size, mtime in batch:
+                    p = Path(path_str)
+                    if not p.exists():
+                        ckpt.enqueue_hash_result(scan_id, path_str, None, None, "error")
+                        continue
+                    st_mtime = p.stat().st_mtime if p.exists() else mtime
+                    discovered_files.append((p, size, st_mtime))
+            _pending_count = len(discovered_files)
+            # Load completed files so size-grouping catches cross-pairs between
+            # already-hashed and pending files (hash_cache will serve them instantly).
+            for batch in ckpt.iter_completed_hashes(scan_id):
+                for path_str, size, mtime, _hash in batch:
+                    p = Path(path_str)
+                    if p.exists():
+                        discovered_files.append((p, int(size), float(mtime)))
+            logger.info("[Turbo] Resume: %d pending + %d completed = %d total files",
+                        _pending_count, len(discovered_files) - _pending_count, len(discovered_files))
+        else:
+            logger.info("[Turbo] Phase 1: Discovering files...")
+            _emit(
+                ScanStage.DISCOVERING,
+                0,
+                0,
+                metrics={"total_files_in_scope": 0, "files_processed": 0, "candidates_found": 0},
+            )
+            discovered_files = self._discover_files_parallel(scan_roots, emit=_emit)
+            _emit(
+                ScanStage.DISCOVERING,
+                len(discovered_files),
+                len(discovered_files),
+                metrics={
+                    "total_files_in_scope": len(discovered_files),
+                    "files_processed": len(discovered_files),
+                    "candidates_found": 0,
+                },
+            )
+            logger.info(
+                "[Turbo] Discovered %d files in %.2fs",
+                len(discovered_files),
+                time.time() - start_time,
+            )
+            # Bulk-insert all discovered files as 'pending' so a mid-scan crash
+            # can be resumed without re-walking the filesystem.
+            if ckpt and scan_id and discovered_files:
+                try:
+                    ckpt.insert_pending_files(
+                        scan_id,
+                        [(str(p), sz, mt) for p, sz, mt in discovered_files],
+                    )
+                except Exception:
+                    logger.debug("[Turbo] checkpoint insert_pending_files failed (non-fatal)", exc_info=True)
+            _ckpt_total = len(discovered_files)
+        # True scope for UI metrics: full checkpoint total on resume, discovered count on new scan.
+        _scope_total = _ckpt_total if (_ckpt_total > 0) else len(discovered_files)
         # Phase 2: Group by size (instant duplicate detection)
         _pause_gate()
         _emit(
             ScanStage.GROUPING_BY_SIZE,
-            len(discovered_files),
-            len(discovered_files),
+            _scope_total,
+            _scope_total,
             metrics={
-                "total_files_in_scope": len(discovered_files),
-                "files_processed": len(discovered_files),
+                "total_files_in_scope": _scope_total,
+                "files_processed": _scope_total,
                 "candidates_found": 0,
             },
         )
@@ -834,11 +934,11 @@ class TurboScanner:
         candidates_found = sum(len(v) for v in size_groups.values()) if size_groups else 0
         _emit(
             ScanStage.GROUPING_BY_SIZE,
-            len(discovered_files),
-            len(discovered_files),
+            _scope_total,
+            _scope_total,
             metrics={
-                "total_files_in_scope": len(discovered_files),
-                "files_processed": len(discovered_files),
+                "total_files_in_scope": _scope_total,
+                "files_processed": _scope_total,
                 "candidates_found": candidates_found,
             },
         )
@@ -890,7 +990,7 @@ class TurboScanner:
         ]
 
         # Phase 5: Yield results
-        discovered_count = len(discovered_files)
+        discovered_count = _scope_total
         candidate_count = sum(len(v) for v in final_groups.values()) if final_groups else 0
         emitted_count = 0
         meta_errors = 0
@@ -987,7 +1087,29 @@ class TurboScanner:
         except (OSError, ValueError, RuntimeError, AttributeError, ImportError, TypeError):
             pass
         ce = self.config.cancel_event
-        if ce is None or not ce.is_set():
+        _was_cancelled = ce is not None and ce.is_set()
+
+        # Stop heartbeat and flush remaining checkpoint writes.
+        if _hb_thread is not None:
+            _hb_stop.set()
+        if ckpt and scan_id:
+            try:
+                ckpt.flush_sync()
+                new_status = "active" if _was_cancelled else "completed"
+                ckpt.update_manifest_status(scan_id, new_status)
+                _final_total, _final_pending = ckpt.get_counts(scan_id)
+                logger.info(
+                    "[Turbo] checkpoint terminal: scan_id=%s status=%s total=%d pending=%d completed=%d",
+                    scan_id,
+                    new_status,
+                    _final_total,
+                    _final_pending,
+                    max(0, _final_total - _final_pending),
+                )
+            except Exception:
+                pass
+
+        if not _was_cancelled:
             self._turbo_completed_normally = True
             _emit(
                 ScanStage.COMPLETE,
@@ -1327,6 +1449,8 @@ class TurboScanner:
 
         # Use thread pool (not process pool) for hashing to share cache
         workers = min(self.config.hash_workers, len(files_to_hash))
+        _ckpt = self.config.checkpoint_db
+        _sid = self.config.scan_id
 
         def hash_worker(path_mtime: Tuple[Path, float]) -> Tuple[Path, float, Optional[str]]:
             path, mtime = path_mtime
@@ -1360,6 +1484,14 @@ class TurboScanner:
                     hash_val = compute_quick_hash_fast(path, effective_algorithm)
                 else:
                     hash_val = compute_full_hash_mmap(path, effective_algorithm)
+
+            # Checkpoint only on final hash phase to avoid double-counting.
+            if not quick and _ckpt and _sid:
+                try:
+                    status = "complete" if hash_val else "error"
+                    _ckpt.enqueue_hash_result(_sid, path_str, hash_val, None, status)
+                except Exception:
+                    pass
 
             return path, mtime, hash_val
 
@@ -1424,7 +1556,7 @@ class TurboScanner:
         return {k: v for k, v in hash_groups.items() if len(v) >= 2}
 
     def _auto_pick_hash_algorithm(self, sample_paths: List[Path], *, quick: bool) -> str:
-        candidates = _available_hash_algorithms()
+        candidates = _algorithms_for_auto_pick()
         if not candidates:
             return "sha256"
         if len(candidates) == 1:

@@ -142,6 +142,30 @@ def _main(page: ft.Page) -> None:
         onboarding["completed"] = False
         changed_settings = True
 
+    performance = settings.get("performance")
+    if not isinstance(performance, dict):
+        performance = {}
+        settings["performance"] = performance
+        changed_settings = True
+    if "max_threads" not in performance:
+        performance["max_threads"] = 0  # 0 = turbo scanner uses built-in CPU-based parallelism
+        changed_settings = True
+    if "hash_cache_enabled" not in performance:
+        performance["hash_cache_enabled"] = True
+        changed_settings = True
+    if "hash_cache_max_mb" not in performance:
+        performance["hash_cache_max_mb"] = 500
+        changed_settings = True
+
+    appearance_boot = settings.get("appearance")
+    if not isinstance(appearance_boot, dict):
+        appearance_boot = {}
+        settings["appearance"] = appearance_boot
+        changed_settings = True
+    if "font_size" not in appearance_boot:
+        appearance_boot["font_size"] = 13
+        changed_settings = True
+
     if changed_settings:
         bridge.save_settings(settings)
 
@@ -177,6 +201,14 @@ def _main(page: ft.Page) -> None:
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
     page.services.append(folder_picker)
+
+    from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px
+
+    _appear0 = settings.get("appearance") if isinstance(settings, dict) else {}
+    _fs0 = 13
+    if isinstance(_appear0, dict):
+        _fs0 = int(_appear0.get("font_size", 13) or 13)
+    set_ui_font_size_px(_fs0)
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
@@ -658,16 +690,11 @@ def _main(page: ft.Page) -> None:
             "exclude": exclude_page,
             "settings": settings_page,
         }
-        active_key = layout.current_key
-        for key, p in page_map.items():
-            if key != active_key:
-                # Mark inactive pages as theme-dirty; they repaint via on_show
-                try:
-                    p._pending_theme = mode  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-                continue
+        # Apply to every singleton page (preset, font scale, and light/dark must stay in sync).
+        for _key, p in page_map.items():
             try:
+                if hasattr(p, "_pending_theme"):
+                    p._pending_theme = None  # type: ignore[attr-defined]
                 p.apply_theme(mode)
             except Exception:
                 _log.exception("apply_theme failed on %s", type(p).__name__)

@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from cerebro.core.paths import default_cerebro_cache_dir
-from cerebro.core.scanners.turbo_scanner import TurboScanConfig, TurboScanner
+from cerebro.core.scanners.turbo_scanner import (
+    DEFAULT_DIR_WORKERS,
+    DEFAULT_HASH_WORKERS,
+    TurboScanConfig,
+    TurboScanner,
+)
 from cerebro.engines.scan_stage import ScanStage
 from cerebro.engines.base_engine import (
     BaseEngine,
@@ -72,6 +77,11 @@ class TurboFileEngine(BaseEngine):
                 type="choice",
                 default="auto",
                 choices=["auto", "xxhash", "blake3", "sha256", "md5"],
+                tooltip=(
+                    "auto: benchmark xxhash / blake3 / sha256 on a sample and pick the fastest "
+                    "(full-file hashing; MD5 is not auto-selected). "
+                    "Default scan options use auto + full hash for best speed and byte-accurate duplicates."
+                ),
             ),
             EngineOption(
                 name="min_size_bytes",
@@ -130,7 +140,6 @@ class TurboFileEngine(BaseEngine):
         self._results: List[DuplicateGroup] = []
         self._progress: ScanProgress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
-        # Initially set (unblocked) — clear() to pause, set() to resume.
         self._pause_event = threading.Event()
         self._pause_event.set()
         self._callback: Optional[Callable[[ScanProgress], None]] = None
@@ -139,6 +148,9 @@ class TurboFileEngine(BaseEngine):
         self._files_processed: int = 0
         self._candidates_found: int = 0
         self._active_hash_algorithm: str = ""
+        # Set by _do_scan when resuming; shifts progress bar to start at X% instead of 0%.
+        self._ckpt_completed_offset: int = 0
+        self._ckpt_total: int = 0
 
     def configure(
         self,
@@ -162,6 +174,8 @@ class TurboFileEngine(BaseEngine):
         self._files_processed = 0
         self._candidates_found = 0
         self._active_hash_algorithm = ""
+        self._ckpt_completed_offset = 0
+        self._ckpt_total = 0
         # Run on the orchestrator scan thread (same as other engines). A nested
         # thread here used to return immediately so wait_for_completion() joined
         # before the turbo pipeline finished, leaving get_results() empty.
@@ -235,9 +249,66 @@ class TurboFileEngine(BaseEngine):
                 hash_algo = "sha256"
                 logger.info("blake3 not installed — using sha256 fallback")
 
+        # Parallelism: Settings → max_threads (0 = use scanner defaults).
+        max_threads_opt = int(opts.get("max_threads") or 0)
+        if max_threads_opt > 0:
+            hash_workers = max(1, min(max_threads_opt, DEFAULT_HASH_WORKERS))
+            dir_workers = max(1, min(max_threads_opt, DEFAULT_DIR_WORKERS))
+        else:
+            hash_workers = DEFAULT_HASH_WORKERS
+            dir_workers = DEFAULT_DIR_WORKERS
+
         # Build TurboScanConfig from UI options — accept both naming conventions.
         use_cache = bool(opts.get("incremental_scan", True))
+
+        # Checkpoint / resume wiring.
+        # Build a scope dict that uniquely identifies this scan's filter set so
+        # find_resumable_manifest can match it against a prior interrupted run.
+        _folder_strs = sorted(str(f) for f in self._folders)
+        _scope = {
+            "min_size": int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
+            "max_size": int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
+            "skip_hidden": not bool(opts.get("include_hidden", False)),
+            "recursive": bool(opts.get("include_subfolders", True)),
+            "exclude_paths": sorted(
+                str(p) for p in (opts.get("exclude_paths", []) or []) if str(p).strip()
+            ),
+            "scan_archives": bool(opts.get("scan_archives", False)),
+        }
+        _ckpt_db = None
+        _scan_id = None
+        _resume_from_ckpt = False
+        _ckpt_total = 0
+        _ckpt_completed_offset = 0
+        if use_cache:
+            try:
+                from cerebro.v2.core.checkpoint_db import get_checkpoint_db
+                _ckpt_db = get_checkpoint_db()
+                _ckpt_db.mark_stale_as_crashed()
+                existing = _ckpt_db.find_resumable_manifest(_folder_strs, _scope)
+                if existing and bool(opts.get("resume_interrupted_scan")):
+                    _scan_id = existing.scan_id
+                    _ckpt_total, _ckpt_pending = _ckpt_db.get_counts(_scan_id)
+                    _ckpt_completed_offset = _ckpt_total - _ckpt_pending
+                    _resume_from_ckpt = _ckpt_pending > 0
+                    logger.info(
+                        "Checkpoint resume: scan_id=%s total=%d pending=%d completed=%d",
+                        _scan_id, _ckpt_total, _ckpt_pending, _ckpt_completed_offset,
+                    )
+                else:
+                    _scan_id = _ckpt_db.create_manifest(_folder_strs, _scope)
+                    logger.info("Checkpoint new: scan_id=%s", _scan_id)
+            except Exception:
+                logger.debug("Checkpoint DB unavailable (non-fatal)", exc_info=True)
+                _ckpt_db = None
+                _scan_id = None
+
+        self._ckpt_completed_offset = _ckpt_completed_offset
+        self._ckpt_total = _ckpt_total
+
         cfg = TurboScanConfig(
+            dir_workers=dir_workers,
+            hash_workers=hash_workers,
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
             skip_hidden=not bool(opts.get("include_hidden", False)),
@@ -247,26 +318,32 @@ class TurboFileEngine(BaseEngine):
                 if str(p).strip()
             },
             recursive=bool(opts.get("include_subfolders", True)),
-            use_multiprocessing=False,  # safer on Windows; still threaded
+            use_multiprocessing=False,
             use_quick_hash=True,
             use_full_hash=True,
             hash_algorithm=hash_algo,
             progress_callback=self._on_turbo_progress,
             cache_dir=default_cerebro_cache_dir() if use_cache else None,
-            # Forward the pause event so hashing workers gate per-file. The
-            # outer scanner-loop wait() below catches phase-boundary pauses;
-            # this catches mid-phase pauses where a single hashing phase
-            # might otherwise run for minutes after pause() is called.
             pause_event=self._pause_event,
-            # Forward cancel so hash workers exit sub-second on cancel().
             cancel_event=self._cancel_event,
             scan_archives=bool(opts.get("scan_archives", False)),
+            checkpoint_db=_ckpt_db,
+            scan_id=_scan_id,
+            resume_from_checkpoint=_resume_from_ckpt,
         )
         if cfg.scan_archives:
             logger.warning(
                 "scan_archives=True: archives will be hashed as opaque blobs only "
                 "(internal extraction not yet implemented)."
             )
+        logger.info(
+            "Turbo workers: hash=%d dir=%d algorithm=%s cache=%s max_threads_setting=%s",
+            hash_workers,
+            dir_workers,
+            hash_algo,
+            use_cache,
+            max_threads_opt if max_threads_opt > 0 else "auto",
+        )
 
         # Filter protected folders out of roots
         roots = [
@@ -390,20 +467,22 @@ class TurboFileEngine(BaseEngine):
         was_hashing = prev_stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
         entering_hashing = is_hashing and not was_hashing
 
+        offset = self._ckpt_completed_offset  # files already done in prior session
+        total_scope = self._ckpt_total if self._ckpt_total > 0 else total
+
         if stage == ScanStage.DISCOVERING:
-            # Indeterminate total during discovery.
-            scanned = processed
-            ft = 0
-        elif entering_hashing:
-            # Phase handoff: reset counter to 0 so the bar starts from the
-            # beginning of the hashing batch, never flash 100%.
-            scanned = 0
+            # On resume the scanner emits completed_offset / total from checkpoint.
+            scanned = processed  # may be non-zero if resuming
             ft = total if total > 0 else 0
+        elif entering_hashing:
+            # Phase handoff: start from offset so bar doesn't reset to 0% on resume.
+            scanned = offset
+            ft = total_scope if total_scope > 0 else total
         elif is_hashing:
-            scanned = processed
-            ft = total if total > 0 else (prev.files_total or 0)
+            scanned = processed + offset
+            ft = total_scope if total_scope > 0 else (total if total > 0 else (prev.files_total or 0))
         else:
-            scanned = max(processed, prev.files_scanned)
+            scanned = max(processed + offset, prev.files_scanned)
             ft = total if total > 0 else (prev.files_total or 0)
             ft = max(ft, prev.files_total or 0)
 

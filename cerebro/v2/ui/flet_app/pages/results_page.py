@@ -373,7 +373,7 @@ class ResultsPage(ft.Stack):
                 ft.dropdown.Option(str(10 * 1024 * 1024), "10 MB+"),
             ],
         )
-        self._min_group_filter.on_change = self._on_min_group_filter_change
+        self._min_group_filter.on_select = self._on_min_group_filter_change
 
         # Type / grouping / reclaim filters (must live under _scroll_col or clicks do nothing useful).
         self._results_filters_bar = ft.Container(

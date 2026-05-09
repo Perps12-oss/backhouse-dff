@@ -48,11 +48,14 @@ class AppLayout(ft.Column):
         self._nav_routes = [r for r in ROUTES if r.key != "exclude"]
         self._brand_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16)
         self._brand_text = ft.Text("CEREBRO", size=11, weight=ft.FontWeight.W_700)
-        self._version_badge = ft.Container(
-            content=ft.Text("v2.0", size=9),
-            padding=ft.padding.symmetric(horizontal=8, vertical=2),
-            border_radius=999,
-            border=ft.border.all(1, ft.Colors.TRANSPARENT),
+        self._brand_block = ft.Container(
+            content=ft.Row(
+                [self._brand_icon, self._brand_text],
+                spacing=8,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            tooltip="Cerebro v2.0",
         )
         self._nav_pills: dict[str, ft.Container] = {}
         self._nav_labels: dict[str, ft.Text] = {}
@@ -86,11 +89,10 @@ class AppLayout(ft.Column):
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
             content=ft.Row(
                 [
-                    ft.Row([self._brand_icon, self._brand_text], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    self._brand_block,
                     ft.Container(width=12),
                     nav_button_row,
                     ft.Container(expand=True),
-                    self._version_badge,
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
@@ -126,11 +128,6 @@ class AppLayout(ft.Column):
         self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
         self._brand_icon.color = c.accent
         self._brand_text.color = c.fg
-        badge_text = self._version_badge.content
-        if isinstance(badge_text, ft.Text):
-            badge_text.color = c.fg_muted
-        self._version_badge.bgcolor = ft.Colors.with_opacity(0.08, c.accent)
-        self._version_badge.border = ft.border.all(1, ft.Colors.with_opacity(0.20, c.accent))
         self._sync_nav_selection()
 
     def _sync_nav_selection(self) -> None:

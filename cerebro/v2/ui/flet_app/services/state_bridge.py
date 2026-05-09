@@ -115,6 +115,14 @@ class StateBridge:
         """Register a callback fired when the user switches light/dark mode."""
         self._on_theme_change = cb
 
+    def refresh_app_typography(self) -> None:
+        """Re-run the theme callback so pages pick up ``theme.set_ui_font_size_px``."""
+        if self._on_theme_change:
+            try:
+                self._on_theme_change(self._visual_theme)
+            except Exception:
+                _log.exception("refresh_app_typography failed")
+
     def register_progress_control(self, ctrl: ft.Control) -> None:
         """Register a control to update on scan-progress actions."""
         if ctrl not in self._progress_controls:
