@@ -64,6 +64,7 @@ except ImportError:  # pragma: no cover - optional dependency
 HASH_CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks for better I/O
 MMAP_THRESHOLD = 50 * 1024 * 1024  # Use mmap for files > 50MB
 QUICK_HASH_SIZE = 64 * 1024  # 64KB for quick hash (first + last 32KB)
+TIER_A_SIZE = 4 * 1024       # 4 KiB prefix read — cheap pre-filter before quick-hash
 
 # Parallelism settings
 DEFAULT_DIR_WORKERS = min(32, (os.cpu_count() or 4) * 4)  # Aggressive parallelism
@@ -423,6 +424,25 @@ def compute_quick_hash_fast(path: Path, algorithm: str = "md5") -> Optional[str]
         return None
 
 
+def compute_tier_a_hash(path: Path, algorithm: str = "xxhash") -> Optional[str]:
+    """Hash the first 4 KiB of a file (tier-A pre-filter).
+
+    Used to reject non-duplicate candidates cheaply before the more expensive
+    quick-hash (64 KiB) phase.  Can only reject — never used to confirm duplicates.
+    Files smaller than TIER_A_SIZE read the whole file (correct behaviour).
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read(TIER_A_SIZE)
+        if not data:
+            return None
+        h = _new_hasher(algorithm)
+        h.update(data)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
 def compute_full_hash_mmap(path: Path, algorithm: str = "md5") -> Optional[str]:
     """
     Compute full hash using memory-mapped I/O for better performance.
@@ -706,6 +726,73 @@ class TurboScanner:
             "recursive": bool(self.config.recursive),
         }
 
+    def _apply_tier_a_filter(
+        self,
+        size_groups: Dict[Any, List[Tuple[Path, float]]],
+        algorithm: str,
+        cancel_event: Optional[threading.Event],
+    ) -> tuple[Dict[Any, List[Tuple[Path, float]]], int, int]:
+        """Apply 4 KiB prefix hash as a cheap pre-filter before the quick-hash phase.
+
+        Returns (filtered_size_groups, candidates_in, candidates_out).
+        Correctness guarantee: tier-A can only *reject* non-matches — files that
+        share a 4 KiB prefix still go through quick-hash + full-hash before being
+        confirmed as duplicates.
+
+        Files ≤ TIER_A_SIZE bytes are hashed in their entirety by tier-A; any
+        survivors still go through the full-hash phase (no shortcutting).
+
+        The filter is skipped (returns size_groups unchanged) when:
+        • there are no candidates, or
+        • hash_workers < 2 (not worth the overhead).
+        """
+        candidates_in = sum(len(v) for v in size_groups.values())
+        if not size_groups or candidates_in < 2:
+            return size_groups, candidates_in, candidates_in
+
+        # Use the configured hash algorithm for tier-A so the hasher is already warm.
+        tier_algo = algorithm if algorithm not in ("auto", "") else "sha256"
+        if xxhash is not None:
+            tier_algo = "xxhash"
+
+        hash_workers = self.config.hash_workers
+        futures_map: Dict = {}
+
+        with ThreadPoolExecutor(max_workers=max(2, min(hash_workers, 16))) as pool:
+            for size_key, paths in size_groups.items():
+                for path, mtime in paths:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return size_groups, candidates_in, candidates_in
+                    fut = pool.submit(compute_tier_a_hash, path, tier_algo)
+                    futures_map[fut] = (size_key, path, mtime)
+
+        # Re-group by (size_key, tier_a_hash): only groups with ≥ 2 matching files survive.
+        from collections import defaultdict as _dd
+        keyed: Dict[tuple, list] = _dd(list)
+        for fut, (size_key, path, mtime) in futures_map.items():
+            if cancel_event is not None and cancel_event.is_set():
+                return size_groups, candidates_in, candidates_in
+            try:
+                ta_hash = fut.result()
+            except Exception:
+                ta_hash = None
+            if ta_hash is None:
+                # I/O error: keep the file in the pipeline to avoid false negatives.
+                keyed[(size_key, "__error__")].append((path, mtime))
+            else:
+                keyed[(size_key, ta_hash)].append((path, mtime))
+
+        # Rebuild size_groups: merge sub-groups that share same size_key and ≥ 2 files.
+        survivors: Dict[Any, List[Tuple[Path, float]]] = {}
+        for (size_key, _), paths in keyed.items():
+            if len(paths) < 2:
+                continue
+            existing = survivors.setdefault(size_key, [])
+            existing.extend(paths)
+
+        candidates_out = sum(len(v) for v in survivors.values())
+        return survivors, candidates_in, candidates_out
+
     def _invalidate_caches_if_scope_changed(self) -> None:
         if not self.config.use_cache:
             return
@@ -739,6 +826,13 @@ class TurboScanner:
         Uses aggressive parallelization and caching for maximum speed.
         """
         start_time = time.time()
+        _t_scan_start = time.perf_counter()
+        _t_discovery_end = _t_scan_start
+        _t_grouping_end = _t_scan_start
+        _t_tier_a_end = _t_scan_start
+        _t_quick_hash_end = _t_scan_start
+        _t_full_hash_end = _t_scan_start
+        _t_yield_end = _t_scan_start
         self.stats.update(
             {
                 "files_scanned": 0,
@@ -900,11 +994,14 @@ class TurboScanner:
                         scan_id,
                         [(str(p), sz, mt) for p, sz, mt in discovered_files],
                     )
+                    if hasattr(ckpt, "verify_consistency"):
+                        ckpt.verify_consistency(scan_id)
                 except Exception:
                     logger.debug("[Turbo] checkpoint insert_pending_files failed (non-fatal)", exc_info=True)
             _ckpt_total = len(discovered_files)
         # True scope for UI metrics: full checkpoint total on resume, discovered count on new scan.
         _scope_total = _ckpt_total if (_ckpt_total > 0) else len(discovered_files)
+        _t_discovery_end = time.perf_counter()
         # Phase 2: Group by size (instant duplicate detection)
         _pause_gate()
         _emit(
@@ -928,6 +1025,32 @@ class TurboScanner:
         size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
         logger.info("[Turbo] Found %d size groups with potential duplicates", len(size_groups))
         _diag_size_candidates = sum(len(v) for v in size_groups.values())
+        _t_grouping_end = time.perf_counter()
+
+        # Tier-A pre-filter (4 KiB prefix hash) — cheaply rejects non-matches before
+        # the more expensive 64 KiB quick-hash phase.  Runs only when quick-hash is
+        # enabled (the tier-A read is a strict prefix of what quick-hash reads anyway).
+        _t_tier_a_start = time.perf_counter()
+        _tier_a_rejected = 0
+        _tier_a_in = 0
+        if self.config.use_quick_hash and size_groups:
+            _pause_gate()
+            _effective_algo_for_tier_a = str(self.config.hash_algorithm or "auto").lower()
+            if _effective_algo_for_tier_a == "auto":
+                _effective_algo_for_tier_a = "xxhash" if xxhash is not None else "sha256"
+            size_groups, _tier_a_in, _tier_a_out = self._apply_tier_a_filter(
+                size_groups, _effective_algo_for_tier_a, self.config.cancel_event
+            )
+            _tier_a_rejected = max(0, _tier_a_in - _tier_a_out)
+            logger.info(
+                "[Turbo] Tier-A filter: candidates_in=%d survivors=%d rejected=%d (%.1f%%) in %.2fs",
+                _tier_a_in,
+                _tier_a_out,
+                _tier_a_rejected,
+                100.0 * _tier_a_rejected / max(1, _tier_a_in),
+                time.perf_counter() - _t_tier_a_start,
+            )
+        _t_tier_a_end = time.perf_counter()
 
         # Phase 3: Quick hash for size groups (parallel with caching)
         _pause_gate()
@@ -953,7 +1076,8 @@ class TurboScanner:
             logger.info("[Turbo] Found %d quick-hash groups", len(quick_hash_groups))
         else:
             quick_hash_groups = size_groups
-        
+        _t_quick_hash_end = time.perf_counter()
+
         # Phase 4: Full hash if needed (parallel with caching)
         _pause_gate()
         if self.config.use_full_hash and quick_hash_groups:
@@ -967,7 +1091,8 @@ class TurboScanner:
             logger.info("[Turbo] Found %d duplicate groups", len(final_groups))
         else:
             final_groups = quick_hash_groups
-        
+        _t_full_hash_end = time.perf_counter()
+
         # Expose groups for Review page (worker reads scanner.last_groups)
         def _group_recoverable(paths_list):
             total = 0
@@ -1054,9 +1179,21 @@ class TurboScanner:
         if self.stats['hash_cache_hits'] + self.stats['hash_cache_misses'] > 0:
             hit_rate = self.stats['hash_cache_hits'] / (self.stats['hash_cache_hits'] + self.stats['hash_cache_misses']) * 100
             logger.info("Hit rate: %.1f%%", hit_rate)
+        _t_yield_end = time.perf_counter()
         _total_cache = self.stats["hash_cache_hits"] + self.stats["hash_cache_misses"]
         _hit_pct = (self.stats["hash_cache_hits"] / _total_cache * 100) if _total_cache else 0.0
         _final_ngroups = len(final_groups) if final_groups else 0
+        logger.info(
+            "[Turbo] Phase timings: discovery=%.2fs grouping=%.2fs tier_a=%.2fs "
+            "quick_hash=%.2fs full_hash=%.2fs yield=%.2fs total=%.2fs",
+            _t_discovery_end - _t_scan_start,
+            _t_grouping_end - _t_discovery_end,
+            _t_tier_a_end - _t_grouping_end,
+            _t_quick_hash_end - _t_tier_a_end,
+            _t_full_hash_end - _t_quick_hash_end,
+            _t_yield_end - _t_full_hash_end,
+            _t_yield_end - _t_scan_start,
+        )
         logger.info(
             "[Turbo] summary: discovered=%d files_in_size_candidate_groups=%d "
             "final_duplicate_groups=%d file_rows_emitted=%d elapsed=%.2fs "
@@ -1097,6 +1234,8 @@ class TurboScanner:
                 ckpt.flush_sync()
                 new_status = "active" if _was_cancelled else "completed"
                 ckpt.update_manifest_status(scan_id, new_status)
+                if hasattr(ckpt, "verify_consistency"):
+                    ckpt.verify_consistency(scan_id)
                 _final_total, _final_pending = ckpt.get_counts(scan_id)
                 logger.info(
                     "[Turbo] checkpoint terminal: scan_id=%s status=%s total=%d pending=%d completed=%d",

@@ -48,6 +48,110 @@ from cerebro.engines.base_engine import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Monotonic terminal-state guard
+# ---------------------------------------------------------------------------
+
+# Once a scan enters a terminal state it must not regress to SCANNING/COMPLETED.
+_TERMINAL_STATES = frozenset({ScanState.CANCELLED, ScanState.ERROR})
+
+# ---------------------------------------------------------------------------
+# I/O-aware hash worker cap
+# ---------------------------------------------------------------------------
+
+# Per-drive cache so we only probe once per session: drive_letter → (cap, label)
+_storage_cap_cache: dict[str, tuple[int, str]] = {}
+
+
+def _detect_io_worker_cap(folders: List[Path]) -> tuple[int, str]:
+    """Return (max_hash_workers, storage_label) based on detected storage type.
+
+    Conservative caps prevent disk thrash on single-spindle HDDs and avoid
+    saturating network mounts.  Users can override via the max_threads option.
+
+    Caps:
+      network  → 4   (SMB/NFS latency masks any benefit from extra threads)
+      hdd      → 4   (rotational: sequential I/O wins; threads just thrash)
+      sata_ssd → 16  (SATA SSD saturates around 16 concurrent readers)
+      nvme     → 32  (NVMe can sustain 32+ parallel reads)
+      unknown  → 16  (safe middle ground)
+    """
+    import sys
+
+    # Network paths (UNC \\server\share or forward-slash //host/share)
+    for f in folders:
+        s = str(f)
+        if s.startswith("\\\\") or s.startswith("//"):
+            return 4, "network"
+
+    if sys.platform == "win32":
+        # Identify the drive letter for the first folder.
+        drive = None
+        for f in folders:
+            try:
+                p = Path(f).resolve()
+                s = str(p)
+                if len(s) >= 2 and s[1] == ":":
+                    drive = s[0].upper()
+                    break
+            except Exception:
+                pass
+
+        if drive and drive in _storage_cap_cache:
+            return _storage_cap_cache[drive]
+
+        cap, label = _probe_windows_storage(drive)
+        if drive:
+            _storage_cap_cache[drive] = (cap, label)
+        return cap, label
+
+    # Non-Windows: assume SATA SSD
+    return 16, "sata_ssd_assumed"
+
+
+def _probe_windows_storage(drive: Optional[str]) -> tuple[int, str]:
+    """Query Windows for disk MediaType via PowerShell (best-effort, ≤3 s)."""
+    import subprocess
+
+    if drive is None:
+        return 16, "unknown"
+
+    try:
+        # Get-PhysicalDisk returns MediaType: 3=HDD, 4=SSD, 5=SCM, 0=Unspecified.
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "Get-PhysicalDisk | Select-Object MediaType, FriendlyName | ConvertTo-Json",
+            ],
+            capture_output=True, text=True, timeout=3,
+        )
+        out = result.stdout.strip()
+        if not out:
+            return 16, "unknown"
+
+        import json as _json
+        data = _json.loads(out)
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return 16, "unknown"
+
+        # Pick the first disk entry (good enough for single-disk machines).
+        for entry in data:
+            media = entry.get("MediaType", 0)
+            name = str(entry.get("FriendlyName", "")).lower()
+            if media == 3 or "hdd" in name or "rotational" in name:
+                return 4, "hdd"
+            if media == 4 or "ssd" in name:
+                if "nvme" in name or "nvm" in name:
+                    return 32, "nvme"
+                return 16, "sata_ssd"
+    except Exception:
+        pass
+
+    return 16, "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Stage -> ScanState mapping
 # ---------------------------------------------------------------------------
 _STAGE_MAP: Dict[str, ScanState] = {
@@ -255,8 +359,15 @@ class TurboFileEngine(BaseEngine):
             hash_workers = max(1, min(max_threads_opt, DEFAULT_HASH_WORKERS))
             dir_workers = max(1, min(max_threads_opt, DEFAULT_DIR_WORKERS))
         else:
-            hash_workers = DEFAULT_HASH_WORKERS
+            # I/O-aware cap: avoid disk thrash on HDD/network mounts.
+            io_cap, storage_label = _detect_io_worker_cap(self._folders)
+            hash_workers = min(DEFAULT_HASH_WORKERS, io_cap)
             dir_workers = DEFAULT_DIR_WORKERS
+            logger.info(
+                "Turbo storage detection: type=%s → hash_workers capped at %d",
+                storage_label,
+                hash_workers,
+            )
 
         # Build TurboScanConfig from UI options — accept both naming conventions.
         use_cache = bool(opts.get("incremental_scan", True))
@@ -421,7 +532,12 @@ class TurboFileEngine(BaseEngine):
             if len(safe_paths) >= 2:
                 filtered_groups.append({**g, "paths": safe_paths})
         self._results = self._convert_groups(filtered_groups, self._cancel_event)
+        # Monotonic: treat cancel_event set at any point as CANCELLED (race-safe).
+        _cancelled = _cancelled or self._cancel_event.is_set()
         terminal_state = ScanState.CANCELLED if _cancelled else ScanState.COMPLETED
+        # Never downgrade from CANCELLED to COMPLETED (another thread may have called cancel()).
+        if self._state in _TERMINAL_STATES:
+            terminal_state = self._state
         self._state = terminal_state
         stats_scanned = int(scanner.stats.get("files_scanned", 0) or 0)
         files_done = max(stats_scanned, self._progress.files_scanned)
@@ -451,6 +567,12 @@ class TurboFileEngine(BaseEngine):
         current_file: str = "",
         metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
+        # Monotonic terminal-state guard: once CANCELLED or ERROR, never go back.
+        if self._state in _TERMINAL_STATES:
+            logger.debug(
+                "Suppressed %s progress in terminal state %s", stage, self._state
+            )
+            return
         if self._cancel_event.is_set() and stage not in (
             ScanStage.COMPLETE,
             ScanStage.CANCELLED,

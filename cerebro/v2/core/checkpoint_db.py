@@ -463,6 +463,42 @@ class CheckpointDB:
     # Integrity check before re-hashing                                    #
     # ------------------------------------------------------------------ #
 
+    def verify_consistency(self, scan_id: str) -> bool:
+        """Assert that pending + completed + errored == total file_checkpoints rows.
+
+        Returns True if consistent, False if a discrepancy is found (non-fatal —
+        scanning continues).  Called after bulk-insert (Phase 1) and at scan
+        completion so any checkpoint corruption is visible in logs immediately.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT
+                     COUNT(*) AS total,
+                     SUM(CASE WHEN hash_status='pending'  THEN 1 ELSE 0 END) AS pending,
+                     SUM(CASE WHEN hash_status='complete' THEN 1 ELSE 0 END) AS completed,
+                     SUM(CASE WHEN hash_status='error'    THEN 1 ELSE 0 END) AS errored
+                   FROM file_checkpoints WHERE scan_id=?""",
+                (scan_id,),
+            ).fetchone()
+        if not row:
+            return True
+        total, pending, completed, errored = (
+            int(row[0] or 0), int(row[1] or 0), int(row[2] or 0), int(row[3] or 0)
+        )
+        parts_sum = pending + completed + errored
+        ok = (total == parts_sum)
+        if ok:
+            _log.debug(
+                "[Checkpoint] consistency OK: scan_id=%s total=%d pending=%d completed=%d errored=%d",
+                scan_id, total, pending, completed, errored,
+            )
+        else:
+            _log.warning(
+                "[Checkpoint] INCONSISTENCY: scan_id=%s total=%d != pending(%d)+completed(%d)+errored(%d)=%d (gap=%d)",
+                scan_id, total, pending, completed, errored, parts_sum, total - parts_sum,
+            )
+        return ok
+
     def validate_pending_file(
         self, file_path: str, stored_size: int, stored_mtime: float
     ) -> bool:
