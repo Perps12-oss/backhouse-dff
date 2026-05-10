@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -14,7 +15,19 @@ import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.state.actions import FileSelectionChanged
+from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
+from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review.deletion_dialog import build_confirm_dialog
+from cerebro.v2.ui.flet_app.pages.review.filter_bar import FilterBar, _FILTER_TABS
+from cerebro.v2.ui.flet_app.pages.review.group_card import (
+    build_group_card,
+    group_duplicate_summary,
+    group_path_hint,
+)
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
+from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
 from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_filled_accent,
     pill_filled_danger,
@@ -31,40 +44,10 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_FILTER_TABS = [
-    ("all", "All"),
-    ("pictures", "Images"),
-    ("music", "Music"),
-    ("videos", "Videos"),
-    ("documents", "Docs"),
-    ("archives", "Archives"),
-    ("other", "Other"),
-]
-
-_FILTER_ACCENT = {
-    "all": "#C7D2FE",
-    "pictures": "#C084FC",
-    "music": "#34D399",
-    "videos": "#F472B6",
-    "documents": "#FB923C",
-    "archives": "#FBBF24",
-    "other": "#93C5FD",
-}
-
-_SMART_RULES = [
-    ("keep_largest", "Keep Largest"),
-    ("keep_smallest", "Keep Smallest"),
-    ("keep_newest", "Keep Newest"),
-    ("keep_oldest", "Keep Oldest"),
-]
-
 _GRID_BUILD_ASYNC_THRESHOLD = 220
 _GRID_FIRST_SYNC_FILES = 20   # F5: 20 tiles sync, rest async
 _GRID_ASYNC_BATCH = 30
 _UI_SLOW_MS = 80.0
-
-_GROUP_STRIPE = ("#22D3EE", "#A78BFA", "#F472B6", "#34D399", "#FBBF24")
-
 
 def _file_mtime_ts(f: DuplicateFile) -> float:
     for attr in ("mtime", "modified"):
@@ -78,53 +61,6 @@ def _file_mtime_ts(f: DuplicateFile) -> float:
     return 0.0
 
 
-def _group_duplicate_summary(g: DuplicateGroup) -> str:
-    n = len(g.files)
-    sim = (getattr(g, "similarity_type", None) or "exact").lower()
-    names = list(dict.fromkeys(Path(str(f.path)).name for f in g.files))
-    if n < 2:
-        return f"{n} file in this group"
-    if sim == "exact":
-        if len(names) == 1:
-            return f'{n} byte-identical copies of "{names[0]}"'
-        head = ", ".join(names[:3])
-        tail = ", ..." if len(names) > 3 else ""
-        return f"{n} byte-identical files · {head}{tail}"
-    if len(names) == 1:
-        return f'{n} similar matches for "{names[0]}"'
-    head = ", ".join(names[:3])
-    tail = ", ..." if len(names) > 3 else ""
-    return f"{n} similar matches · {head}{tail}"
-
-
-def _group_path_hint(files: List[DuplicateFile]) -> str:
-    if not files:
-        return ""
-    paths = [Path(str(f.path)) for f in files]
-    if len(paths) == 1:
-        return str(paths[0].parent)
-    parents = [p.parent for p in paths]
-    uniq_parents = {str(p) for p in parents}
-    names = list(dict.fromkeys(p.name for p in paths))
-    if len(uniq_parents) == 1:
-        if len(names) <= 3:
-            return f"Same folder · {', '.join(names)}"
-        return f"Same folder · {', '.join(names[:3])}... (+{len(names) - 3} names)"
-    try:
-        common = os.path.commonpath([str(p) for p in paths])
-    except ValueError:
-        bits = [f"{p.parent.name}/{p.name}" for p in paths[:3]]
-        return " · ".join(dict.fromkeys(bits))
-    rel_bits: list[str] = []
-    for p in paths:
-        try:
-            rel_bits.append(os.path.relpath(str(p), common))
-        except ValueError:
-            rel_bits.append(str(p))
-    ordered = list(dict.fromkeys(rel_bits))
-    return " · ".join(ordered[:3]) + (" ..." if len(ordered) > 3 else "")
-
-
 class ReviewPage(ft.Column):
     """Grid and compare view for visual triage of duplicate groups."""
 
@@ -133,6 +69,7 @@ class ReviewPage(ft.Column):
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._groups: List[DuplicateGroup] = []
+        self._group_index: Dict[int, int] = {}
         self._group_files: Dict[int, List[DuplicateFile]] = {}
         self._filter_key = "all"
         self._mode = "empty"  # "empty" | "loading" | "groups" | "grid" | "compare"
@@ -140,6 +77,9 @@ class ReviewPage(ft.Column):
         self._compare_a: Optional[DuplicateFile] = None
         self._compare_b: Optional[DuplicateFile] = None
         self._marked_paths: set[str] = set()
+        self._marked_bytes: int = 0
+        self._reduce_motion: bool = self._bridge.is_reduce_motion_enabled()
+        self._delete_service = DeleteService()
         self._reviewed_group_ids: set[int] = set()
         self._smart_rule = "keep_largest"
         self._grid_extent = 160  # tile max_extent: S=120 M=160 L=210
@@ -152,10 +92,8 @@ class ReviewPage(ft.Column):
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._grid_build_generation = 0
-        self._rendering_generation = 0
         self._pending_deferred_render: bool = False
         self._cmp_smart_rule: str = "keep_largest"
-        self._filter_seg_lines: Dict[str, tuple[ft.Text, ft.Text, ft.Text]] = {}
         self._compare_render_generation = 0
         self._compare_thumb_slots: Dict[str, ft.Container] = {}
         self._compare_dims_labels: Dict[str, ft.Text] = {}
@@ -166,13 +104,8 @@ class ReviewPage(ft.Column):
         self._thumb_load_generation = 0
 
         # UI References
-        self._title_lbl: ft.Text
-        self._summary_lbl: ft.Text
-        self._workflow_lbl: ft.Text
-        self._stats_row: ft.Row
-        self._stats_row_wrap: ft.Row
+        self._stats_header: StatsHeader
         self._smart_apply_all_btn: ft.FilledButton
-        self._top_bar: ft.Container
         self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
         self._zoom_row: ft.Row
@@ -181,7 +114,7 @@ class ReviewPage(ft.Column):
         self._delete_btn: ft.ElevatedButton
         self._keep_btn: ft.OutlinedButton
         self._cmp_bar: ft.Container
-        self._filter_seg: ft.SegmentedButton
+        self._filter_bar: FilterBar
         self._content: ft.Column
         self._empty_state: ft.Container
         self._loading_state: ft.Container
@@ -359,45 +292,8 @@ class ReviewPage(ft.Column):
             style=pill_text_button_style(t, variant="primary"),
             tooltip="Group list when reviewing groups; returns here from Compare or Grid.",
         )
-        # Top bar
-        self._title_lbl = ft.Text("Review Workspace", size=t.typography.size_lg, weight=ft.FontWeight.BOLD, color=t.colors.fg)
-        self._summary_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
-        self._workflow_lbl = ft.Text(
-            "",
-            size=t.typography.size_sm,
-            color=t.colors.fg_muted,
-            italic=True,
-            text_align=ft.TextAlign.CENTER,
-        )
-        self._stats_row = ft.Row(
-            spacing=t.spacing.xs,
-            tight=True,
-            scroll=ft.ScrollMode.AUTO,
-            alignment=ft.MainAxisAlignment.CENTER,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-        self._stats_row_wrap = ReviewPage._hwrap_strip(self._stats_row)
-        self._top_bar = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            self._btn_back,
-                            self._title_lbl,
-                            self._summary_lbl,
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        wrap=True,
-                    ),
-                    self._stats_row_wrap,
-                    self._workflow_lbl,
-                ],
-                spacing=t.spacing.xs,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            padding=t.spacing.lg,
-            **self._get_glass_style(0.04),
-        )
+        # Stats header
+        self._stats_header = StatsHeader(self._bridge, t, back_btn=self._btn_back)
 
         # Smart select for grid mode
         self._smart_seg = ft.SegmentedButton(
@@ -406,7 +302,7 @@ class ReviewPage(ft.Column):
             on_change=self._on_smart_seg_change,
             segments=[
                 ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
-                for val, label in _SMART_RULES
+                for val, label in RULE_LABELS
             ],
         )
         self._zoom_row = self._build_zoom_row()
@@ -437,7 +333,7 @@ class ReviewPage(ft.Column):
             on_change=self._on_cmp_smart_seg_change,
             segments=[
                 ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
-                for val, label in _SMART_RULES
+                for val, label in RULE_LABELS
             ],
         )
         self._delete_btn = ft.OutlinedButton(
@@ -512,31 +408,7 @@ class ReviewPage(ft.Column):
             **self._get_glass_style(0.04),
         )
 
-        # Filter bar (keep Text refs so counts survive SegmentedButton internal updates)
-        filter_segments: list[ft.Segment] = []
-        self._filter_seg_lines.clear()
-        for key, label in _FILTER_TABS:
-            t0 = ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#DDE8FF")
-            t1 = ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE"))
-            t2 = ft.Text("0 B", size=10, color="#9FB0D0")
-            self._filter_seg_lines[key] = (t0, t1, t2)
-            filter_segments.append(
-                ft.Segment(
-                    value=key,
-                    label=ft.Column(
-                        [t0, t1, t2],
-                        spacing=1,
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        tight=True,
-                    ),
-                )
-            )
-        self._filter_seg = ft.SegmentedButton(
-            selected=["all"],
-            allow_multiple_selection=False,
-            on_change=self._on_filter_seg_change,
-            segments=filter_segments,
-        )
+        self._filter_bar = FilterBar(t, on_change=self._on_filter_changed)
 
         # Content area
         self._content = ft.Column(expand=True)
@@ -552,8 +424,8 @@ class ReviewPage(ft.Column):
             content=ft.Column(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.GRID_VIEW, size=44, color="#22D3EE"),
-                        bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                        content=ft.Icon(ft.icons.Icons.GRID_VIEW, size=44, color=RC.side_a),
+                        bgcolor=ft.Colors.with_opacity(0.08, RC.side_a),
                         border_radius=16,
                         padding=20,
                     ),
@@ -576,7 +448,7 @@ class ReviewPage(ft.Column):
         self._loading_state = ft.Container(
             content=ft.Column(
                 [
-                    ft.ProgressRing(width=28, height=28, stroke_width=3, color="#22D3EE"),
+                    ft.ProgressRing(width=28, height=28, stroke_width=3, color=RC.side_a),
                     ft.Text("Loading review content...", color=t.colors.fg_muted, size=t.typography.size_sm),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -604,14 +476,14 @@ class ReviewPage(ft.Column):
             content=ft.Container(
                 content=ft.Row(
                     [
-                        ft.ProgressRing(width=14, height=14, stroke_width=2, color="#22D3EE"),
+                        ft.ProgressRing(width=14, height=14, stroke_width=2, color=RC.side_a),
                         ft.Text("View ready - filling items...", size=t.typography.size_xs, color="#9FDDF7"),
                     ],
                     spacing=6,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 bgcolor=ft.Colors.with_opacity(0.82, "#09111D"),
-                border=ft.border.all(1, ft.Colors.with_opacity(0.25, "#22D3EE")),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.25, RC.side_a)),
                 border_radius=999,
                 padding=ft.padding.symmetric(horizontal=10, vertical=6),
             ),
@@ -689,7 +561,7 @@ class ReviewPage(ft.Column):
             visible=False,
             padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
             bgcolor=ft.Colors.with_opacity(0.95, "#1A0C0C"),
-            border=ft.border.only(top=ft.BorderSide(1, "#EF4444")),
+            border=ft.border.only(top=ft.BorderSide(1, RC.danger)),
             content=ft.Column(
                 [
                     ft.Row(
@@ -772,7 +644,7 @@ class ReviewPage(ft.Column):
 
         _strip_pad = ft.padding.symmetric(horizontal=t.spacing.lg)
         self.controls = [
-            self._top_bar,
+            self._stats_header,
             ft.Container(
                 content=ReviewPage._hwrap_strip(self._view_toggle_row),
                 padding=_strip_pad,
@@ -789,10 +661,7 @@ class ReviewPage(ft.Column):
                 content=ReviewPage._hwrap_strip(self._cmp_bar),
                 padding=ft.padding.symmetric(horizontal=t.spacing.lg),
             ),
-            ft.Container(
-                content=ReviewPage._hwrap_strip(self._filter_seg),
-                padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.sm),
-            ),
+            self._filter_bar,
             self._content,
             self._rendering_badge,
         ]
@@ -807,6 +676,7 @@ class ReviewPage(ft.Column):
         self._group_list_items.clear()
         self._group_list_order = []
         self._active_group_row_id = None
+        self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
@@ -820,6 +690,16 @@ class ReviewPage(ft.Column):
             self._loading = False
             self._enter_compare(group_id)
 
+    def _schedule_load_to_groups(self) -> None:
+        self._loading = True
+        self._enter_mode("loading")
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._finish_load_to_groups_async)
+        else:
+            self._loading = False
+            self._enter_mode("groups")
+
     def load_results(
         self,
         groups: List[DuplicateGroup],
@@ -831,6 +711,7 @@ class ReviewPage(ft.Column):
         self._group_list_items.clear()
         self._group_list_order = []
         self._active_group_row_id = None
+        self._rebuild_group_index()
         self._rebuild_filter_index()
         if defer_render:
             # Keep data fresh, but do not build the heavy grid until this page is shown.
@@ -842,21 +723,20 @@ class ReviewPage(ft.Column):
         if not self._groups:
             self._enter_mode("empty")
             return
-        self._loading = True
-        self._enter_mode("loading")
-        page = self._bridge.flet_page
-        if hasattr(page, "run_task"):
-            page.run_task(self._finish_load_to_groups_async)
-        else:
-            self._loading = False
-            self._enter_mode("groups")
+        self._schedule_load_to_groups()
 
     def apply_pruned_groups(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
+        old_ids = {g.group_id for g in self._groups}
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._group_list_items.clear()
-        self._group_list_order = []
-        self._active_group_row_id = None
+        new_ids = {g.group_id for g in self._groups}
+        if old_ids != new_ids:
+            self._group_list_items.clear()
+            self._group_list_order = []
+            self._active_group_row_id = None
+        else:
+            self._group_list_order = []
+        self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
             self._enter_mode("empty")
@@ -873,55 +753,37 @@ class ReviewPage(ft.Column):
             self._compare_b = files[1] if len(files) > 1 else None
             self._update_compare_panels()
             self._update_compare_chrome()
+            self._refresh_group_list_panel()
         elif self._mode == "groups":
             self._refresh_groups_overview()
             self._safe_update(self._content)
         elif self._mode == "grid":
             self._refresh_grid()
         else:
-            # If the page was showing empty/loading while groups arrived,
-            # transition into the actual workspace instead of staying stale.
-            self._loading = True
-            self._enter_mode("loading")
-            page = self._bridge.flet_page
-            if hasattr(page, "run_task"):
-                page.run_task(self._finish_load_to_groups_async)
-            else:
-                self._loading = False
-                self._enter_mode("groups")
+            self._schedule_load_to_groups()
 
     def on_show(self) -> None:
+        self._reduce_motion = self._bridge.is_reduce_motion_enabled()
+        self._marked_paths = set(self._bridge.state.selected_files)
+        self._recompute_marked_bytes()
         if self._pending_deferred_render:
             self._pending_deferred_render = False
             if self._groups:
-                self._loading = True
-                self._enter_mode("loading")
-                page = self._bridge.flet_page
-                if hasattr(page, "run_task"):
-                    page.run_task(self._finish_load_to_groups_async)
-                else:
-                    self._loading = False
-                    self._enter_mode("groups")
-                return
+                self._schedule_load_to_groups()
+            self._refresh_stats_header()
+            return
         if not self._groups:
             self._enter_mode("empty")
             return
-        # If groups were synced while Review was hidden (defer_render=True),
-        # ensure we materialize the groups overview when the page becomes visible.
         if self._mode in ("empty", "loading"):
-            self._loading = True
-            self._enter_mode("loading")
-            page = self._bridge.flet_page
-            if hasattr(page, "run_task"):
-                page.run_task(self._finish_load_to_groups_async)
-            else:
-                self._loading = False
-                self._enter_mode("groups")
+            self._schedule_load_to_groups()
+            self._refresh_stats_header()
             return
         # If already in a rendered mode, refresh counts/chrome.
         if self._mode == "grid":
             self._refresh_grid()
             self._safe_update(self._content)
+        self._refresh_stats_header()
 
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._groups)
@@ -931,6 +793,10 @@ class ReviewPage(ft.Column):
             return self.page is not None
         except RuntimeError:
             return False
+
+    def _push_marked_paths_to_store(self) -> None:
+        """Sync ``AppState.selected_files`` to the current mark set (paths still marked for deletion)."""
+        self._bridge.store.dispatch(FileSelectionChanged(file_ids=tuple(self._marked_paths)))
 
     @staticmethod
     def _safe_update(ctrl: ft.Control | None) -> None:
@@ -947,11 +813,11 @@ class ReviewPage(ft.Column):
     def _log_if_slow(label: str, started_at: float) -> None:
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         if elapsed_ms > _UI_SLOW_MS:
-            _log.warning("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
+            _log.debug("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
 
     def _set_rendering(self, value: bool) -> None:
-        self._rendering_generation += 1
-        gen = self._rendering_generation
+        self._grid_build_generation += 1
+        gen = self._grid_build_generation
         self._rendering_badge.visible = value
         self._safe_update(self._rendering_badge)
         if value:
@@ -960,10 +826,8 @@ class ReviewPage(ft.Column):
                 page.run_task(self._rendering_failsafe_async, gen)
 
     async def _rendering_failsafe_async(self, gen: int) -> None:
-        import asyncio
-
         await asyncio.sleep(1.6)
-        if gen != self._rendering_generation:
+        if gen != self._grid_build_generation:
             return
         if self._rendering_badge.visible:
             self._rendering_badge.visible = False
@@ -972,13 +836,20 @@ class ReviewPage(ft.Column):
     # ------------------------------------------------------------------
     # Mode management
     # ------------------------------------------------------------------
+    _MODE_VISIBILITY: Dict[str, Dict[str, bool]] = {
+        "empty":   {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "loading": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "groups":  {"filter": True,  "cmp_bar": False, "smart": False, "toggle": True,  "sort": True},
+        "grid":    {"filter": True,  "cmp_bar": False, "smart": True,  "toggle": True,  "sort": False},
+        "compare": {"filter": False, "cmp_bar": True,  "smart": False, "toggle": False, "sort": False},
+    }
+
     def _enter_mode(self, mode: str) -> None:
         # Safety invariant: if groups exist, never render the empty-state shell.
         # This prevents stale/contradictory UI when event ordering briefly races.
         if mode == "empty" and bool(self._groups):
             mode = "groups"
         self._mode = mode
-        self._group_sort_row.visible = False
         # Compare layout needs a bounded viewport: page-level scroll + unbounded ListView made the
         # compare Row as tall as all groups and vertically centered A/B (~mid-list).
         self.scroll = None if mode == "compare" else ft.ScrollMode.AUTO
@@ -989,61 +860,44 @@ class ReviewPage(ft.Column):
             # Unbind keys if not in compare mode to save resources/events
             if hasattr(self._bridge, 'flet_page') and self._bridge.flet_page:
                 self._bridge.flet_page.on_keyboard_event = None
-        
+
         self._content.controls.clear()
         if mode != "grid":
             self._set_rendering(False)
         self._compare_view.visible = mode == "compare"
+
+        vis = self._MODE_VISIBILITY[mode]
+        self._filter_bar.visible = vis["filter"]
+        self._cmp_bar.visible = vis["cmp_bar"]
+        self._smart_row.visible = vis["smart"]
+        self._view_toggle_row.visible = vis["toggle"]
+        self._group_sort_row.visible = vis["sort"]
+
         if mode == "empty":
-            self._filter_seg.visible = False
-            self._cmp_bar.visible = False
-            self._smart_row.visible = False
-            self._view_toggle_row.visible = False
             self._content.controls.append(self._empty_state)
         elif mode == "loading":
-            self._filter_seg.visible = False
-            self._cmp_bar.visible = False
-            self._smart_row.visible = False
-            self._view_toggle_row.visible = False
             self._content.controls.append(self._loading_state)
         elif mode == "groups":
-            self._filter_seg.visible = True
-            self._cmp_bar.visible = False
-            self._smart_row.visible = False
-            self._view_toggle_row.visible = True
-            self._group_sort_row.visible = True
             self._refresh_filter_labels()
             self._refresh_groups_overview()
             self._content.controls.append(self._groups_overview)
         elif mode == "grid":
-            self._filter_seg.visible = True
-            self._cmp_bar.visible = False
-            self._smart_row.visible = True
-            self._view_toggle_row.visible = True
-            self._group_sort_row.visible = False
             self._refresh_grid()
             self._content.controls.append(self._grid)
         elif mode == "compare":
-            self._filter_seg.visible = False
-            self._cmp_bar.visible = True
-            self._smart_row.visible = False
-            self._view_toggle_row.visible = False
-            self._group_sort_row.visible = False
             self._content.controls.append(self._compare_view)
             self._bind_keys()
 
         self._safe_update(self._content)
-        self._safe_update(self._filter_seg)
+        self._safe_update(self._filter_bar)
         self._safe_update(self._cmp_bar)
         self._safe_update(self._smart_row)
         self._safe_update(self._view_toggle_row)
         self._safe_update(self._group_sort_row)
-        self._update_top_stats()
+        self._refresh_stats_header()
         self._apply_pill_chrome()
 
     async def _finish_load_to_grid_async(self) -> None:
-        import asyncio
-
         await asyncio.sleep(0)
         self._loading = False
         if not self._groups:
@@ -1052,8 +906,6 @@ class ReviewPage(ft.Column):
         self._enter_mode("grid")
 
     async def _finish_load_to_groups_async(self) -> None:
-        import asyncio
-
         await asyncio.sleep(0)
         self._loading = False
         if not self._groups:
@@ -1062,8 +914,6 @@ class ReviewPage(ft.Column):
         self._enter_mode("groups")
 
     async def _finish_load_to_compare_async(self, group_id: int) -> None:
-        import asyncio
-
         await asyncio.sleep(0)
         self._loading = False
         if not self._groups:
@@ -1078,64 +928,15 @@ class ReviewPage(ft.Column):
     # Groups Overview
     # ------------------------------------------------------------------
     def _build_group_card(self, g: DuplicateGroup, idx: int, total_reclaim_scan: int) -> ft.Container:
-        reclaim = int(getattr(g, "reclaimable", 0) or 0)
-        reviewed = g.group_id in self._reviewed_group_ids
-        title_color = "#A7F3D0" if reviewed else self._t.colors.fg
-        pct = (100.0 * reclaim / total_reclaim_scan) if total_reclaim_scan > 0 else 0.0
-        pct_s = f" · {pct:.1f}% of scan reclaim" if total_reclaim_scan > 0 and reclaim > 0 else ""
-        stripe = _GROUP_STRIPE[g.group_id % len(_GROUP_STRIPE)]
-        line_dup = _group_duplicate_summary(g)
-        line_path = _group_path_hint(list(g.files))
-        glass = self._get_glass_style(0.05)
-        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, "app_theme") else False
-        edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
-        thin = ft.BorderSide(1, edge)
-        return ft.Container(
-            padding=ft.padding.only(left=10, right=16, top=12, bottom=12),
-            ink=True,
-            border=ft.Border(left=ft.BorderSide(4, stripe), top=thin, right=thin, bottom=thin),
-            tooltip='Open compare for this group (tap row or "Review").',
-            on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
-            content=ft.Row(
-                [
-                    ft.Icon(ft.icons.Icons.LAYERS_OUTLINED, size=18, color=stripe),
-                    ft.Column(
-                        [
-                            ft.Text(
-                                f"Group {idx + 1} · {fmt_size(reclaim)} reclaimable{pct_s}",
-                                size=self._t.typography.size_base,
-                                weight=ft.FontWeight.W_700,
-                                color=title_color,
-                            ),
-                            ft.Text(
-                                line_dup,
-                                size=self._t.typography.size_sm,
-                                color=self._t.colors.fg2,
-                                max_lines=2,
-                            ),
-                            ft.Text(
-                                line_path,
-                                size=self._t.typography.size_xs,
-                                color=self._t.colors.fg_muted,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                                max_lines=2,
-                            ),
-                        ],
-                        spacing=4,
-                        expand=True,
-                    ),
-                    ft.TextButton(
-                        "Review",
-                        icon=ft.icons.Icons.CHEVRON_RIGHT,
-                        style=pill_text_button_style(self._t, variant="primary"),
-                        on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
-                    ),
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            ),
-            bgcolor=glass["bgcolor"],
-            border_radius=glass["border_radius"],
+        return build_group_card(
+            self._t,
+            self._bridge,
+            g,
+            idx,
+            total_reclaim_scan,
+            self._reviewed_group_ids,
+            on_open_group=self._enter_compare,
+            get_glass_style=self._get_glass_style,
         )
 
     def _sorted_groups_for_current_filter(self) -> List[DuplicateGroup]:
@@ -1165,7 +966,7 @@ class ReviewPage(ft.Column):
         self._group_sort_key = str(e.control.value or "reclaimable_desc")
         if self._mode == "groups":
             self._refresh_groups_overview()
-            self._update_top_stats()
+            self._refresh_stats_header()
 
     # ------------------------------------------------------------------
     # Grid
@@ -1188,9 +989,8 @@ class ReviewPage(ft.Column):
             self._log_if_slow("review:grid_refresh", _t0)
             return
 
-        self._grid_build_generation += 1
-        gen = self._grid_build_generation
         self._set_rendering(True)
+        gen = self._grid_build_generation
         head_n = min(_GRID_FIRST_SYNC_FILES, n)
         head = files[:head_n]
         tail = files[head_n:]
@@ -1212,8 +1012,6 @@ class ReviewPage(ft.Column):
         self._log_if_slow("review:grid_refresh", _t0)
 
     async def _append_grid_tiles_async(self, tail: List[DuplicateFile], gen: int, all_files: List[DuplicateFile]) -> None:
-        import asyncio
-
         for i in range(0, len(tail), _GRID_ASYNC_BATCH):
             if gen != self._grid_build_generation:
                 self._set_rendering(False)
@@ -1257,10 +1055,10 @@ class ReviewPage(ft.Column):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=2,
             ),
-            bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
+            bgcolor=ft.Colors.with_opacity(0.72, RC.tile_bg),
             padding=ft.padding.symmetric(horizontal=6, vertical=4),
             animate_opacity=(
-                None if self._bridge.is_reduce_motion_enabled()
+                None if self._reduce_motion
                 else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)
             ),
             opacity=0,
@@ -1286,7 +1084,7 @@ class ReviewPage(ft.Column):
                     content=ft.Checkbox(
                         value=key in self._marked_paths,
                         on_change=lambda e, file=f: self._toggle_mark_file(file),
-                        active_color="#EF4444",
+                        active_color=RC.danger,
                     ),
                 ),
             ],
@@ -1296,7 +1094,7 @@ class ReviewPage(ft.Column):
         def _hover(e: ft.ControlEvent) -> None:
             enter = e.data == "true"
             info_bar.opacity = 1 if enter else 0
-            tile.border = (ft.border.all(2, "#22D3EE") if enter
+            tile.border = (ft.border.all(2, RC.side_a) if enter
                            else ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)))
             ReviewPage._safe_update(info_bar)
             ReviewPage._safe_update(tile)
@@ -1316,8 +1114,6 @@ class ReviewPage(ft.Column):
         return tile
 
     async def _load_thumbnails_async(self, files: List[DuplicateFile], load_gen: int) -> None:
-        import asyncio
-
         pending: list[tuple[ft.Container, str]] = []
 
         async def _on_ready(path: Path, b64: str | None) -> None:
@@ -1389,62 +1185,6 @@ class ReviewPage(ft.Column):
                 )
         return ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=max(28, edge // 2), color=t.colors.primary)
 
-    def _build_tile(self, f: DuplicateFile) -> ft.Container:
-        t = self._t
-        p = Path(str(f.path))
-        name = p.name
-        thumb = self._thumb_widget(p, 120)
-
-        info_bar = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(name, size=t.typography.size_xs, color="#FFFFFF", overflow=ft.TextOverflow.ELLIPSIS, max_lines=1, text_align=ft.TextAlign.CENTER),
-                    ft.Text(fmt_size(f.size), size=t.typography.size_xs, color=ft.Colors.with_opacity(0.75, "#FFFFFF")),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=2,
-            ),
-            bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
-            padding=ft.padding.symmetric(horizontal=6, vertical=4),
-            animate_opacity=(
-                None
-                if self._bridge.is_reduce_motion_enabled()
-                else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)
-            ),
-            opacity=0,
-        )
-
-        stack = ft.Stack(
-            [
-                ft.Container(content=thumb, expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE),
-                ft.Column(
-                    [ft.Container(expand=True), info_bar],
-                    expand=True,
-                    spacing=0,
-                ),
-            ],
-            expand=True,
-        )
-
-        def _hover(e: ft.ControlEvent) -> None:
-            enter = e.data == "true"
-            info_bar.opacity = 1 if enter else 0
-            tile.border = ft.border.all(2, "#22D3EE") if enter else ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE))
-            ReviewPage._safe_update(info_bar)
-            ReviewPage._safe_update(tile)
-
-        tile = ft.Container(
-            content=stack,
-            border_radius=ft.border_radius.all(10),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            ink=True,
-            on_click=lambda e, file=f: self._on_tile_clicked(file),
-            on_hover=_hover,
-        )
-        return tile
-
     def _on_tile_clicked(self, f: DuplicateFile) -> None:
         gid = next((g.group_id for g in self._groups if f in g.files), None)
         if gid is not None:
@@ -1472,21 +1212,13 @@ class ReviewPage(ft.Column):
         files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
         if len(files) < 2:
             return
-        if rule == "keep_largest":
-            keep = max(files, key=lambda f: f.size)
-        elif rule == "keep_smallest":
-            keep = min(files, key=lambda f: f.size)
-        elif rule == "keep_newest":
-            keep = max(files, key=_file_mtime_ts)
-        elif rule == "keep_oldest":
-            keep = min(files, key=_file_mtime_ts)
-        else:
-            keep = max(files, key=lambda f: f.size)
-        to_delete = [str(f.path) for f in files if f is not keep]
+        to_delete = paths_to_delete(normalized_rule(rule), files)
         if not to_delete:
             return
         for p in to_delete:
             self._marked_paths.add(str(p))
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
         self._update_compare_panels()
         self._refresh_grid()
         self._bridge.show_snackbar(f"Rule applied: {len(to_delete):,} files marked in this group.", info=True)
@@ -1494,7 +1226,7 @@ class ReviewPage(ft.Column):
     def _apply_smart_select_review(self, e=None):
         """Ask whether to apply the active rule in bulk or as per-group suggestion."""
         rule = self._smart_rule or "keep_largest"
-        rule_lbl = dict(_SMART_RULES).get(rule, "Keep Largest")
+        rule_lbl = dict(RULE_LABELS).get(rule, "Keep Largest")
         def _apply_all(_e):
             self._bridge.dismiss_top_dialog()
             self._apply_rule_to_all_groups()
@@ -1514,28 +1246,16 @@ class ReviewPage(ft.Column):
         self._bridge.show_modal_dialog(dlg)
 
     def _apply_rule_to_all_groups(self) -> None:
-        rule = self._smart_rule or "keep_largest"
-        to_delete = []
+        rule = normalized_rule(self._smart_rule or "keep_largest")
+        to_delete: List[str] = []
         for g in self._groups:
             files = [f for f in g.files if self._passes_filter(f)]
-            if len(files) < 2:
-                continue
-            if rule == "keep_largest":
-                keep = max(files, key=lambda f: f.size)
-            elif rule == "keep_smallest":
-                keep = min(files, key=lambda f: f.size)
-            elif rule == "keep_newest":
-                keep = max(files, key=_file_mtime_ts)
-            elif rule == "keep_oldest":
-                keep = min(files, key=_file_mtime_ts)
-            else:
-                keep = max(files, key=lambda f: f.size)
-            for f in files:
-                if f is not keep:
-                    to_delete.append(str(f.path))
+            to_delete.extend(paths_to_delete(rule, files))
         if not to_delete:
             return
         self._marked_paths = set(to_delete)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
         if self._mode == "grid":
             self._refresh_grid()
         else:
@@ -1547,52 +1267,31 @@ class ReviewPage(ft.Column):
         gid = self._compare_gid
         if gid is None:
             return
-        rule = self._cmp_smart_rule
+        rule = normalized_rule(self._cmp_smart_rule)
         files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
-        if len(files) < 2:
-            return
-        if rule == "keep_largest":
-            keep = max(files, key=lambda f: f.size)
-        elif rule == "keep_smallest":
-            keep = min(files, key=lambda f: f.size)
-        elif rule == "keep_newest":
-            keep = max(files, key=_file_mtime_ts)
-        elif rule == "keep_oldest":
-            keep = min(files, key=_file_mtime_ts)
-        else:
-            keep = max(files, key=lambda f: f.size)
-        to_delete = [str(f.path) for f in files if f is not keep]
+        to_delete = paths_to_delete(rule, files)
         if not to_delete:
             return
         self._show_smart_delete_dialog(to_delete)
 
     def _show_smart_delete_dialog(self, paths: List[str]) -> None:
-        t = self._t
-        def _do_permanent(e):
+        def _confirmed(policy: DeletionPolicy) -> None:
             self._bridge.dismiss_top_dialog()
-            self._execute_smart_delete(paths, DeletionPolicy.PERMANENT)
-        def _do_trash(e):
-            self._bridge.dismiss_top_dialog()
-            self._execute_smart_delete(paths, DeletionPolicy.TRASH)
-        def _cancel(e):
-            self._bridge.dismiss_top_dialog()
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Smart Delete"),
-            content=ft.Text(f"This will delete {len(paths):,} files according to the selected rule."),
-            actions=[
-                ft.TextButton("Cancel", on_click=_cancel),
-                ft.OutlinedButton("Delete Permanently", on_click=_do_permanent, style=ft.ButtonStyle(color=t.colors.danger)),
-                ft.ElevatedButton("Move to Trash", on_click=_do_trash, style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg)),
-            ],
+            self._execute_smart_delete(paths, policy)
+
+        self._bridge.show_modal_dialog(
+            build_confirm_dialog(
+                f"{len(paths):,} file(s) according to the selected rule",
+                _confirmed,
+                self._bridge.dismiss_top_dialog,
+                self._t,
+            )
         )
-        self._bridge.show_modal_dialog(dialog)
 
     def _execute_smart_delete(self, paths: List[str], policy: DeletionPolicy) -> None:
-        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
         if not paths:
             return
-        service = DeleteService()
+        service = self._delete_service
         progress_text = ft.Text("Preparing deletion...", size=self._t.typography.size_sm)
         progress_bar = ft.ProgressBar(value=0)
         progress_dialog = ft.AlertDialog(
@@ -1617,9 +1316,14 @@ class ReviewPage(ft.Column):
                 return
             self._groups = list(new_groups)
             self._group_files = {g.group_id: list(g.files) for g in self._groups}
+            self._rebuild_group_index()
+            self._rebuild_filter_index()
             for p in paths:
                 self._marked_paths.discard(str(p))
+            self._recompute_marked_bytes()
             self._bridge.coordinator.results_groups_pruned(self._groups)
+            # GroupsPruned clears ``selected_files`` in the reducer; push surviving marks back.
+            self._push_marked_paths_to_store()
             if deleted > 0:
                 if policy == DeletionPolicy.TRASH:
                     self._bridge.show_snackbar(
@@ -1704,6 +1408,8 @@ class ReviewPage(ft.Column):
         _t0 = time.perf_counter()
         self._compare_render_generation += 1
         gen = self._compare_render_generation
+        self._compare_thumb_slots.clear()
+        self._compare_dims_labels.clear()
         self._compare_panel_a.content = self._build_compare_side(self._compare_a, "A", gen)
         self._compare_panel_b.content = self._build_compare_side(self._compare_b, "B", gen)
         self._apply_compare_panel_tints()
@@ -1714,10 +1420,10 @@ class ReviewPage(ft.Column):
 
     def _apply_compare_panel_tints(self) -> None:
         """Visually separate side A and side B (compare mode only)."""
-        self._compare_panel_a.bgcolor = ft.Colors.with_opacity(0.10, "#22D3EE")
-        self._compare_panel_a.border = ft.border.all(1, ft.Colors.with_opacity(0.38, "#22D3EE"))
-        self._compare_panel_b.bgcolor = ft.Colors.with_opacity(0.10, "#A78BFA")
-        self._compare_panel_b.border = ft.border.all(1, ft.Colors.with_opacity(0.38, "#A78BFA"))
+        self._compare_panel_a.bgcolor = ft.Colors.with_opacity(0.10, RC.side_a)
+        self._compare_panel_a.border = ft.border.all(1, ft.Colors.with_opacity(0.38, RC.side_a))
+        self._compare_panel_b.bgcolor = ft.Colors.with_opacity(0.10, RC.side_b)
+        self._compare_panel_b.border = ft.border.all(1, ft.Colors.with_opacity(0.38, RC.side_b))
 
     def _reset_compare_panels_idle_chrome(self) -> None:
         g = self._get_glass_style(0.04)
@@ -1725,35 +1431,6 @@ class ReviewPage(ft.Column):
         self._compare_panel_a.border = g.get("border")
         self._compare_panel_b.bgcolor = g.get("bgcolor")
         self._compare_panel_b.border = g.get("border")
-
-    def _build_compare_file_column(self, f: DuplicateFile, idx: int) -> ft.Container:
-        p = Path(str(f.path))
-        marked = str(f.path) in self._marked_paths
-        return ft.Container(
-            width=290,
-            padding=ft.padding.all(10),
-            border_radius=10,
-            border=ft.border.all(2 if marked else 1, "#EF4444" if marked else ft.Colors.with_opacity(0.14, ft.Colors.WHITE)),
-            bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
-            content=ft.Column(
-                [
-                    ft.Text(f"COPY {idx + 1}", weight=ft.FontWeight.W_700, color="#BFD5FF"),
-                    self._thumb_widget(p, 180),
-                    ft.Text(p.name, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Text(f"Path: {p.parent}", size=self._t.typography.size_xs, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, color="#93C5FD"),
-                    ft.Text(f"Modified: {self._fmt_mtime(_file_mtime_ts(f))}", size=self._t.typography.size_xs, color="#BFD5FF"),
-                    ft.Text(f"Size: {fmt_size(f.size)}", size=self._t.typography.size_xs, color="#4ADE80"),
-                    ft.Row(
-                        [
-                            ft.OutlinedButton("KEEP", on_click=lambda _e, file=f: self._keep_only_file(file)),
-                            ft.OutlinedButton("Mark" if not marked else "Unmark", on_click=lambda _e, file=f: self._toggle_mark_file(file)),
-                        ],
-                        spacing=6,
-                    ),
-                ],
-                spacing=6,
-            ),
-        )
 
     def _keep_only_file(self, keep_file: DuplicateFile) -> None:
         gid = self._compare_gid
@@ -1766,22 +1443,28 @@ class ReviewPage(ft.Column):
                 self._marked_paths.discard(fp)
             else:
                 self._marked_paths.add(fp)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
         self._update_compare_panels()
 
     def _toggle_mark_file(self, file: DuplicateFile) -> None:
         fp = str(file.path)
+        size = int(getattr(file, "size", 0) or 0)
         if fp in self._marked_paths:
             self._marked_paths.discard(fp)
+            self._marked_bytes -= size
         else:
             self._marked_paths.add(fp)
+            self._marked_bytes += size
+        self._push_marked_paths_to_store()
         self._update_compare_panels()
 
     def _refresh_group_list_panel(self) -> None:
         def _set_row_style(row: ft.Container, active: bool) -> None:
-            row.bgcolor = ft.Colors.with_opacity(0.10 if active else 0.04, "#22D3EE" if active else ft.Colors.WHITE)
+            row.bgcolor = ft.Colors.with_opacity(0.10 if active else 0.04, RC.side_a if active else ft.Colors.WHITE)
             row.border = ft.border.all(
                 1,
-                ft.Colors.with_opacity(0.28 if active else 0.10, "#22D3EE" if active else ft.Colors.WHITE),
+                ft.Colors.with_opacity(0.28 if active else 0.10, RC.side_a if active else ft.Colors.WHITE),
             )
 
         current_order = [g.group_id for g in self._groups]
@@ -1804,13 +1487,13 @@ class ReviewPage(ft.Column):
                         [
                             ft.Text(f"Group {i + 1} · {fmt_size(g.reclaimable)}", size=self._t.typography.size_sm, weight=ft.FontWeight.W_700),
                             ft.Text(
-                                _group_duplicate_summary(g),
+                                group_duplicate_summary(g),
                                 size=self._t.typography.size_xs,
                                 color=self._t.colors.fg_muted,
                                 max_lines=2,
                             ),
                             ft.Text(
-                                _group_path_hint(list(g.files)),
+                                group_path_hint(list(g.files)),
                                 size=self._t.typography.size_xs,
                                 color=self._t.colors.fg2,
                                 max_lines=2,
@@ -1845,15 +1528,19 @@ class ReviewPage(ft.Column):
                 self._safe_update(curr)
         self._active_group_row_id = curr_gid
 
+    def _recompute_marked_bytes(self) -> None:
+        total = 0
+        for g in self._groups:
+            for f in g.files:
+                if str(f.path) in self._marked_paths:
+                    total += int(getattr(f, "size", 0) or 0)
+        self._marked_bytes = total
+
     def _update_progress_and_marked_bar(self) -> None:
         reviewed = len(self._reviewed_group_ids)
         total = max(1, len(self._groups))
         self._progress_bar.value = min(1.0, reviewed / total)
-        marked_bytes = 0
-        for g in self._groups:
-            for f in g.files:
-                if str(f.path) in self._marked_paths:
-                    marked_bytes += int(getattr(f, "size", 0) or 0)
+        marked_bytes = self._marked_bytes
         remaining = max(0, sum(g.reclaimable for g in self._groups) - marked_bytes)
         self._progress_lbl.value = f"{reviewed} of {len(self._groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
         if self._mode == "compare":
@@ -1888,7 +1575,6 @@ class ReviewPage(ft.Column):
     def _fmt_mtime(mtime) -> str:
         """Format a unix timestamp to a human-readable date string."""
         try:
-            import datetime
             ts = float(mtime or 0)
             if ts <= 0:
                 return ""
@@ -1898,7 +1584,7 @@ class ReviewPage(ft.Column):
 
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str, gen: int) -> ft.Column:
         t = self._t
-        label_color = "#22D3EE" if label == "A" else "#A78BFA"
+        label_color = RC.side_a if label == "A" else RC.side_b
         if not f:
             return ft.Column(
                 [ft.Text(f"Side {label}: No peer file", color=t.colors.fg_muted)],
@@ -1934,15 +1620,15 @@ class ReviewPage(ft.Column):
                 fmt_size(f.size),
                 size=t.typography.size_xs,
                 weight=ft.FontWeight.W_600,
-                color="#4ADE80",
+                color=RC.success,
             ),
-            bgcolor=ft.Colors.with_opacity(0.10, "#4ADE80"),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#4ADE80")),
+            bgcolor=ft.Colors.with_opacity(0.10, RC.success),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.30, RC.success)),
             border_radius=6,
             padding=ft.padding.symmetric(horizontal=8, vertical=3),
         )
 
-        def _meta_row(icon_name: str, value: str, color: str = "#9FB0D0") -> ft.Row:
+        def _meta_row(icon_name: str, value: str, color: str = RC.muted_text) -> ft.Row:
             return ft.Row(
                 [
                     ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.55, color)),
@@ -1967,7 +1653,7 @@ class ReviewPage(ft.Column):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
         )
-        meta_rows.append(_meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), "#93C5FD"))
+        meta_rows.append(_meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), RC.info))
 
         meta_box = ft.Container(
             content=ft.Column(meta_rows, spacing=4, tight=True),
@@ -2016,7 +1702,7 @@ class ReviewPage(ft.Column):
                 ft.Checkbox(
                     label="Mark for deletion",
                     value=marked,
-                    active_color="#EF4444",
+                    active_color=RC.danger,
                     on_change=lambda e, file=f: self._toggle_mark_file(file),
                 ),
             ],
@@ -2027,7 +1713,6 @@ class ReviewPage(ft.Column):
         )
 
     async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
-        import asyncio
         loop = asyncio.get_event_loop()
 
         def _read_dims() -> str:
@@ -2092,14 +1777,14 @@ class ReviewPage(ft.Column):
     def _prev_group(self, e=None) -> None:
         if self._compare_gid is None:
             return
-        idx = next((i for i, g in enumerate(self._groups) if g.group_id == self._compare_gid), 0)
+        idx = self._group_index.get(self._compare_gid, 0)
         if idx > 0:
             self._enter_compare(self._groups[idx - 1].group_id)
 
     def _next_group(self, e=None) -> None:
         if self._compare_gid is None:
             return
-        idx = next((i for i, g in enumerate(self._groups) if g.group_id == self._compare_gid), 0)
+        idx = self._group_index.get(self._compare_gid, 0)
         if idx < len(self._groups) - 1:
             self._enter_compare(self._groups[idx + 1].group_id)
 
@@ -2117,20 +1802,13 @@ class ReviewPage(ft.Column):
             else:
                 subprocess.Popen(["xdg-open", str(folder)])
         except Exception as e:
-            _log.error(f"Failed to open file: {e}")
+            _log.error("Failed to open file: %s", e)
 
     # ------------------------------------------------------------------
     # Filter
     # ------------------------------------------------------------------
-    def _on_filter_seg_change(self, e: ft.ControlEvent) -> None:
-        ctrl = getattr(e, "control", None) or self._filter_seg
-        sel = getattr(ctrl, "selected", None)
-        if isinstance(sel, list):
-            self._filter_key = str(sel[0]) if sel else "all"
-        elif isinstance(sel, (set, frozenset)):
-            self._filter_key = str(next(iter(sel))) if sel else "all"
-        else:
-            self._filter_key = "all"
+    def _on_filter_changed(self, key: str) -> None:
+        self._filter_key = key
         if self._mode == "grid":
             self._refresh_grid()
         elif self._mode == "groups":
@@ -2138,8 +1816,10 @@ class ReviewPage(ft.Column):
             self._refresh_groups_overview()
         elif self._mode == "compare":
             self._refresh_filter_labels()
-            self._update_top_stats()
             self._update_compare_panels()
+
+    def _rebuild_group_index(self) -> None:
+        self._group_index = {g.group_id: i for i, g in enumerate(self._groups)}
 
     def _rebuild_filter_index(self) -> None:
         self._tile_cache = {}
@@ -2169,86 +1849,19 @@ class ReviewPage(ft.Column):
         self._filter_sizes = file_sizes
         self._filter_group_counts = group_counts
         self._refresh_filter_labels()
-        self._update_top_stats()
 
     def _refresh_filter_labels(self) -> None:
-        selected = set(self._filter_seg.selected or [])
-        for key, (t0, t1, t2) in self._filter_seg_lines.items():
-            base = next((label for k, label in _FILTER_TABS if k == key), key.title())
-            files_n = self._filter_counts.get(key, 0)
-            size_n = self._filter_sizes.get(key, 0)
-            is_active = key in selected
-            accent = _FILTER_ACCENT.get(key, "#C7D2FE")
-            t0.value = base
-            t0.color = "#FFFFFF" if is_active else "#CEDAF0"
-            t0.weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
-            t1.value = f"{files_n:,}"
-            t1.size = 12
-            t1.color = accent if is_active else ft.Colors.with_opacity(0.85, accent)
-            t1.weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
-            t2.value = fmt_size(size_n)
-            t2.color = "#B7C6E6" if is_active else "#9FB0D0"
-        self._update_top_stats()
-        self._safe_update(self._filter_seg)
+        self._filter_bar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
+        self._refresh_stats_header()
 
-    def _metric_chip(self, label: str, value: str, accent: str) -> ft.Container:
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Text(label, size=10, color="#9FB0D0", weight=ft.FontWeight.W_500),
-                    ft.Text(value, size=11, weight=ft.FontWeight.W_700, color=accent),
-                ],
-                spacing=4,
-                tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            padding=ft.padding.symmetric(horizontal=7, vertical=4),
-            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.18, ft.Colors.WHITE)),
-            border_radius=999,
+    def _refresh_stats_header(self) -> None:
+        fl = next((lab for k, lab in _FILTER_TABS if k == self._filter_key), self._filter_key.title())
+        self._stats_header.refresh(
+            self._mode, fl, self._filter_key,
+            self._filter_counts, self._filter_sizes, self._filter_group_counts,
+            self._reviewed_group_ids, self._sorted_groups_for_current_filter(),
+            self._t,
         )
-
-    def _update_top_stats(self) -> None:
-        selected_files = len(self._files_by_filter.get(self._filter_key, []))
-        selected_groups = self._filter_group_counts.get(self._filter_key, 0)
-        reclaimable = fmt_size(self._filter_sizes.get(self._filter_key, 0))
-        filtered_groups = self._sorted_groups_for_current_filter()
-        reviewed_in_filter = sum(1 for g in filtered_groups if g.group_id in self._reviewed_group_ids)
-        total_filtered = len(filtered_groups)
-        remaining_reclaimable = int(
-            sum(int(getattr(g, "reclaimable", 0) or 0) for g in filtered_groups if g.group_id not in self._reviewed_group_ids)
-        )
-        mode_label_map = {
-            "compare": "Compare",
-            "grid": "Grid",
-            "groups": "Groups",
-            "loading": "Loading",
-            "empty": "Empty",
-        }
-        mode_label = mode_label_map.get(self._mode, "Grid")
-        filter_lbl = next((lab for k, lab in _FILTER_TABS if k == self._filter_key), self._filter_key.title())
-        self._summary_lbl.value = f"Filter: {filter_lbl} · Mode: {mode_label}"
-        if self._mode == "compare":
-            self._summary_lbl.value += " · Back returns to the group list"
-        self._stats_row.controls = [
-            self._metric_chip("Groups", f"{selected_groups:,}", "#A78BFA"),
-            self._metric_chip("Files", f"{selected_files:,}", "#7DD3FC"),
-            self._metric_chip("Total Size", reclaimable, "#4ADE80"),
-            self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", "#FBBF24"),
-            self._metric_chip("Remaining", fmt_size(remaining_reclaimable), "#F87171"),
-        ]
-        if self._mode == "compare":
-            self._workflow_lbl.value = (
-                "Shortcuts: arrows change group; 1 or K deletes side A; 2 or D deletes side B; "
-                "Enter next group; Space opens delete for extras the smart rule would remove."
-            )
-        elif filtered_groups:
-            self._workflow_lbl.value = f"Progress: {reviewed_in_filter:,}/{total_filtered:,} groups reviewed"
-        else:
-            self._workflow_lbl.value = "Progress: no groups in current filter"
-        self._safe_update(self._summary_lbl)
-        self._safe_update(self._stats_row)
-        self._safe_update(self._workflow_lbl)
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -2289,77 +1902,18 @@ class ReviewPage(ft.Column):
         f = self._compare_a if side == "a" else self._compare_b
         if not f:
             return
-        t = self._t
         name = Path(str(f.path)).name
         path = str(f.path)
 
-        def _do_delete(policy: DeletionPolicy) -> None:
-            from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
-            service = DeleteService()
-            new_groups, deleted, failed, bytes_reclaimed = service.delete_and_prune([path], self._groups, policy)
-            self._groups = new_groups
-            self._group_files = {g.group_id: list(g.files) for g in self._groups}
-            self._bridge.coordinator.results_groups_pruned(self._groups)
-            if deleted > 0:
-                if policy == DeletionPolicy.TRASH:
-                    self._bridge.show_snackbar(
-                        f'Moved "{name}" to Trash.',
-                        success=True,
-                        action_label="Undo",
-                        on_action=lambda _e: self._undo_last_trash_delete(),
-                    )
-                else:
-                    self._bridge.show_snackbar(
-                        f'Permanently deleted "{name}".',
-                        success=True,
-                    )
-            if failed > 0:
-                self._bridge.show_snackbar(
-                    f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
-                    error=True,
-                )
-            if not self._groups:
-                self._enter_mode("empty")
-                return
-            gid = self._compare_gid
-            if gid not in self._group_files:
-                gid = self._groups[0].group_id
-            self._enter_compare(gid)
-
-        def _cancel_cmp(e):
+        def _confirmed(policy: DeletionPolicy) -> None:
             self._bridge.dismiss_top_dialog()
+            self._execute_smart_delete([path], policy)
 
-        def _do_perm_cmp(e):
-            self._bridge.dismiss_top_dialog()
-            _do_delete(DeletionPolicy.PERMANENT)
-
-        def _do_trash_cmp(e):
-            self._bridge.dismiss_top_dialog()
-            _do_delete(DeletionPolicy.TRASH)
-
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Confirm Deletion"),
-            content=ft.Text(f'Delete "{name}"?'),
-            actions=[
-                ft.TextButton("Cancel", on_click=_cancel_cmp),
-                ft.OutlinedButton(
-                    "Delete Permanently",
-                    on_click=_do_perm_cmp,
-                    style=ft.ButtonStyle(color=t.colors.danger),
-                ),
-                ft.ElevatedButton(
-                    "Move to Trash",
-                    on_click=_do_trash_cmp,
-                    style=ft.ButtonStyle(bgcolor=t.colors.danger, color=t.colors.bg),
-                ),
-            ],
+        self._bridge.show_modal_dialog(
+            build_confirm_dialog(f'"{name}"', _confirmed, self._bridge.dismiss_top_dialog, self._t)
         )
-        self._bridge.show_modal_dialog(dialog)
 
     def _undo_last_trash_delete(self) -> None:
-        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
-
         ok, restored = DeleteService.undo_last_trash_delete()
         if ok and restored > 0:
             self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
@@ -2375,13 +1929,10 @@ class ReviewPage(ft.Column):
     # Navigation
     # ------------------------------------------------------------------
     def _go_back(self, e=None) -> None:
-        if self._mode == "compare":
+        if self._mode in ("compare", "grid"):
             self._enter_mode("groups")
-            return
-        if self._mode == "grid":
-            self._enter_mode("groups")
-            return
-        self._bridge.navigate("dashboard")
+        else:
+            self._bridge.navigate("dashboard")
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls or keyboard bindings."""
@@ -2389,8 +1940,10 @@ class ReviewPage(ft.Column):
         self._t = theme_for_mode(mode)
 
         # Update Glass Styles
-        self._top_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._top_bar.border = self._get_glass_style(0.04).get('border')
+        self._stats_header.bgcolor = self._get_glass_style(0.04).get('bgcolor')
+        self._stats_header.border = self._get_glass_style(0.04).get('border')
+        self._filter_bar.sync_theme(self._t)
+        self._refresh_filter_labels()
 
         self._cmp_bar.bgcolor = self._get_glass_style(0.04).get('bgcolor')
         self._cmp_bar.border = self._get_glass_style(0.04).get('border')

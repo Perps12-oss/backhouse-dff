@@ -233,7 +233,7 @@ def _main(page: ft.Page) -> None:
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
             "ReviewNavigate": [getattr(review_page, "_compare_view", None), getattr(review_page, "_cmp_bar", None)],
-            "ReviewViewFilterChanged": [getattr(review_page, "_filter_seg", None), getattr(review_page, "_grid", None)],
+            "ReviewViewFilterChanged": [getattr(review_page, "_filter_bar", None), getattr(review_page, "_grid", None)],
             "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
             "ScanEnded": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
         }.items():
