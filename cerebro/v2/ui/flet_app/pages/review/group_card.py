@@ -10,6 +10,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import apply_rule, normalized_rule
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -75,6 +76,7 @@ def build_group_card(
     reviewed_ids: Set[int],
     *,
     get_glass_style: Callable[[float], dict],
+    smart_rule: str = "keep_largest",
 ) -> ft.Container:
     reclaim = int(getattr(g, "reclaimable", 0) or 0)
     reviewed = g.group_id in reviewed_ids
@@ -84,6 +86,14 @@ def build_group_card(
     stripe = _GROUP_STRIPE[g.group_id % len(_GROUP_STRIPE)]
     line_dup = group_duplicate_summary(g)
     line_path = group_path_hint(list(g.files))
+    keep_line = ""
+    files = list(g.files)
+    if len(files) >= 2:
+        try:
+            keeper = apply_rule(normalized_rule(smart_rule), files)
+            keep_line = f"Recommended keep: {Path(str(keeper.path)).name}"
+        except Exception:
+            keep_line = ""
     glass = get_glass_style(0.05)
     is_light = app_theme_is_light(bridge)
     edge = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
@@ -107,6 +117,19 @@ def build_group_card(
                             size=t.typography.size_sm,
                             color=t.colors.fg2,
                             max_lines=2,
+                        ),
+                        *(
+                            [
+                                ft.Text(
+                                    keep_line,
+                                    size=t.typography.size_xs,
+                                    color=RC.group_title_reviewed,
+                                    max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                )
+                            ]
+                            if keep_line
+                            else []
                         ),
                         ft.Text(
                             line_path,

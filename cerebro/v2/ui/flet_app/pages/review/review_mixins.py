@@ -17,7 +17,12 @@ from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
+    RULE_LABELS,
+    apply_rule,
+    normalized_rule,
+    paths_to_delete,
+)
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_filled_accent,
@@ -139,7 +144,7 @@ class ReviewPageModeMixin:
     _MODE_VISIBILITY: Dict[str, Dict[str, bool]] = {
         "empty": {"cmp_bar": False, "smart": False, "toggle": False, "sort": False},
         "loading": {"cmp_bar": False, "smart": False, "toggle": False, "sort": False},
-        "groups": {"cmp_bar": False, "smart": False, "toggle": True, "sort": True},
+        "groups": {"cmp_bar": False, "smart": True, "toggle": True, "sort": True},
         "grid": {"cmp_bar": False, "smart": True, "toggle": True, "sort": False},
         "compare": {"cmp_bar": True, "smart": False, "toggle": False, "sort": False},
     }
@@ -245,7 +250,23 @@ class ReviewPageGroupsGridMixin:
             total_reclaim_scan,
             self._reviewed_group_ids,
             get_glass_style=self._get_glass_style,
+            smart_rule=self._smart_rule,
         )
+
+    def _keep_paths_for_current_filter(self) -> Set[str]:
+        """Paths the active smart rule would keep (one per multi-file group in filter)."""
+        rule = normalized_rule(self._smart_rule or "keep_largest")
+        kp: Set[str] = set()
+        for g in self._groups:
+            files = [f for f in g.files if self._passes_filter(f)]
+            if len(files) < 2:
+                continue
+            try:
+                keeper = apply_rule(rule, files)
+                kp.add(str(keeper.path))
+            except Exception:
+                continue
+        return kp
 
     def _sorted_groups_for_current_filter(self) -> List[DuplicateGroup]:
         filtered = [
@@ -303,7 +324,7 @@ class ReviewPageGroupsGridMixin:
         files = self._files_by_filter.get(self._filter_key, [])
         self._refresh_filter_labels()
         self._grid_view.set_reduce_motion(self._reduce_motion)
-        self._grid_view.refresh(files, self._marked_paths)
+        self._grid_view.refresh(files, self._marked_paths, self._keep_paths_for_current_filter())
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
         if self._filter_key == "all":
@@ -330,6 +351,10 @@ class ReviewPageSmartMixin:
             self._update_compare_panels()
             self._refresh_grid()
             self._update_progress_and_marked_bar()
+        elif self._mode == "grid":
+            self._refresh_grid()
+        elif self._mode == "groups":
+            self._refresh_groups_overview()
         self._refresh_stats_header()
         self._refresh_action_bar()
 
@@ -549,7 +574,7 @@ class ReviewPageCompareNavMixin:
         self._recompute_marked_bytes()
         self._push_marked_paths_to_store()
         if self._mode == "grid":
-            self._grid_view.refresh_marks(self._marked_paths)
+            self._grid_view.refresh_marks(self._marked_paths, self._keep_paths_for_current_filter())
         elif self._mode == "compare":
             self._compare_ui.update_compare_panels()
 

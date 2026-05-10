@@ -61,6 +61,8 @@ class ReviewGridView(ft.Stack):
         self._tile_cache: Dict[str, ft.Container] = {}
         self._thumb_slots: Dict[str, ft.Container] = {}
         self._mark_checkboxes: Dict[str, ft.Checkbox] = {}
+        self._status_badge_labels: Dict[str, ft.Text] = {}
+        self._last_keep_paths: set[str] = set()
         self._grid_build_generation = 0
         self._thumb_load_generation = 0
 
@@ -130,8 +132,10 @@ class ReviewGridView(ft.Stack):
         self._tile_cache.clear()
         self._thumb_slots.clear()
         self._mark_checkboxes.clear()
+        self._status_badge_labels.clear()
         self._last_files.clear()
         self._last_marked.clear()
+        self._last_keep_paths.clear()
 
     def bump_thumb_generation(self) -> None:
         self._thumb_load_generation += 1
@@ -271,20 +275,46 @@ class ReviewGridView(ft.Stack):
             self._rendering_badge.visible = False
             self._safe_update(self._rendering_badge)
 
-    def refresh_marks(self, marked_paths: Set[str]) -> None:
+    def _sync_badge_label(self, key: str, text_ctrl: ft.Text, marked: Set[str], keep: Set[str]) -> None:
+        t = self._t
+        if key in marked:
+            text_ctrl.value = "Remove"
+            text_ctrl.color = RC.marked_label_soft
+        elif key in keep:
+            text_ctrl.value = "Keep"
+            text_ctrl.color = RC.group_title_reviewed
+        else:
+            text_ctrl.value = "Review"
+            text_ctrl.color = t.colors.fg_muted
+        self._safe_update(text_ctrl)
+
+    def refresh_marks(self, marked_paths: Set[str], keep_paths: Set[str] | None = None) -> None:
+        kp = set(keep_paths) if keep_paths is not None else set(self._last_keep_paths)
+        if keep_paths is not None:
+            self._last_keep_paths = kp
         for key, cb in self._mark_checkboxes.items():
             cb.value = key in marked_paths
             self._safe_update(cb)
+        for key, lbl in self._status_badge_labels.items():
+            self._sync_badge_label(key, lbl, marked_paths, kp)
 
-    def refresh(self, files: List[DuplicateFile], marked_paths: Set[str]) -> None:
+    def refresh(
+        self,
+        files: List[DuplicateFile],
+        marked_paths: Set[str],
+        keep_paths: Set[str] | None = None,
+    ) -> None:
         _t0 = time.perf_counter()
+        self.clear_tile_caches()
         self._last_files = list(files)
         self._last_marked = set(marked_paths)
+        kp = set(keep_paths) if keep_paths is not None else set()
+        self._last_keep_paths = kp
         self.bump_thumb_generation()
         load_gen = self._thumb_load_generation
         n = len(files)
         if n <= _GRID_BUILD_ASYNC_THRESHOLD:
-            self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths) for f in files]
+            self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths, kp) for f in files]
             self.set_rendering(False)
             self._safe_update(self._grid)
             page = self._bridge.flet_page
@@ -298,7 +328,7 @@ class ReviewGridView(ft.Stack):
         head_n = min(_GRID_FIRST_SYNC_FILES, n)
         head = files[:head_n]
         tail = files[head_n:]
-        self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths) for f in head]
+        self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths, kp) for f in head]
         self._safe_update(self._grid)
         try:
             self._grid.update()
@@ -306,9 +336,9 @@ class ReviewGridView(ft.Stack):
             pass
         page = self._bridge.flet_page
         if tail and hasattr(page, "run_task"):
-            page.run_task(self._append_grid_tiles_async, tail, gen, list(files), marked_paths)
+            page.run_task(self._append_grid_tiles_async, tail, gen, list(files), marked_paths, kp)
         elif tail:
-            self._grid.controls.extend([self._tile_for_file_placeholder(f, marked_paths) for f in tail])
+            self._grid.controls.extend([self._tile_for_file_placeholder(f, marked_paths, kp) for f in tail])
             self._safe_update(self._grid)
             self.set_rendering(False)
             if files and hasattr(page, "run_task"):
@@ -321,13 +351,16 @@ class ReviewGridView(ft.Stack):
         gen: int,
         all_files: List[DuplicateFile],
         marked_paths: Set[str],
+        keep_paths: Set[str],
     ) -> None:
         for i in range(0, len(tail), _GRID_ASYNC_BATCH):
             if gen != self._grid_build_generation:
                 self.set_rendering(False)
                 return
             chunk = tail[i : i + _GRID_ASYNC_BATCH]
-            self._grid.controls.extend([self._tile_for_file_placeholder(f, marked_paths) for f in chunk])
+            self._grid.controls.extend(
+                [self._tile_for_file_placeholder(f, marked_paths, keep_paths) for f in chunk]
+            )
             try:
                 self._grid.update()
             except Exception:
@@ -366,7 +399,12 @@ class ReviewGridView(ft.Stack):
             opacity=0,
         )
 
-    def _tile_for_file_placeholder(self, f: DuplicateFile, marked_paths: Set[str]) -> ft.Container:
+    def _tile_for_file_placeholder(
+        self,
+        f: DuplicateFile,
+        marked_paths: Set[str],
+        keep_paths: Set[str],
+    ) -> ft.Container:
         t = self._t
         p = Path(str(f.path))
         key = str(getattr(f, "path", ""))
@@ -385,6 +423,17 @@ class ReviewGridView(ft.Stack):
         )
         self._mark_checkboxes[key] = cb
 
+        badge_txt = ft.Text(size=9, weight=ft.FontWeight.W_800)
+        self._status_badge_labels[key] = badge_txt
+        self._sync_badge_label(key, badge_txt, marked_paths, keep_paths)
+        badge = ft.Container(
+            content=badge_txt,
+            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, RC.grid_badge_text)),
+            border_radius=4,
+        )
+
         stack = ft.Stack(
             [
                 thumb_slot,
@@ -393,6 +442,11 @@ class ReviewGridView(ft.Stack):
                     alignment=ft.Alignment(-1, -1),
                     padding=ft.padding.only(left=6, top=6),
                     content=cb,
+                ),
+                ft.Container(
+                    alignment=ft.Alignment(1, -1),
+                    padding=ft.padding.only(right=6, top=6),
+                    content=badge,
                 ),
             ],
             expand=True,
