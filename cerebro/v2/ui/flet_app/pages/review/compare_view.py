@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import time
 from pathlib import Path
@@ -138,15 +139,65 @@ class ReviewCompareView:
         )
 
     def _build_ab_row_container(self, t: ThemeTokens) -> ft.Container:
-        return ft.Container(
+        # File pair selector — chips for each file in group; visible only for 3+ file groups.
+        self._file_selector_row = ft.Row(
+            [],
+            spacing=6,
+            scroll=ft.ScrollMode.AUTO,
+            wrap=False,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self._file_selector_container = ft.Container(
+            content=self._file_selector_row,
+            padding=ft.padding.symmetric(vertical=6, horizontal=4),
+            visible=False,
+            border=ft.border.only(
+                bottom=ft.BorderSide(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE))
+            ),
+        )
+
+        ab_row = ft.Row(
+            [
+                self._compare_panel_a,
+                ft.Container(
+                    content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
+                    padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                ),
+                self._compare_panel_b,
+            ],
+            expand=True,
+            spacing=0,
+        )
+
+        # Metadata diff strip — side-by-side key attributes for A and B.
+        self._meta_col_a = ft.Column([], spacing=3, expand=True)
+        self._meta_col_b = ft.Column([], spacing=3, expand=True)
+        self._metadata_strip = ft.Container(
             content=ft.Row(
                 [
-                    self._compare_panel_a,
+                    self._meta_col_a,
                     ft.Container(
-                        content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
-                        padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                        width=1,
+                        bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
+                        margin=ft.margin.symmetric(horizontal=8),
                     ),
-                    self._compare_panel_b,
+                    self._meta_col_b,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.padding.symmetric(vertical=8, horizontal=8),
+            border=ft.border.only(
+                top=ft.BorderSide(1, ft.Colors.with_opacity(0.08, ft.Colors.WHITE))
+            ),
+            visible=False,
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    self._file_selector_container,
+                    ft.Container(content=ab_row, expand=True),
+                    self._metadata_strip,
                 ],
                 expand=True,
                 spacing=0,
@@ -244,8 +295,122 @@ class ReviewCompareView:
         self.apply_compare_panel_tints()
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
+        self._refresh_file_selector()
+        self._refresh_metadata_strip()
         self.update_progress_and_marked_bar()
         self._log_if_slow("review:compare_panel_update", _t0)
+
+    def _refresh_file_selector(self) -> None:
+        gid = self._del.compare_gid
+        files = self._del.group_files.get(gid, []) if gid is not None else []
+        if len(files) > 2:
+            self._file_selector_row.controls = self._build_file_chips(
+                files, self._del.compare_a, self._del.compare_b
+            )
+            self._file_selector_container.visible = True
+        else:
+            self._file_selector_container.visible = False
+        self._safe_update(self._file_selector_container)
+
+    def _build_file_chips(
+        self,
+        files: List[DuplicateFile],
+        a: Optional[DuplicateFile],
+        b: Optional[DuplicateFile],
+    ) -> List[ft.Control]:
+        t = self._t
+        chips: List[ft.Control] = [
+            ft.Text(
+                "Pair:",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                weight=ft.FontWeight.W_600,
+            )
+        ]
+        for f in files:
+            p = Path(str(f.path))
+            is_a = a is not None and str(f.path) == str(a.path)
+            is_b = b is not None and str(f.path) == str(b.path)
+            accent = RC.side_a if is_a else (RC.side_b if is_b else t.colors.fg_muted)
+            bg = (
+                ft.Colors.with_opacity(0.14, RC.side_a)
+                if is_a
+                else (ft.Colors.with_opacity(0.14, RC.side_b) if is_b else ft.Colors.with_opacity(0.05, ft.Colors.WHITE))
+            )
+            border_color = accent if (is_a or is_b) else ft.Colors.with_opacity(0.15, ft.Colors.WHITE)
+            side_lbl = "A" if is_a else ("B" if is_b else "")
+            name_short = p.name[:20] + ("…" if len(p.name) > 20 else "")
+
+            row_controls: List[ft.Control] = [
+                ft.Text(name_short, size=10, color=accent if (is_a or is_b) else t.colors.fg, weight=ft.FontWeight.W_600 if (is_a or is_b) else ft.FontWeight.W_400),
+                ft.Text(fmt_size(f.size), size=9, color=t.colors.fg_muted),
+            ]
+            if side_lbl:
+                row_controls.append(
+                    ft.Container(
+                        content=ft.Text(side_lbl, size=8, weight=ft.FontWeight.W_800, color=accent),
+                        bgcolor=ft.Colors.with_opacity(0.18, accent),
+                        border_radius=3,
+                        padding=ft.padding.symmetric(horizontal=4, vertical=1),
+                    )
+                )
+
+            def _make_click(file: DuplicateFile):
+                return lambda e: self._del.set_compare_a(file)
+
+            chips.append(
+                ft.Container(
+                    content=ft.Row(row_controls, spacing=4, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    bgcolor=bg,
+                    border=ft.border.all(1, border_color),
+                    border_radius=6,
+                    padding=ft.padding.symmetric(horizontal=8, vertical=5),
+                    ink=True,
+                    on_click=_make_click(f),
+                    tooltip=f"Set as Side A: {p.name}",
+                )
+            )
+        return chips
+
+    def _refresh_metadata_strip(self) -> None:
+        a, b = self._del.compare_a, self._del.compare_b
+        if a is None and b is None:
+            self._metadata_strip.visible = False
+            self._safe_update(self._metadata_strip)
+            return
+        self._meta_col_a.controls = self._build_meta_col_controls(a, RC.side_a)
+        self._meta_col_b.controls = self._build_meta_col_controls(b, RC.side_b)
+        self._metadata_strip.visible = True
+        self._safe_update(self._metadata_strip)
+
+    def _build_meta_col_controls(self, f: Optional[DuplicateFile], accent: str) -> List[ft.Control]:
+        t = self._t
+        if f is None:
+            return [ft.Text("—", size=9, color=t.colors.fg_muted)]
+        try:
+            dt = datetime.datetime.fromtimestamp(float(f.modified))
+            date_str = dt.strftime("%b %d, %Y")
+        except Exception:
+            date_str = "—"
+        sim = float(getattr(f, "similarity", 1.0))
+        sim_str = f"{int(sim * 100)}% match" if sim < 1.0 else "Exact"
+        p = Path(str(f.path))
+        rows = [
+            ("Size", fmt_size(f.size)),
+            ("Modified", date_str),
+            ("Type", f.extension or p.suffix or "—"),
+            ("Match", sim_str),
+        ]
+        return [
+            ft.Row(
+                [
+                    ft.Text(lbl, size=9, color=t.colors.fg_muted, width=52),
+                    ft.Text(val, size=9, color=accent, weight=ft.FontWeight.W_600),
+                ],
+                spacing=4,
+            )
+            for lbl, val in rows
+        ]
 
     def apply_compare_panel_tints(self) -> None:
         self._compare_panel_a.bgcolor = ft.Colors.with_opacity(0.10, RC.side_a)

@@ -22,6 +22,7 @@ class ReviewCompareDelegate(Protocol):
     def prev_group(self, e: ft.ControlEvent | None = None) -> None: ...
     def next_group(self, e: ft.ControlEvent | None = None) -> None: ...
     def enter_compare(self, gid: int) -> None: ...
+    def set_compare_a(self, file: DuplicateFile) -> None: ...
     def toggle_mark_file(self, file: DuplicateFile) -> None: ...
 
     @property
@@ -77,6 +78,11 @@ class ReviewCompareDelegateAdapter:
 
     def enter_compare(self, gid: int) -> None:
         self._page._enter_compare(gid)
+
+    def set_compare_a(self, file: DuplicateFile) -> None:
+        gid = self._page._compare_gid
+        if gid is not None:
+            self._page._enter_compare(gid, preferred_a=file)
 
     def toggle_mark_file(self, file: DuplicateFile) -> None:
         self._page._toggle_mark_file(file)
