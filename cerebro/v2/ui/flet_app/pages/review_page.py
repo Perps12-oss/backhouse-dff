@@ -18,7 +18,9 @@ from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.deletion_dialog import build_confirm_dialog
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FilterBar, _FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
+from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
+from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
@@ -237,7 +239,7 @@ class ReviewPage(ft.Column):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-        self._compare_ui = ReviewCompareView(self, self._bridge, t)
+        self._compare_ui = ReviewCompareView(ReviewCompareDelegateAdapter(self), self._bridge, t)
         self._cmp_bar = self._compare_ui.cmp_bar
         self._compare_view = self._compare_ui.body
 
@@ -746,102 +748,88 @@ class ReviewPage(ft.Column):
         self._show_smart_delete_dialog(to_delete)
 
     def _show_smart_delete_dialog(self, paths: List[str]) -> None:
-        def _confirmed(policy: DeletionPolicy) -> None:
-            self._bridge.dismiss_top_dialog()
-            self._execute_smart_delete(paths, policy)
-
-        self._bridge.show_modal_dialog(
-            build_confirm_dialog(
-                f"{len(paths):,} file(s) according to the selected rule",
-                _confirmed,
-                self._bridge.dismiss_top_dialog,
-                self._t,
-            )
+        show_smart_delete_paths_dialog(
+            self._bridge,
+            self._t,
+            paths,
+            lambda policy: self._execute_smart_delete(paths, policy),
         )
+
+    def _on_smart_delete_complete(
+        self,
+        paths: List[str],
+        policy: DeletionPolicy,
+        new_groups: List[DuplicateGroup],
+        deleted: int,
+        failed: int,
+        bytes_reclaimed: int,
+        err: Exception | None,
+    ) -> None:
+        if err is not None:
+            self._bridge.show_snackbar(f"Deletion failed: {err}", error=True)
+            return
+        self._groups = list(new_groups)
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._rebuild_group_index()
+        self._rebuild_filter_index()
+        for p in paths:
+            self._marked_paths.discard(str(p))
+        self._recompute_marked_bytes()
+        self._bridge.coordinator.results_groups_pruned(self._groups)
+        # GroupsPruned clears ``selected_files`` in the reducer; push surviving marks back.
+        self._push_marked_paths_to_store()
+        if deleted > 0:
+            if policy == DeletionPolicy.TRASH:
+                self._bridge.show_snackbar(
+                    f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                    action_label="Undo",
+                    on_action=lambda _e: self._undo_last_trash_delete(),
+                )
+            else:
+                self._bridge.show_snackbar(
+                    f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                )
+        if failed > 0:
+            self._bridge.show_snackbar(
+                f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
+                error=True,
+            )
+        if not self._groups:
+            self._enter_mode("empty")
+        else:
+            if self._mode == "compare":
+                gid = self._compare_gid
+                if gid is None or gid not in self._group_files:
+                    gid = self._groups[0].group_id
+                self._enter_compare(gid)
+            else:
+                self._refresh_grid()
 
     def _execute_smart_delete(self, paths: List[str], policy: DeletionPolicy) -> None:
         if not paths:
             return
-        service = self._delete_service
-        progress_text = ft.Text("Preparing deletion...", size=self._t.typography.size_sm)
-        progress_bar = ft.ProgressBar(value=0)
-        progress_dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Deleting files"),
-            content=ft.Column([progress_text, progress_bar], tight=True, spacing=10),
-        )
-        self._bridge.show_modal_dialog(progress_dialog)
-        page = self._bridge.flet_page
+        paths_copy = list(paths)
 
-        def _ui_progress(done: int, total: int, name: str) -> None:
-            t = max(1, int(total or 1))
-            progress_bar.value = min(1.0, done / t)
-            progress_text.value = f"{done:,}/{t:,} processed · {name}"
-            ReviewPage._safe_update(progress_bar)
-            ReviewPage._safe_update(progress_text)
+        def _on_complete(
+            new_groups: List[DuplicateGroup],
+            deleted: int,
+            failed: int,
+            bytes_reclaimed: int,
+            err: Exception | None,
+        ) -> None:
+            self._on_smart_delete_complete(paths_copy, policy, new_groups, deleted, failed, bytes_reclaimed, err)
 
-        def _ui_done(new_groups, deleted: int, failed: int, bytes_reclaimed: int, err: Exception | None) -> None:
-            self._bridge.dismiss_top_dialog()
-            if err is not None:
-                self._bridge.show_snackbar(f"Deletion failed: {err}", error=True)
-                return
-            self._groups = list(new_groups)
-            self._group_files = {g.group_id: list(g.files) for g in self._groups}
-            self._rebuild_group_index()
-            self._rebuild_filter_index()
-            for p in paths:
-                self._marked_paths.discard(str(p))
-            self._recompute_marked_bytes()
-            self._bridge.coordinator.results_groups_pruned(self._groups)
-            # GroupsPruned clears ``selected_files`` in the reducer; push surviving marks back.
-            self._push_marked_paths_to_store()
-            if deleted > 0:
-                if policy == DeletionPolicy.TRASH:
-                    self._bridge.show_snackbar(
-                        f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
-                        success=True,
-                        action_label="Undo",
-                        on_action=lambda _e: self._undo_last_trash_delete(),
-                    )
-                else:
-                    self._bridge.show_snackbar(
-                        f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
-                        success=True,
-                    )
-            if failed > 0:
-                self._bridge.show_snackbar(
-                    f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
-                    error=True,
-                )
-            if not self._groups:
-                self._enter_mode("empty")
-            else:
-                if self._mode == "compare":
-                    gid = self._compare_gid
-                    if gid is None or gid not in self._group_files:
-                        gid = self._groups[0].group_id
-                    self._enter_compare(gid)
-                else:
-                    self._refresh_grid()
-
-        def _progress(done: int, total: int, name: str) -> None:
-            if hasattr(page, "run_thread"):
-                page.run_thread(_ui_progress, done, total, name)
-            else:
-                _ui_progress(done, total, name)
-
-        def _done(new_groups, deleted: int, failed: int, bytes_reclaimed: int, err: Exception | None) -> None:
-            if hasattr(page, "run_thread"):
-                page.run_thread(_ui_done, new_groups, deleted, failed, bytes_reclaimed, err)
-            else:
-                _ui_done(new_groups, deleted, failed, bytes_reclaimed, err)
-
-        service.delete_and_prune_async(
+        run_delete_with_progress(
+            service=self._delete_service,
+            bridge=self._bridge,
+            t=self._t,
             paths=paths,
-            groups=self._groups,
             policy=policy,
-            progress_callback=_progress,
-            done_callback=_done,
+            groups=self._groups,
+            safe_update=ReviewPage._safe_update,
+            on_complete=_on_complete,
         )
 
     # ------------------------------------------------------------------
@@ -910,7 +898,10 @@ class ReviewPage(ft.Column):
             self._marked_paths.add(fp)
             self._marked_bytes += size
         self._push_marked_paths_to_store()
-        self._compare_ui.update_compare_panels()
+        if self._mode == "grid":
+            self._grid_view.refresh_marks(self._marked_paths)
+        elif self._mode == "compare":
+            self._compare_ui.update_compare_panels()
 
     def _refresh_group_list_panel(self) -> None:
         self._compare_ui.refresh_group_list_panel()

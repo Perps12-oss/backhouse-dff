@@ -7,12 +7,13 @@ import datetime
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegate
 from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
@@ -46,8 +47,8 @@ def _file_mtime_ts(f: DuplicateFile) -> float:
 class ReviewCompareView:
     """Compare UI: top ``cmp_bar`` plus scrollable body (group list + A/B)."""
 
-    def __init__(self, coord: Any, bridge: "StateBridge", t: ThemeTokens) -> None:
-        self._coord = coord
+    def __init__(self, delegate: ReviewCompareDelegate, bridge: "StateBridge", t: ThemeTokens) -> None:
+        self._del = delegate
         self._bridge = bridge
         self._t = t
         self._compare_render_generation = 0
@@ -58,7 +59,7 @@ class ReviewCompareView:
         self.cmp_smart_seg = ft.SegmentedButton(
             selected=["keep_largest"],
             allow_multiple_selection=False,
-            on_change=self._coord._on_cmp_smart_seg_change,
+            on_change=self._del.on_cmp_smart_seg_change,
             segments=[
                 ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
                 for val, label in RULE_LABELS
@@ -67,21 +68,21 @@ class ReviewCompareView:
         self._delete_btn = ft.OutlinedButton(
             "Delete side B",
             icon=ft.icons.Icons.DELETE_OUTLINE,
-            on_click=lambda e: self._coord._delete_compare_side("b"),
+            on_click=lambda e: self._del.delete_compare_side("b"),
             style=pill_outlined_button_style(t, danger=True),
             tooltip="After confirmation, removes the right-hand file (side B).",
         )
         self._keep_btn = ft.OutlinedButton(
             "Keep side A",
             icon=ft.icons.Icons.CHECK,
-            on_click=lambda e: self._coord._delete_compare_side("a"),
+            on_click=lambda e: self._del.delete_compare_side("a"),
             style=pill_outlined_button_style(t, success=True),
             tooltip="After confirmation, removes the left-hand file (side A).",
         )
         self._cmp_apply_rule_btn = ft.FilledButton(
             "Mark by rule",
             icon=ft.icons.Icons.FLAG,
-            on_click=self._coord._on_cmp_apply_rule_click,
+            on_click=self._del.on_cmp_apply_rule_click,
             style=pill_filled_accent(
                 t,
                 padding=ft.padding.symmetric(horizontal=12, vertical=8),
@@ -90,11 +91,11 @@ class ReviewCompareView:
             ),
             tooltip="Uses the selected smart rule to mark extras in this group for deletion (checkboxes).",
         )
-        self._btn_cmp_grid = ft.TextButton("← Grid", on_click=self._coord._to_grid, style=pill_text_button_style(t))
-        self._btn_cmp_prev = ft.TextButton("← Prev", on_click=self._coord._prev_group, style=pill_text_button_style(t))
+        self._btn_cmp_grid = ft.TextButton("← Grid", on_click=self._del.to_grid, style=pill_text_button_style(t))
+        self._btn_cmp_prev = ft.TextButton("← Prev", on_click=self._del.prev_group, style=pill_text_button_style(t))
         self._btn_cmp_next = ft.TextButton(
             "Next →",
-            on_click=self._coord._next_group,
+            on_click=self._del.next_group,
             style=pill_text_button_style(t, variant="primary"),
         )
         self.cmp_bar = ft.Container(
@@ -133,7 +134,7 @@ class ReviewCompareView:
             ),
             visible=False,
             padding=t.spacing.sm,
-            **self._coord._get_glass_style(0.04),
+            **self._del.get_glass_style(0.04),
         )
 
         self._group_list = GroupListPanel(t)
@@ -154,10 +155,10 @@ class ReviewCompareView:
                 spacing=t.spacing.xs,
                 expand=True,
             ),
-            **self._coord._get_glass_style(0.04),
+            **self._del.get_glass_style(0.04),
         )
-        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._coord._get_glass_style(0.04))
-        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._coord._get_glass_style(0.04))
+        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
+        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
         right_view = ft.Container(
             content=ft.Row(
                 [
@@ -182,12 +183,12 @@ class ReviewCompareView:
         self._marked_lbl = ft.Text("", size=t.typography.size_sm, color="#FCA5A5")
         self._marked_delete_b_btn = ft.FilledButton(
             "Delete side B",
-            on_click=lambda _e: self._coord._delete_compare_side("b"),
+            on_click=lambda _e: self._del.delete_compare_side("b"),
             style=pill_filled_danger(t),
         )
         self._marked_delete_marked_btn = ft.OutlinedButton(
             "Delete marked files",
-            on_click=self._coord._delete_marked_files,
+            on_click=self._del.delete_marked_files,
             style=pill_outlined_button_style(t, danger=True),
             tooltip="Deletes every file you marked for removal (separate from side B).",
         )
@@ -269,15 +270,15 @@ class ReviewCompareView:
         self._progress_bar.bgcolor = ft.Colors.with_opacity(0.14, t.colors.border)
 
     def apply_cmp_bar_glass(self) -> None:
-        g = self._coord._get_glass_style(0.04)
+        g = self._del.get_glass_style(0.04)
         self.cmp_bar.bgcolor = g.get("bgcolor")
         self.cmp_bar.border = g.get("border")
 
     def refresh_group_list_panel(self) -> None:
         self._group_list.refresh(
-            groups=self._coord._groups,
-            compare_gid=self._coord._compare_gid,
-            on_pick=self._coord._enter_compare,
+            groups=self._del.groups,
+            compare_gid=self._del.compare_gid,
+            on_pick=self._del.enter_compare,
             safe_update=ReviewCompareView._safe_update,
         )
 
@@ -287,8 +288,8 @@ class ReviewCompareView:
         gen = self._compare_render_generation
         self._compare_thumb_slots.clear()
         self._compare_dims_labels.clear()
-        self._compare_panel_a.content = self._build_compare_side(self._coord._compare_a, "A", gen)
-        self._compare_panel_b.content = self._build_compare_side(self._coord._compare_b, "B", gen)
+        self._compare_panel_a.content = self._build_compare_side(self._del.compare_a, "A", gen)
+        self._compare_panel_b.content = self._build_compare_side(self._del.compare_b, "B", gen)
         self.apply_compare_panel_tints()
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
@@ -302,22 +303,22 @@ class ReviewCompareView:
         self._compare_panel_b.border = ft.border.all(1, ft.Colors.with_opacity(0.38, RC.side_b))
 
     def reset_compare_panels_idle_chrome(self) -> None:
-        g = self._coord._get_glass_style(0.04)
+        g = self._del.get_glass_style(0.04)
         self._compare_panel_a.bgcolor = g.get("bgcolor")
         self._compare_panel_a.border = g.get("border")
         self._compare_panel_b.bgcolor = g.get("bgcolor")
         self._compare_panel_b.border = g.get("border")
 
     def update_compare_chrome(self) -> None:
-        gid = self._coord._compare_gid
+        gid = self._del.compare_gid
         if gid is None:
             return
-        idx = next((i for i, g in enumerate(self._coord._groups) if g.group_id == gid), 0)
-        total = len(self._coord._groups)
-        count = len(self._coord._group_files.get(gid, []))
-        name_a = Path(str(getattr(self._coord._compare_a, "path", ""))).name if self._coord._compare_a else "(A)"
-        name_b = Path(str(getattr(self._coord._compare_b, "path", ""))).name if self._coord._compare_b else "(no peer)"
-        g = self._coord._groups[idx] if 0 <= idx < len(self._coord._groups) else None
+        idx = next((i for i, g in enumerate(self._del.groups) if g.group_id == gid), 0)
+        total = len(self._del.groups)
+        count = len(self._del.group_files.get(gid, []))
+        name_a = Path(str(getattr(self._del.compare_a, "path", ""))).name if self._del.compare_a else "(A)"
+        name_b = Path(str(getattr(self._del.compare_b, "path", ""))).name if self._del.compare_b else "(no peer)"
+        g = self._del.groups[idx] if 0 <= idx < len(self._del.groups) else None
         sim_note = ""
         if g is not None:
             sim = (getattr(g, "similarity_type", None) or "exact").lower()
@@ -329,22 +330,22 @@ class ReviewCompareView:
         self._safe_update(self._cmp_title)
 
     def update_progress_and_marked_bar(self) -> None:
-        reviewed = len(self._coord._reviewed_group_ids)
-        total = max(1, len(self._coord._groups))
+        reviewed = len(self._del.reviewed_group_ids)
+        total = max(1, len(self._del.groups))
         self._progress_bar.value = min(1.0, reviewed / total)
-        marked_bytes = self._coord._marked_bytes
-        remaining = max(0, sum(g.reclaimable for g in self._coord._groups) - marked_bytes)
+        marked_bytes = self._del.marked_bytes
+        remaining = max(0, sum(g.reclaimable for g in self._del.groups) - marked_bytes)
         self._progress_lbl.value = (
-            f"{reviewed} of {len(self._coord._groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
+            f"{reviewed} of {len(self._del.groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
         )
-        if self._coord._mode == "compare":
+        if self._del.mode == "compare":
             self._marked_lbl.value = (
-                f"{fmt_size(marked_bytes)} marked for removal across {len(self._coord._marked_paths)} file(s). "
+                f"{fmt_size(marked_bytes)} marked for removal across {len(self._del.marked_paths)} file(s). "
                 "Use Keep side A / Delete side B for one-off deletes, or clear marks with each file's checkbox."
             )
         else:
-            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked for removal across {len(self._coord._marked_paths)} file(s)"
-        self._marked_bar.visible = bool(self._coord._marked_paths) or self._coord._mode == "compare"
+            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked for removal across {len(self._del.marked_paths)} file(s)"
+        self._marked_bar.visible = bool(self._del.marked_paths) or self._del.mode == "compare"
         self._safe_update(self._progress_bar)
         self._safe_update(self._progress_lbl)
         self._safe_update(self._marked_lbl)
@@ -371,7 +372,7 @@ class ReviewCompareView:
                 expand=True,
             )
         p = Path(str(f.path))
-        marked = str(f.path) in self._coord._marked_paths
+        marked = str(f.path) in self._del.marked_paths
         name = p.name
         thumb_slot = ft.Container(
             content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
@@ -451,12 +452,12 @@ class ReviewCompareView:
         head: list[ft.Control] = [label_badge]
         if (
             label == "A"
-            and self._coord._compare_a
-            and self._coord._compare_b
-            and self._coord._compare_a.size == self._coord._compare_b.size
-            and Path(str(self._coord._compare_a.path)).name == Path(str(self._coord._compare_b.path)).name
+            and self._del.compare_a
+            and self._del.compare_b
+            and self._del.compare_a.size == self._del.compare_b.size
+            and Path(str(self._del.compare_a.path)).name == Path(str(self._del.compare_b.path)).name
         ):
-            grp = next((g for g in self._coord._groups if g.group_id == self._coord._compare_gid), None)
+            grp = next((g for g in self._del.groups if g.group_id == self._del.compare_gid), None)
             if grp is not None and (getattr(grp, "similarity_type", None) or "exact").lower() == "exact":
                 head.append(
                     ft.Container(
@@ -481,7 +482,7 @@ class ReviewCompareView:
                     label="Mark for deletion",
                     value=marked,
                     active_color=RC.danger,
-                    on_change=lambda e, file=f: self._coord._toggle_mark_file(file),
+                    on_change=lambda e, file=f: self._del.toggle_mark_file(file),
                 ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
