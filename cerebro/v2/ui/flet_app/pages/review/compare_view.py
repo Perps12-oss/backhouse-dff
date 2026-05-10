@@ -192,18 +192,16 @@ class ReviewCompareView:
             visible=False,
         )
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    self._file_selector_container,
-                    ft.Container(content=ab_row, expand=True),
-                    self._metadata_strip,
-                ],
-                expand=True,
-                spacing=0,
-            ),
+        self._right_column = ft.Column(
+            [
+                self._file_selector_container,
+                ft.Container(content=ab_row, expand=True),
+                self._metadata_strip,
+            ],
             expand=True,
+            spacing=0,
         )
+        return ft.Container(content=self._right_column, expand=True)
 
     def _init_progress_and_marked_strip(self, t: ThemeTokens) -> None:
         self._progress_bar = ft.ProgressBar(
@@ -311,6 +309,7 @@ class ReviewCompareView:
         else:
             self._file_selector_container.visible = False
         self._safe_update(self._file_selector_container)
+        self._safe_update(self._right_column)
 
     def _build_file_chips(
         self,
@@ -377,11 +376,13 @@ class ReviewCompareView:
         if a is None and b is None:
             self._metadata_strip.visible = False
             self._safe_update(self._metadata_strip)
+            self._safe_update(self._right_column)
             return
         self._meta_col_a.controls = self._build_meta_col_controls(a, RC.side_a)
         self._meta_col_b.controls = self._build_meta_col_controls(b, RC.side_b)
         self._metadata_strip.visible = True
         self._safe_update(self._metadata_strip)
+        self._safe_update(self._right_column)
 
     def _build_meta_col_controls(self, f: Optional[DuplicateFile], accent: str) -> List[ft.Control]:
         t = self._t
