@@ -433,18 +433,7 @@ class ReviewCompareView:
         )
 
     async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
-        loop = asyncio.get_event_loop()
-
-        def _dims_tooltip() -> str:
-            if not is_image_path(p):
-                return ""
-            try:
-                from PIL import Image
-
-                with Image.open(p) as img:
-                    return f"{img.width} × {img.height}px"
-            except Exception:
-                return ""
+        loop = asyncio.get_running_loop()
 
         b64 = None
         if is_image_path(p):
@@ -454,34 +443,48 @@ class ReviewCompareView:
                 )
             except Exception:
                 b64 = None
+
+        if not b64:
+            return  # non-image or failed decode — placeholder stays, no dims needed
+
+        def _dims_tooltip() -> str:
+            try:
+                from PIL import Image
+                with Image.open(p) as img:
+                    return f"{img.width} × {img.height}px"
+            except Exception:
+                return ""
+
         dims_tip = await loop.run_in_executor(None, _dims_tooltip)
 
         if gen != self._compare_render_generation:
             return
         slot = self._compare_thumb_slots.get(key)
-        if slot is None or not b64:
+        if slot is None:
             return
         tip = f"Pinch or scroll to zoom. Image size: {dims_tip}" if dims_tip else "Pinch or scroll to zoom"
         img = ft.Image(
             src=f"data:image/jpeg;base64,{b64}",
             expand=True,
-            fit=ft.BoxFit.COVER,
+            fit=ft.BoxFit.CONTAIN,
             filter_quality=ft.FilterQuality.HIGH,
             border_radius=8,
             cache_width=1600,
             cache_height=1200,
             tooltip=tip,
         )
-        viewer = ft.InteractiveViewer(
+        slot.content = ft.Container(
             content=img,
-            min_scale=0.85,
-            max_scale=3.5,
-            boundary_margin=ft.margin.all(20),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
             expand=True,
+            alignment=ft.Alignment.CENTER,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
-        slot.content = viewer
-        self._safe_update(slot)
+        # Update the mounted parent panel, not just the slot. slot.page may be
+        # None if Flet hasn't propagated the page ref to newly-constructed content
+        # children yet — _safe_update(slot) would silently no-op in that case.
+        # The parent panels are guaranteed mounted before run_task is scheduled.
+        panel = self._compare_panel_a if key.startswith("A:") else self._compare_panel_b
+        self._safe_update(panel)
 
     # --- Pill targets (ReviewPageChromeMixin._apply_pill_chrome) ---
     # Bisect/partial checkout: do not pair this file with an older review_mixins that
