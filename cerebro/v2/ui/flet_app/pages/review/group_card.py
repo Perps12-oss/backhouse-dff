@@ -166,8 +166,9 @@ class GroupCardWidget(ft.Container):
             expand=True,
         )
 
+        self._hover_bg_color = ft.Colors.with_opacity(0.04, ft.Colors.WHITE)
         # Main clickable area: icon + text. Expand button is a sibling (not inside) so clicks don't bubble.
-        clickable_area = ft.Container(
+        self._clickable_area = ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(ft.icons.Icons.LAYERS_OUTLINED, size=18, color=stripe),
@@ -178,8 +179,13 @@ class GroupCardWidget(ft.Container):
             ),
             expand=True,
             ink=True,
+            bgcolor=ft.Colors.TRANSPARENT,
+            border_radius=6,
+            animate=ft.Animation(100, ft.AnimationCurve.EASE_IN_OUT),
             on_click=self._on_header_click,
+            on_hover=self._on_card_hover,
         )
+        clickable_area = self._clickable_area
 
         header_row = ft.Row(
             [clickable_area, expand_btn],
@@ -278,6 +284,16 @@ class GroupCardWidget(ft.Container):
             rows.append(row)
 
         self._expanded_col.controls = rows
+
+    def _on_card_hover(self, e: ft.ControlEvent) -> None:
+        self._clickable_area.bgcolor = (
+            self._hover_bg_color if e.data == "true" else ft.Colors.TRANSPARENT
+        )
+        try:
+            if self._clickable_area.page is not None:
+                self._clickable_area.update()
+        except RuntimeError:
+            pass
 
     def _on_header_click(self, e: ft.ControlEvent) -> None:
         if self._on_inspector_select:

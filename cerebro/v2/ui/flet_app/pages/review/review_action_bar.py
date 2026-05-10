@@ -42,6 +42,8 @@ class ReviewActionBar(ft.Container):
 
         super().__init__(
             visible=False,
+            opacity=0.0,
+            animate_opacity=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
             bgcolor=bg,
             border=ft.border.only(top=ft.BorderSide(1, edge)),
             padding=ft.padding.symmetric(horizontal=16, vertical=10),
@@ -74,12 +76,15 @@ class ReviewActionBar(ft.Container):
             pass
 
     def refresh(self, mode: str, marked_n: int, marked_bytes: int, trust_line: str) -> None:
-        if mode in ("empty", "loading", "compare") or marked_n <= 0:
-            self.visible = False
-        else:
+        should_show = mode not in ("empty", "loading", "compare") and marked_n > 0
+        if should_show:
             self.visible = True
+            self.opacity = 1.0
             self._summary.value = f"{marked_n:,} file(s) marked · {fmt_size(marked_bytes)}"
             self._trust.value = trust_line
+        else:
+            self.opacity = 0.0
+            self.visible = False
         self._apply_btn.disabled = marked_n <= 0 or mode in ("empty", "loading", "compare")
         ReviewActionBar._safe_update(self._summary)
         ReviewActionBar._safe_update(self._trust)

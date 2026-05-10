@@ -272,11 +272,15 @@ class ReviewPageGroupsGridMixin:
         if group:
             self._selected_group_id = group.group_id
             self._inspector_panel.show_file(f, self._smart_rule, group, self._marked_paths)
-        gid = next(
-            (g.group_id for g in self._groups if any(str(fi.path) == str(f.path) for fi in g.files)), None
-        )
-        if gid is not None:
-            self._enter_compare(gid)
+            self._enter_compare(group.group_id, preferred_a=f)
+
+    def _on_inspector_compare_file(self, f: DuplicateFile) -> None:
+        """Called from the inspector 'Compare in context →' button."""
+        self._selected_file = f
+        group = next((g for g in self._groups if any(str(fi.path) == str(f.path) for fi in g.files)), None)
+        if group:
+            self._selected_group_id = group.group_id
+            self._enter_compare(group.group_id, preferred_a=f)
 
     def _keep_paths_for_current_filter(self) -> Set[str]:
         """Paths the active smart rule would keep (one per multi-file group in filter)."""
@@ -598,7 +602,7 @@ class ReviewPageSmartMixin:
 class ReviewPageCompareNavMixin:
     """Compare navigation; slow-path logging uses ``ReviewPage._log_if_slow`` on the concrete class."""
 
-    def _enter_compare(self, gid: int) -> None:
+    def _enter_compare(self, gid: int, *, preferred_a: Optional[DuplicateFile] = None) -> None:
         _t0 = time.perf_counter()
         if self._compare_nav_in_flight:
             return
@@ -612,8 +616,14 @@ class ReviewPageCompareNavMixin:
             if self._compare_gid is not None:
                 self._reviewed_group_ids.add(self._compare_gid)
             self._compare_gid = gid
-            self._compare_a = files[0]
-            self._compare_b = files[1] if len(files) > 1 else None
+            if preferred_a is not None and any(f is preferred_a or str(f.path) == str(preferred_a.path) for f in files):
+                a = next(f for f in files if f is preferred_a or str(f.path) == str(preferred_a.path))
+                others = [f for f in files if f is not a]
+                self._compare_a = a
+                self._compare_b = others[0] if others else None
+            else:
+                self._compare_a = files[0]
+                self._compare_b = files[1] if len(files) > 1 else None
             self._enter_mode("compare")
             self._cmp_smart_rule = self._smart_rule
             self._sync_compare_group_marks_to_rule(gid)

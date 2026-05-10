@@ -17,13 +17,20 @@ from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 _PLACEHOLDER_TEXT = "Select a duplicate group or file to preview metadata, paths, and recommendations."
 
 
-def _section_header(label: str, t: ThemeTokens) -> ft.Text:
-    return ft.Text(
-        label.upper(),
-        size=t.typography.size_xs,
-        weight=ft.FontWeight.W_700,
-        color=t.colors.fg_muted,
-        letter_spacing=0.8,
+def _section_header(label: str, t: ThemeTokens) -> ft.Row:
+    return ft.Row(
+        [
+            ft.Container(width=3, height=12, bgcolor=RC.side_a, border_radius=2),
+            ft.Text(
+                label.upper(),
+                size=t.typography.size_xs,
+                weight=ft.FontWeight.W_700,
+                color=t.colors.fg_muted,
+                letter_spacing=0.8,
+            ),
+        ],
+        spacing=6,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
 
@@ -45,9 +52,10 @@ def _status_badge(label: str, color: str, bg: str) -> ft.Container:
 
 
 class ReviewInspectorPanel(ft.Container):
-    def __init__(self, bridge, t: ThemeTokens) -> None:
+    def __init__(self, bridge, t: ThemeTokens, *, on_compare_file=None) -> None:
         self._bridge = bridge
         self._t = t
+        self._on_compare_file = on_compare_file
         self._current_mode: str = "placeholder"  # "placeholder" | "group" | "file"
         self._current_group: Optional[DuplicateGroup] = None
         self._current_file: Optional[DuplicateFile] = None
@@ -59,6 +67,7 @@ class ReviewInspectorPanel(ft.Container):
             spacing=0,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
+            animate_opacity=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
         )
 
         is_light = app_theme_is_light(bridge)
@@ -78,8 +87,7 @@ class ReviewInspectorPanel(ft.Container):
         self._current_mode = "placeholder"
         self._current_group = None
         self._current_file = None
-        self._scroll_col.controls = self._build_placeholder_controls(self._t)
-        self._safe_update()
+        self._swap_content(self._build_placeholder_controls(self._t))
 
     def show_group(
         self,
@@ -92,8 +100,7 @@ class ReviewInspectorPanel(ft.Container):
         self._current_file = None
         self._current_smart_rule = smart_rule
         self._current_marked = set(marked_paths)
-        self._scroll_col.controls = self._build_group_controls(group, smart_rule, marked_paths, self._t)
-        self._safe_update()
+        self._swap_content(self._build_group_controls(group, smart_rule, marked_paths, self._t))
 
     def show_file(
         self,
@@ -107,8 +114,7 @@ class ReviewInspectorPanel(ft.Container):
         self._current_group = group
         self._current_smart_rule = smart_rule
         self._current_marked = set(marked_paths)
-        self._scroll_col.controls = self._build_file_controls(file, smart_rule, group, marked_paths, self._t)
-        self._safe_update()
+        self._swap_content(self._build_file_controls(file, smart_rule, group, marked_paths, self._t))
 
     def sync_theme(self, t: ThemeTokens) -> None:
         self._t = t
@@ -395,9 +401,38 @@ class ReviewInspectorPanel(ft.Container):
                 ),
             ]
 
+        if self._on_compare_file is not None:
+            captured_f = f
+
+            def _on_cmp_click(e: ft.ControlEvent, _f=captured_f) -> None:
+                if self._on_compare_file:
+                    self._on_compare_file(_f)
+
+            controls += [
+                _divider(is_light),
+                ft.OutlinedButton(
+                    "Compare in context →",
+                    icon=ft.icons.Icons.COMPARE,
+                    on_click=_on_cmp_click,
+                    style=ft.ButtonStyle(
+                        color=RC.side_a,
+                        side=ft.BorderSide(1, ft.Colors.with_opacity(0.4, RC.side_a)),
+                        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                        shape=ft.RoundedRectangleBorder(radius=8),
+                    ),
+                ),
+            ]
+
         return controls
 
     # ── internals ─────────────────────────────────────────────────────────────
+
+    def _swap_content(self, controls: list) -> None:
+        """Replace scroll column content with a brief opacity fade-in."""
+        self._scroll_col.opacity = 0.0
+        self._scroll_col.controls = controls
+        self._scroll_col.opacity = 1.0
+        self._safe_update()
 
     def _safe_update(self) -> None:
         try:

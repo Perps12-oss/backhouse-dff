@@ -232,7 +232,9 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     page._stats_header = StatsHeader(bridge, t, back_btn=page._btn_back, right_tools=right_tools)
 
     page._workstation_sidebar = ReviewWorkstationSidebar(bridge, t, on_category_change=page._on_filter_changed)
-    page._inspector_panel = ReviewInspectorPanel(bridge, t)
+    page._inspector_panel = ReviewInspectorPanel(
+        bridge, t, on_compare_file=page._on_inspector_compare_file
+    )
     page._review_action_bar = ReviewActionBar(
         bridge,
         t,
