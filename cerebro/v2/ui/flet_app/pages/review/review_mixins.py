@@ -77,6 +77,13 @@ class ReviewPageChromeMixin:
             safe_update(b)
 
     def _apply_pill_chrome(self) -> None:
+        """Reapply nav-matched pill styles (theme/mode changes).
+
+        Bisect / partial checkout: keep compare_view + compare_delegate + shell_attach +
+        review_mixins + review_page on one ref — old mixins may reference delete_btn/keep_btn
+        while newer compare chrome only exposes hero_delete_marked_btn (AttributeError).
+        Same for grid_view vs mixins.
+        """
         t = self._t
         self._btn_back.style = pill_text_button_style(t, variant="primary")
         self._compare_ui.btn_cmp_grid.style = pill_text_button_style(t)
