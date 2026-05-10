@@ -182,20 +182,46 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         visible=False,
     )
 
-    def _search_soon(_e):
-        bridge.show_snackbar("Search is coming soon.", info=True)
+    page._search_field = ft.TextField(
+        hint_text="Search files or paths…",
+        width=220,
+        height=36,
+        text_size=12,
+        content_padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        border_radius=8,
+        visible=False,
+        on_change=page._on_search_changed,
+        prefix_icon=ft.icons.Icons.SEARCH,
+    )
+
+    def _toggle_search(_e):
+        page._search_field.visible = not page._search_field.visible
+        if not page._search_field.visible:
+            page._search_field.value = ""
+            page._search_query = ""
+            if page._mode in ("groups", "grid"):
+                if page._mode == "groups":
+                    page._refresh_groups_overview()
+                else:
+                    page._refresh_grid()
+        try:
+            if page._search_field.page is not None:
+                page._search_field.update()
+        except RuntimeError:
+            pass
 
     page._btn_toolbar_search = ft.IconButton(
         ft.icons.Icons.SEARCH,
         icon_size=20,
-        tooltip="Search (coming soon)",
-        on_click=_search_soon,
+        tooltip="Search groups by filename or path",
+        on_click=_toggle_search,
     )
 
     right_tools = ft.Row(
         [
             page._view_toggle_row,
             page._group_sort_row,
+            page._search_field,
             page._btn_toolbar_search,
         ],
         spacing=t.spacing.sm,

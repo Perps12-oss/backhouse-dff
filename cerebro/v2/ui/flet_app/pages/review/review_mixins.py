@@ -33,7 +33,8 @@ from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, t
 
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
-_MAX_GROUPS_OVERVIEW = 150
+_GROUPS_FIRST_SYNC = 40
+_GROUPS_ASYNC_BATCH = 40
 
 
 class ReviewPageChromeMixin:
@@ -293,9 +294,11 @@ class ReviewPageGroupsGridMixin:
         return kp
 
     def _sorted_groups_for_current_filter(self) -> List[DuplicateGroup]:
+        q = (getattr(self, "_search_query", "") or "").strip().lower()
         filtered = [
             g for g in self._groups
-            if self._filter_key == "all" or any(self._passes_filter(f) for f in g.files)
+            if (self._filter_key == "all" or any(self._passes_filter(f) for f in g.files))
+            and (not q or any(q in str(f.path).lower() for f in g.files))
         ]
         key = str(self._group_sort_key or "files_desc")
         if key == "files_desc":
@@ -307,36 +310,54 @@ class ReviewPageGroupsGridMixin:
             )
         return sorted(filtered, key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)
 
+    def _on_search_changed(self, e: ft.ControlEvent) -> None:
+        self._search_query = str(e.control.value or "").strip()
+        if self._mode in ("groups", "grid"):
+            self._refresh_groups_overview() if self._mode == "groups" else self._refresh_grid()
+            self._refresh_stats_header()
+
     def _refresh_groups_overview(self) -> None:
+        self._groups_build_generation += 1
+        gen = self._groups_build_generation
         filtered_groups = self._sorted_groups_for_current_filter()
         _log.debug(
-            "_refresh_groups_overview: total_groups=%d filtered=%d filter_key=%r",
+            "_refresh_groups_overview: total=%d filtered=%d filter_key=%r",
             len(self._groups),
             len(filtered_groups),
             self._filter_key,
         )
         total_r = sum(int(getattr(x, "reclaimable", 0) or 0) for x in self._groups) or 1
-        visible = filtered_groups[:_MAX_GROUPS_OVERVIEW]
-        cards: list = [self._build_group_card(g, i, total_r) for i, g in enumerate(visible)]
-        if len(filtered_groups) > _MAX_GROUPS_OVERVIEW:
-            t = self._t
-            cards.insert(
-                0,
-                ft.Container(
-                    content=ft.Text(
-                        f"Showing {_MAX_GROUPS_OVERVIEW:,} of {len(filtered_groups):,} groups — "
-                        "use filters or sort to narrow results.",
-                        size=t.typography.size_sm,
-                        color=t.colors.fg_muted,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    padding=ft.padding.symmetric(vertical=8, horizontal=16),
-                ),
-            )
-        _log.debug("_refresh_groups_overview: built %d cards (cap=%d)", len(cards), _MAX_GROUPS_OVERVIEW)
+        head = filtered_groups[:_GROUPS_FIRST_SYNC]
+        tail = filtered_groups[_GROUPS_FIRST_SYNC:]
+        cards: list = [self._build_group_card(g, i, total_r) for i, g in enumerate(head)]
         self._groups_overview.controls = cards
         safe_update(self._groups_overview)
         safe_update(self._content)
+        if tail:
+            page = self._bridge.flet_page
+            if hasattr(page, "run_task"):
+                page.run_task(self._append_groups_async, tail, gen, len(head), total_r)
+            else:
+                extra = [self._build_group_card(g, len(head) + i, total_r) for i, g in enumerate(tail)]
+                self._groups_overview.controls.extend(extra)
+                safe_update(self._groups_overview)
+
+    async def _append_groups_async(
+        self, tail: List[DuplicateGroup], gen: int, start_idx: int, total_r: int
+    ) -> None:
+        for i in range(0, len(tail), _GROUPS_ASYNC_BATCH):
+            if gen != self._groups_build_generation:
+                return
+            chunk = tail[i : i + _GROUPS_ASYNC_BATCH]
+            new_cards = [
+                self._build_group_card(g, start_idx + i + j, total_r) for j, g in enumerate(chunk)
+            ]
+            self._groups_overview.controls.extend(new_cards)
+            try:
+                self._groups_overview.update()
+            except Exception:
+                pass
+            await asyncio.sleep(0)
 
     def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
         self._group_sort_key = str(e.control.value or "files_desc")
@@ -437,6 +458,32 @@ class ReviewPageSmartMixin:
             self._refresh_groups_overview()
 
     def _apply_rule_to_all_groups(self) -> None:
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._apply_rule_to_all_groups_async)
+        else:
+            self._apply_rule_to_all_groups_sync()
+
+    async def _apply_rule_to_all_groups_async(self) -> None:
+        rule = normalized_rule(self._smart_rule or "keep_largest")
+        to_delete: List[str] = []
+        for i, g in enumerate(self._groups):
+            files = [f for f in g.files if self._passes_filter(f)]
+            to_delete.extend(paths_to_delete(rule, files))
+            if i % 50 == 0:
+                await asyncio.sleep(0)
+        if not to_delete:
+            return
+        self._marked_paths = set(to_delete)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        if self._mode == "grid":
+            self._refresh_grid()
+        else:
+            self._update_compare_panels()
+        self._update_progress_and_marked_bar()
+
+    def _apply_rule_to_all_groups_sync(self) -> None:
         rule = normalized_rule(self._smart_rule or "keep_largest")
         to_delete: List[str] = []
         for g in self._groups:

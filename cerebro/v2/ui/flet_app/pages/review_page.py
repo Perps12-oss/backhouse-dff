@@ -83,6 +83,8 @@ class ReviewPage(
         self._compare_nav_in_flight = False
         self._selected_group_id: Optional[int] = None
         self._selected_file: Optional[DuplicateFile] = None
+        self._groups_build_generation: int = 0
+        self._search_query: str = ""
 
         self._stats_header: StatsHeader
         self._smart_seg: ft.SegmentedButton
