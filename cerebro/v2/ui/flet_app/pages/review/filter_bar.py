@@ -4,7 +4,7 @@ from typing import Callable, Dict
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review._types import FILTER_TAB_ACCENTS, RC
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 _FILTER_TABS = [
@@ -17,17 +17,6 @@ _FILTER_TABS = [
     ("other", "Other"),
 ]
 
-_FILTER_ACCENT = {
-    "all": "#C7D2FE",
-    "pictures": "#C084FC",
-    "music": "#34D399",
-    "videos": "#F472B6",
-    "documents": "#FB923C",
-    "archives": "#FBBF24",
-    "other": RC.info,
-}
-
-
 class FilterBar(ft.Container):
     """Segmented filter bar with per-tab file count and size labels."""
 
@@ -39,7 +28,7 @@ class FilterBar(ft.Container):
         segments: list[ft.Segment] = []
         for key, label in _FILTER_TABS:
             t0 = ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=t.colors.fg2)
-            t1 = ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=_FILTER_ACCENT.get(key, "#C7D2FE"))
+            t1 = ft.Text("0", size=11, weight=ft.FontWeight.W_600, color=FILTER_TAB_ACCENTS.get(key, RC.filter_all))
             t2 = ft.Text("0 B", size=10, color=t.colors.fg_muted)
             self._filter_seg_lines[key] = (t0, t1, t2)
             segments.append(
@@ -104,7 +93,7 @@ class FilterBar(ft.Container):
             files_n = counts.get(key, 0)
             size_n = sizes.get(key, 0)
             is_active = key == active_key
-            accent = _FILTER_ACCENT.get(key, "#C7D2FE")
+            accent = FILTER_TAB_ACCENTS.get(key, RC.filter_all)
             t0.value = base
             t0.color = t.colors.fg if is_active else t.colors.fg2
             t0.weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600

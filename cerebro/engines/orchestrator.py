@@ -7,6 +7,7 @@ Manages engine lifecycle and provides unified interface for the UI.
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -21,6 +22,8 @@ from cerebro.engines.base_engine import (
 
 # Import engines (these will be created in subsequent tasks)
 # For now, we'll create placeholder imports that will be updated
+
+logger = logging.getLogger(__name__)
 
 
 class ScanOrchestrator:
@@ -201,11 +204,24 @@ class ScanOrchestrator:
         # locked orchestrator method while winding down (C-2 fix).
         with self._lock:
             if self._active_engine:
+                logger.info(
+                    "orchestrator.cancel: forwarding to engine=%s state=%s",
+                    type(self._active_engine).__name__,
+                    self._active_engine.state,
+                )
                 self._active_engine.cancel()
             thread = self._scan_thread
 
         if thread and thread.is_alive():
+            logger.info(
+                "orchestrator.cancel: waiting for scan thread %s to stop",
+                thread.name,
+            )
             thread.join(timeout=5.0)
+            logger.info(
+                "orchestrator.cancel: wait complete thread_alive=%s",
+                thread.is_alive(),
+            )
 
     def get_results(self) -> List[DuplicateGroup]:
         """

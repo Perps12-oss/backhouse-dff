@@ -65,6 +65,42 @@ class ReviewCompareView:
                 for val, label in RULE_LABELS
             ],
         )
+        self._init_compare_toolbar_buttons(t)
+        self.cmp_bar = self._build_cmp_bar_container(t)
+
+        self._group_list = GroupListPanel(t)
+        self._group_list_panel = self._group_list.list_view
+        self._group_list_scroll_host = ft.Container(
+            content=self._group_list_panel,
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        left_panel = self._build_left_nav_panel(t)
+        # A/B containers must exist before _build_ab_row_container; left nav must follow group_list host.
+        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
+        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
+        right_view = self._build_ab_row_container(t)
+        self._init_progress_and_marked_strip(t)
+        self._compare_main_row = ft.Row(
+            [left_panel, right_view],
+            expand=True,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            spacing=t.spacing.sm,
+        )
+        self.body = ft.Column(
+            [
+                ft.Container(content=self._compare_main_row, expand=True),
+                ft.Container(
+                    content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6),
+                    padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                ),
+                self._marked_bar,
+            ],
+            expand=True,
+            visible=False,
+        )
+
+    def _init_compare_toolbar_buttons(self, t: ThemeTokens) -> None:
         self._delete_btn = ft.OutlinedButton(
             "Delete side B",
             icon=ft.icons.Icons.DELETE_OUTLINE,
@@ -98,7 +134,9 @@ class ReviewCompareView:
             on_click=self._del.next_group,
             style=pill_text_button_style(t, variant="primary"),
         )
-        self.cmp_bar = ft.Container(
+
+    def _build_cmp_bar_container(self, t: ThemeTokens) -> ft.Container:
+        return ft.Container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -137,14 +175,8 @@ class ReviewCompareView:
             **self._del.get_glass_style(0.04),
         )
 
-        self._group_list = GroupListPanel(t)
-        self._group_list_panel = self._group_list.list_view
-        self._group_list_scroll_host = ft.Container(
-            content=self._group_list_panel,
-            expand=True,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        )
-        left_panel = ft.Container(
+    def _build_left_nav_panel(self, t: ThemeTokens) -> ft.Container:
+        return ft.Container(
             width=320,
             padding=t.spacing.sm,
             content=ft.Column(
@@ -157,9 +189,9 @@ class ReviewCompareView:
             ),
             **self._del.get_glass_style(0.04),
         )
-        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
-        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
-        right_view = ft.Container(
+
+    def _build_ab_row_container(self, t: ThemeTokens) -> ft.Container:
+        return ft.Container(
             content=ft.Row(
                 [
                     self._compare_panel_a,
@@ -174,13 +206,15 @@ class ReviewCompareView:
             ),
             expand=True,
         )
+
+    def _init_progress_and_marked_strip(self, t: ThemeTokens) -> None:
         self._progress_bar = ft.ProgressBar(
             value=0,
             color=t.colors.accent,
             bgcolor=ft.Colors.with_opacity(0.14, t.colors.border),
         )
         self._progress_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
-        self._marked_lbl = ft.Text("", size=t.typography.size_sm, color="#FCA5A5")
+        self._marked_lbl = ft.Text("", size=t.typography.size_sm, color=RC.marked_label_soft)
         self._marked_delete_b_btn = ft.FilledButton(
             "Delete side B",
             on_click=lambda _e: self._del.delete_compare_side("b"),
@@ -200,7 +234,7 @@ class ReviewCompareView:
         self._marked_bar = ft.Container(
             visible=False,
             padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
-            bgcolor=ft.Colors.with_opacity(0.95, "#1A0C0C"),
+            bgcolor=ft.Colors.with_opacity(0.95, RC.marked_bar_bg),
             border=ft.border.only(top=ft.BorderSide(1, RC.danger)),
             content=ft.Column(
                 [
@@ -221,24 +255,6 @@ class ReviewCompareView:
                 spacing=t.spacing.xs,
                 tight=True,
             ),
-        )
-        self._compare_main_row = ft.Row(
-            [left_panel, right_view],
-            expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-            spacing=t.spacing.sm,
-        )
-        self.body = ft.Column(
-            [
-                ft.Container(content=self._compare_main_row, expand=True),
-                ft.Container(
-                    content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6),
-                    padding=ft.padding.symmetric(horizontal=t.spacing.sm),
-                ),
-                self._marked_bar,
-            ],
-            expand=True,
-            visible=False,
         )
 
     @property
@@ -361,16 +377,83 @@ class ReviewCompareView:
         except Exception:
             return ""
 
+    def _compare_side_empty_column(self, label: str, t: ThemeTokens) -> ft.Column:
+        return ft.Column(
+            [ft.Text(f"Side {label}: No peer file", color=t.colors.fg_muted)],
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
+        )
+
+    @staticmethod
+    def _meta_row(icon_name: str, value: str, t: ThemeTokens, color: str = RC.muted_text) -> ft.Row:
+        return ft.Row(
+            [
+                ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.55, color)),
+                ft.Text(value, size=t.typography.size_xs, color=color, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+            ],
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _compare_meta_box(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> tuple[ft.Container, ft.Text]:
+        meta_rows: list = []
+        date_str = self._fmt_mtime(_file_mtime_ts(f))
+        if date_str:
+            meta_rows.append(self._meta_row(ft.icons.Icons.SCHEDULE, date_str, t, RC.meta_date_blue))
+        dims_txt = ft.Text("", size=t.typography.size_xs, color=RC.meta_dims_purple)
+        meta_rows.append(
+            ft.Row(
+                [
+                    ft.Icon(
+                        ft.icons.Icons.ASPECT_RATIO,
+                        size=12,
+                        color=ft.Colors.with_opacity(0.55, RC.meta_dims_purple),
+                    ),
+                    dims_txt,
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
+        meta_rows.append(self._meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), t, RC.info))
+        meta_box = ft.Container(
+            content=ft.Column(meta_rows, spacing=4, tight=True),
+            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_radius=6,
+            width=400,
+        )
+        return meta_box, dims_txt
+
+    def _exact_dup_banner_if_needed(self, label: str, t: ThemeTokens) -> ft.Control | None:
+        if label != "A":
+            return None
+        if not (
+            self._del.compare_a
+            and self._del.compare_b
+            and self._del.compare_a.size == self._del.compare_b.size
+            and Path(str(self._del.compare_a.path)).name == Path(str(self._del.compare_b.path)).name
+        ):
+            return None
+        grp = next((g for g in self._del.groups if g.group_id == self._del.compare_gid), None)
+        if grp is None or (getattr(grp, "similarity_type", None) or "exact").lower() != "exact":
+            return None
+        return ft.Container(
+            content=ft.Text(
+                "Same name and size — engine matched these as exact duplicates. Compare folders below.",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+        )
+
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str, gen: int) -> ft.Column:
         t = self._t
         label_color = RC.side_a if label == "A" else RC.side_b
         if not f:
-            return ft.Column(
-                [ft.Text(f"Side {label}: No peer file", color=t.colors.fg_muted)],
-                alignment=ft.MainAxisAlignment.CENTER,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                expand=True,
-            )
+            return self._compare_side_empty_column(label, t)
         p = Path(str(f.path))
         marked = str(f.path) in self._del.marked_paths
         name = p.name
@@ -407,40 +490,7 @@ class ReviewCompareView:
             padding=ft.padding.symmetric(horizontal=8, vertical=3),
         )
 
-        def _meta_row(icon_name: str, value: str, color: str = RC.muted_text) -> ft.Row:
-            return ft.Row(
-                [
-                    ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.55, color)),
-                    ft.Text(value, size=t.typography.size_xs, color=color, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
-                ],
-                spacing=4,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            )
-
-        meta_rows: list = []
-        date_str = self._fmt_mtime(_file_mtime_ts(f))
-        if date_str:
-            meta_rows.append(_meta_row(ft.icons.Icons.SCHEDULE, date_str, "#BFD5FF"))
-        dims_txt = ft.Text("", size=t.typography.size_xs, color="#C084FC")
-        meta_rows.append(
-            ft.Row(
-                [
-                    ft.Icon(ft.icons.Icons.ASPECT_RATIO, size=12, color=ft.Colors.with_opacity(0.55, "#C084FC")),
-                    dims_txt,
-                ],
-                spacing=4,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            )
-        )
-        meta_rows.append(_meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), RC.info))
-
-        meta_box = ft.Container(
-            content=ft.Column(meta_rows, spacing=4, tight=True),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            border_radius=6,
-            width=400,
-        )
+        meta_box, dims_txt = self._compare_meta_box(f, p, t)
 
         key = f"{label}:{gen}"
         self._compare_thumb_slots[key] = thumb_slot
@@ -450,26 +500,9 @@ class ReviewCompareView:
             page.run_task(self._populate_compare_media_async, f, p, key, gen)
 
         head: list[ft.Control] = [label_badge]
-        if (
-            label == "A"
-            and self._del.compare_a
-            and self._del.compare_b
-            and self._del.compare_a.size == self._del.compare_b.size
-            and Path(str(self._del.compare_a.path)).name == Path(str(self._del.compare_b.path)).name
-        ):
-            grp = next((g for g in self._del.groups if g.group_id == self._del.compare_gid), None)
-            if grp is not None and (getattr(grp, "similarity_type", None) or "exact").lower() == "exact":
-                head.append(
-                    ft.Container(
-                        content=ft.Text(
-                            "Same name and size — engine matched these as exact duplicates. Compare folders below.",
-                            size=t.typography.size_xs,
-                            color=t.colors.fg_muted,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                    )
-                )
+        banner = self._exact_dup_banner_if_needed(label, t)
+        if banner is not None:
+            head.append(banner)
 
         return ft.Column(
             head

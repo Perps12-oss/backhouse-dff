@@ -1,0 +1,696 @@
+"""Behavior mixins for ``ReviewPage`` — keeps ``review_page.py`` under the line budget."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import flet as ft
+
+from cerebro.core.deletion import DeletionPolicy
+from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.ui.flet_app.pages.review.deletion_dialog import build_confirm_dialog
+from cerebro.v2.ui.flet_app.pages.review.filter_bar import _FILTER_TABS
+from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
+from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
+from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
+from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
+from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+from cerebro.v2.ui.flet_app.pill_button_styles import (
+    pill_filled_accent,
+    pill_filled_danger,
+    pill_outlined_button_style,
+    pill_text_button_style,
+    pill_text_button_selected,
+)
+from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, theme_for_mode
+
+_log = logging.getLogger(__name__)
+_UI_SLOW_MS = 80.0
+
+
+class ReviewPageChromeMixin:
+    @staticmethod
+    def _hwrap_strip(strip: ft.Control) -> ft.Row:
+        return ft.Row(
+            [
+                ft.Container(expand=True),
+                strip,
+                ft.Container(expand=True),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _get_glass_style(self, opacity: float = 0.06) -> dict:
+        # Use theme_detect.app_theme_is_light (not raw ==) so non-canonical theme strings
+        # still pick light glass when appropriate.
+        is_light = app_theme_is_light(self._bridge)
+        cache_key = (opacity, is_light)
+        if cache_key in self._glass_cache:
+            return self._glass_cache[cache_key]
+        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
+        bg = ft.Colors.with_opacity(opacity, bg_base)
+        border_color = ft.Colors.with_opacity(0.12, border_base)
+        result = dict(
+            bgcolor=bg,
+            border=ft.border.all(1, border_color),
+            border_radius=ft.border_radius.all(12),
+        )
+        self._glass_cache[cache_key] = result
+        return result
+
+    def _sync_view_toggle_pills(self) -> None:
+        t = self._t
+        if self._mode == "groups":
+            self._btn_view_groups.style = pill_text_button_selected(t)
+            self._btn_view_tiles.style = pill_text_button_style(t, variant="muted")
+        elif self._mode == "grid":
+            self._btn_view_groups.style = pill_text_button_style(t, variant="muted")
+            self._btn_view_tiles.style = pill_text_button_selected(t)
+        else:
+            self._btn_view_groups.style = pill_text_button_style(t, variant="primary")
+            self._btn_view_tiles.style = pill_text_button_style(t, variant="muted")
+        for b in (self._btn_view_groups, self._btn_view_tiles):
+            safe_update(b)
+
+    def _apply_pill_chrome(self) -> None:
+        t = self._t
+        self._btn_back.style = pill_text_button_style(t, variant="primary")
+        self._smart_apply_all_btn.style = pill_filled_accent(
+            t,
+            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+            text_size=12,
+            weight=ft.FontWeight.W_700,
+        )
+        self._compare_ui.delete_btn.style = pill_outlined_button_style(t, danger=True)
+        self._compare_ui.keep_btn.style = pill_outlined_button_style(t, success=True)
+        self._compare_ui.btn_cmp_grid.style = pill_text_button_style(t)
+        self._compare_ui.btn_cmp_prev.style = pill_text_button_style(t)
+        self._compare_ui.btn_cmp_next.style = pill_text_button_style(t, variant="primary")
+        self._empty_go_home_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
+        self._compare_ui.cmp_apply_rule_btn.style = pill_filled_accent(
+            t,
+            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            text_size=11,
+            weight=ft.FontWeight.W_600,
+        )
+        self._compare_ui.marked_delete_b_btn.style = pill_filled_danger(t)
+        self._compare_ui.marked_delete_marked_btn.style = pill_outlined_button_style(t, danger=True)
+        self._sync_view_toggle_pills()
+        self._grid_view.sync_zoom_pill_styles(t)
+        for b in (
+            self._btn_back,
+            self._smart_apply_all_btn,
+            self._compare_ui.delete_btn,
+            self._compare_ui.keep_btn,
+            self._compare_ui.cmp_apply_rule_btn,
+            self._compare_ui.btn_cmp_grid,
+            self._compare_ui.btn_cmp_prev,
+            self._compare_ui.btn_cmp_next,
+            self._empty_go_home_btn,
+            self._compare_ui.marked_delete_b_btn,
+            self._compare_ui.marked_delete_marked_btn,
+        ):
+            safe_update(b)
+
+
+class ReviewPageModeMixin:
+    _MODE_VISIBILITY: Dict[str, Dict[str, bool]] = {
+        "empty": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "loading": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "groups": {"filter": True, "cmp_bar": False, "smart": False, "toggle": True, "sort": True},
+        "grid": {"filter": True, "cmp_bar": False, "smart": True, "toggle": True, "sort": False},
+        "compare": {"filter": False, "cmp_bar": True, "smart": False, "toggle": False, "sort": False},
+    }
+
+    def _enter_mode(self, mode: str) -> None:
+        if mode == "empty" and bool(self._groups):
+            mode = "groups"
+        self._mode = mode
+        self.scroll = None if mode == "compare" else ft.ScrollMode.AUTO
+        if mode != "grid":
+            self._grid_view.bump_thumb_generation()
+        if mode != "compare":
+            # Clear compare shortcuts; skip if flet_page is missing (tests / early lifecycle).
+            fp = getattr(self._bridge, "flet_page", None)
+            if fp:
+                fp.on_keyboard_event = None
+
+        self._content.controls.clear()
+        if mode != "grid":
+            self._grid_view.set_rendering(False)
+        self._compare_view.visible = mode == "compare"
+
+        vis = self._MODE_VISIBILITY[mode]
+        self._filter_bar.visible = vis["filter"]
+        self._cmp_bar.visible = vis["cmp_bar"]
+        self._smart_row.visible = vis["smart"]
+        self._view_toggle_row.visible = vis["toggle"]
+        self._group_sort_row.visible = vis["sort"]
+
+        if mode == "empty":
+            self._content.controls.append(self._empty_state)
+        elif mode == "loading":
+            self._content.controls.append(self._loading_state)
+        elif mode == "groups":
+            self._refresh_filter_labels()
+            self._refresh_groups_overview()
+            self._content.controls.append(self._groups_overview)
+        elif mode == "grid":
+            self._refresh_grid()
+            self._content.controls.append(self._grid_view)
+        elif mode == "compare":
+            self._content.controls.append(self._compare_view)
+            self._bind_keys()
+
+        safe_update(self._content)
+        safe_update(self._filter_bar)
+        safe_update(self._cmp_bar)
+        safe_update(self._smart_row)
+        safe_update(self._view_toggle_row)
+        safe_update(self._group_sort_row)
+        self._refresh_stats_header()
+        self._apply_pill_chrome()
+
+    async def _finish_load_to_grid_async(self) -> None:
+        await asyncio.sleep(0)
+        self._loading = False
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        self._enter_mode("grid")
+
+    async def _finish_load_to_groups_async(self) -> None:
+        await asyncio.sleep(0)
+        self._loading = False
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        self._enter_mode("groups")
+
+    async def _finish_load_to_compare_async(self, group_id: int) -> None:
+        await asyncio.sleep(0)
+        self._loading = False
+        if not self._groups:
+            self._enter_mode("empty")
+            return
+        self._enter_compare(group_id)
+
+    def _to_grid(self, e=None) -> None:
+        self._enter_mode("grid")
+
+
+class ReviewPageGroupsGridMixin:
+    def _build_group_card(self, g: DuplicateGroup, idx: int, total_reclaim_scan: int) -> ft.Container:
+        return build_group_card(
+            self._t,
+            self._bridge,
+            g,
+            idx,
+            total_reclaim_scan,
+            self._reviewed_group_ids,
+            on_open_group=self._enter_compare,
+            get_glass_style=self._get_glass_style,
+        )
+
+    def _sorted_groups_for_current_filter(self) -> List[DuplicateGroup]:
+        filtered = [
+            g for g in self._groups
+            if self._filter_key == "all" or any(self._passes_filter(f) for f in g.files)
+        ]
+        key = str(self._group_sort_key or "reclaimable_desc")
+        if key == "files_desc":
+            return sorted(filtered, key=lambda g: len(g.files), reverse=True)
+        if key == "path_asc":
+            return sorted(
+                filtered,
+                key=lambda g: str(Path(str(g.files[0].path)).parent).lower() if g.files else "",
+            )
+        return sorted(filtered, key=lambda g: int(getattr(g, "reclaimable", 0) or 0), reverse=True)
+
+    def _refresh_groups_overview(self) -> None:
+        filtered_groups = self._sorted_groups_for_current_filter()
+        total_r = sum(int(getattr(x, "reclaimable", 0) or 0) for x in self._groups) or 1
+        self._groups_overview.controls = [
+            self._build_group_card(g, i, total_r) for i, g in enumerate(filtered_groups)
+        ]
+        safe_update(self._groups_overview)
+
+    def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
+        self._group_sort_key = str(e.control.value or "reclaimable_desc")
+        if self._mode == "groups":
+            self._refresh_groups_overview()
+            self._refresh_stats_header()
+
+    def _refresh_grid(self) -> None:
+        files = self._files_by_filter.get(self._filter_key, [])
+        self._refresh_filter_labels()
+        self._grid_view.set_reduce_motion(self._reduce_motion)
+        self._grid_view.refresh(files, self._marked_paths)
+
+    def _passes_filter(self, f: DuplicateFile) -> bool:
+        if self._filter_key == "all":
+            return True
+        ext = getattr(f, "extension", Path(str(f.path)).suffix.lower())
+        if self._filter_key == "other":
+            return ext.lower() not in EXT_ALL_KNOWN
+        exts = FILTER_EXTS.get(self._filter_key)
+        return ext.lower() in exts if exts else True
+
+    def _on_tile_clicked(self, f: DuplicateFile) -> None:
+        gid = next((g.group_id for g in self._groups if f in g.files), None)
+        if gid is not None:
+            self._enter_compare(gid)
+
+
+class ReviewPageSmartMixin:
+    def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"keep_largest"}
+        self._smart_rule = next(iter(sel), "keep_largest")
+
+    def _on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None:
+        sel = getattr(e.control, "selected", None) or {"keep_largest"}
+        self._cmp_smart_rule = next(iter(sel), "keep_largest")
+
+    def _on_cmp_apply_rule_click(self, e=None) -> None:
+        self._apply_smart_select_compare_current_with_rule(self._cmp_smart_rule)
+
+    def _apply_smart_select_compare_current_with_rule(self, rule: str) -> None:
+        gid = self._compare_gid
+        if gid is None:
+            return
+        files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
+        if len(files) < 2:
+            return
+        to_delete = paths_to_delete(normalized_rule(rule), files)
+        if not to_delete:
+            return
+        for p in to_delete:
+            self._marked_paths.add(str(p))
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        self._update_compare_panels()
+        self._refresh_grid()
+        self._bridge.show_snackbar(f"Rule applied: {len(to_delete):,} files marked in this group.", info=True)
+
+    def _apply_smart_select_review(self, e=None):
+        rule = self._smart_rule or "keep_largest"
+        rule_lbl = dict(RULE_LABELS).get(rule, "Keep Largest")
+
+        def _apply_all(_e):
+            self._bridge.dismiss_top_dialog()
+            self._apply_rule_to_all_groups()
+
+        def _suggest_only(_e):
+            self._bridge.dismiss_top_dialog()
+            self._bridge.show_snackbar(f"Suggestion mode enabled: {rule_lbl}.", info=True)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Apply rule"),
+            content=ft.Text(f'Use "{rule_lbl}" for all groups, or only as a suggestion while reviewing?'),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _e: self._bridge.dismiss_top_dialog()),
+                ft.OutlinedButton("Suggest per-group", on_click=_suggest_only),
+                ft.ElevatedButton("Apply to all groups", on_click=_apply_all),
+            ],
+        )
+        self._bridge.show_modal_dialog(dlg)
+
+    def _apply_rule_to_all_groups(self) -> None:
+        rule = normalized_rule(self._smart_rule or "keep_largest")
+        to_delete: List[str] = []
+        for g in self._groups:
+            files = [f for f in g.files if self._passes_filter(f)]
+            to_delete.extend(paths_to_delete(rule, files))
+        if not to_delete:
+            return
+        self._marked_paths = set(to_delete)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        if self._mode == "grid":
+            self._refresh_grid()
+        else:
+            self._update_compare_panels()
+        self._update_progress_and_marked_bar()
+
+    def _apply_smart_select_compare_current(self, e=None) -> None:
+        gid = self._compare_gid
+        if gid is None:
+            return
+        rule = normalized_rule(self._cmp_smart_rule)
+        files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
+        to_delete = paths_to_delete(rule, files)
+        if not to_delete:
+            return
+        self._show_smart_delete_dialog(to_delete)
+
+    def _show_smart_delete_dialog(self, paths: List[str]) -> None:
+        show_smart_delete_paths_dialog(
+            self._bridge,
+            self._t,
+            paths,
+            lambda policy: self._execute_smart_delete(paths, policy),
+        )
+
+    def _on_smart_delete_complete(
+        self,
+        paths: List[str],
+        policy: DeletionPolicy,
+        new_groups: List[DuplicateGroup],
+        deleted: int,
+        failed: int,
+        bytes_reclaimed: int,
+        err: Exception | None,
+    ) -> None:
+        if err is not None:
+            self._bridge.show_snackbar(f"Deletion failed: {err}", error=True)
+            return
+        self._groups = list(new_groups)
+        self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._rebuild_group_index()
+        self._rebuild_filter_index()
+        for p in paths:
+            self._marked_paths.discard(str(p))
+        self._recompute_marked_bytes()
+        self._bridge.coordinator.results_groups_pruned(self._groups)
+        self._push_marked_paths_to_store()
+        if deleted > 0:
+            if policy == DeletionPolicy.TRASH:
+                self._bridge.show_snackbar(
+                    f"Moved {deleted:,} files to Trash ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                    action_label="Undo",
+                    on_action=lambda _e: self._undo_last_trash_delete(),
+                )
+            else:
+                self._bridge.show_snackbar(
+                    f"Permanently deleted {deleted:,} files ({fmt_size(bytes_reclaimed)} reclaimed).",
+                    success=True,
+                )
+        if failed > 0:
+            self._bridge.show_snackbar(
+                f"{failed:,} file(s) were unavailable (for example disconnected drive) and were skipped.",
+                error=True,
+            )
+        if not self._groups:
+            self._enter_mode("empty")
+        else:
+            if self._mode == "compare":
+                gid = self._compare_gid
+                if gid is None or gid not in self._group_files:
+                    gid = self._groups[0].group_id
+                self._enter_compare(gid)
+            else:
+                self._refresh_grid()
+
+    def _execute_smart_delete(self, paths: List[str], policy: DeletionPolicy) -> None:
+        if not paths:
+            return
+        paths_copy = list(paths)
+
+        def _on_complete(
+            new_groups: List[DuplicateGroup],
+            deleted: int,
+            failed: int,
+            bytes_reclaimed: int,
+            err: Exception | None,
+        ) -> None:
+            self._on_smart_delete_complete(paths_copy, policy, new_groups, deleted, failed, bytes_reclaimed, err)
+
+        # safe_update: module function (not ReviewPage._safe_update) — see safe_controls docstring.
+        run_delete_with_progress(
+            service=self._delete_service,
+            bridge=self._bridge,
+            t=self._t,
+            paths=paths,
+            policy=policy,
+            groups=self._groups,
+            safe_update=safe_update,
+            on_complete=_on_complete,
+        )
+
+
+class ReviewPageCompareNavMixin:
+    """Compare navigation; slow-path logging uses ``ReviewPage._log_if_slow`` on the concrete class."""
+
+    def _enter_compare(self, gid: int) -> None:
+        _t0 = time.perf_counter()
+        if self._compare_nav_in_flight:
+            return
+        self._compare_nav_in_flight = True
+        files = self._group_files.get(gid) or []
+        try:
+            if not files:
+                self._to_grid()
+                self._log_if_slow("review:on_click_group_nav", _t0)
+                return
+            if self._compare_gid is not None:
+                self._reviewed_group_ids.add(self._compare_gid)
+            self._compare_gid = gid
+            self._compare_a = files[0]
+            self._compare_b = files[1] if len(files) > 1 else None
+            self._enter_mode("compare")
+            self._cmp_smart_rule = next(
+                iter(getattr(self._compare_ui.cmp_smart_seg, "selected", None) or {"keep_largest"}),
+                "keep_largest",
+            )
+            self._refresh_group_list_panel()
+            self._update_compare_panels()
+            self._update_compare_chrome()
+            self._log_if_slow("review:on_click_group_nav", _t0)
+        finally:
+            self._compare_nav_in_flight = False
+
+    def _update_compare_panels(self) -> None:
+        self._compare_ui.update_compare_panels()
+
+    def _apply_compare_panel_tints(self) -> None:
+        self._compare_ui.apply_compare_panel_tints()
+
+    def _reset_compare_panels_idle_chrome(self) -> None:
+        self._compare_ui.reset_compare_panels_idle_chrome()
+
+    def _keep_only_file(self, keep_file: DuplicateFile) -> None:
+        gid = self._compare_gid
+        if gid is None:
+            return
+        files = self._group_files.get(gid, [])
+        for f in files:
+            fp = str(f.path)
+            if f is keep_file:
+                self._marked_paths.discard(fp)
+            else:
+                self._marked_paths.add(fp)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        self._update_compare_panels()
+
+    def _toggle_mark_file(self, file: DuplicateFile) -> None:
+        # Full recompute keeps _marked_bytes consistent with _marked_paths (incremental +/- size
+        # drifts if the same path appears more than once across groups or size metadata changes).
+        fp = str(file.path)
+        if fp in self._marked_paths:
+            self._marked_paths.discard(fp)
+        else:
+            self._marked_paths.add(fp)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        if self._mode == "grid":
+            self._grid_view.refresh_marks(self._marked_paths)
+        elif self._mode == "compare":
+            self._compare_ui.update_compare_panels()
+
+    def _refresh_group_list_panel(self) -> None:
+        self._compare_ui.refresh_group_list_panel()
+
+    def _recompute_marked_bytes(self) -> None:
+        total = 0
+        for g in self._groups:
+            for f in g.files:
+                if str(f.path) in self._marked_paths:
+                    total += int(getattr(f, "size", 0) or 0)
+        self._marked_bytes = total
+
+    def _update_progress_and_marked_bar(self) -> None:
+        self._compare_ui.update_progress_and_marked_bar()
+
+    def _delete_marked_files(self, e=None) -> None:
+        if not self._marked_paths:
+            return
+        self._show_smart_delete_dialog(sorted(self._marked_paths))
+
+    def _update_compare_chrome(self) -> None:
+        self._compare_ui.update_compare_chrome()
+
+    def _prev_group(self, e=None) -> None:
+        if self._compare_gid is None:
+            return
+        idx = self._group_index.get(self._compare_gid, 0)
+        if idx > 0:
+            self._enter_compare(self._groups[idx - 1].group_id)
+
+    def _next_group(self, e=None) -> None:
+        if self._compare_gid is None:
+            return
+        idx = self._group_index.get(self._compare_gid, 0)
+        if idx < len(self._groups) - 1:
+            self._enter_compare(self._groups[idx + 1].group_id)
+
+    def _delete_compare_side(self, side: str) -> None:
+        f = self._compare_a if side == "a" else self._compare_b
+        if not f:
+            return
+        name = Path(str(f.path)).name
+        path = str(f.path)
+
+        def _confirmed(policy: DeletionPolicy) -> None:
+            self._bridge.dismiss_top_dialog()
+            self._execute_smart_delete([path], policy)
+
+        self._bridge.show_modal_dialog(
+            build_confirm_dialog(f'"{name}"', _confirmed, self._bridge.dismiss_top_dialog, self._t)
+        )
+
+
+class ReviewPageFilterMixin:
+    def _on_filter_changed(self, key: str) -> None:
+        self._filter_key = key
+        if self._mode == "grid":
+            self._refresh_grid()
+        elif self._mode == "groups":
+            self._refresh_filter_labels()
+            self._refresh_groups_overview()
+        elif self._mode == "compare":
+            self._refresh_filter_labels()
+            self._update_compare_panels()
+
+    def _rebuild_group_index(self) -> None:
+        self._group_index = {g.group_id: i for i, g in enumerate(self._groups)}
+
+    def _rebuild_filter_index(self) -> None:
+        self._grid_view.clear_tile_caches()
+        by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
+        group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        file_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        for g in self._groups:
+            group_counts["all"] += 1
+            seen_group_kinds: set[str] = set()
+            for f in g.files:
+                ext = getattr(f, "extension", Path(str(f.path)).suffix.lower())
+                if ext.lower() in EXT_ALL_KNOWN:
+                    kind = next((k for k, exts in FILTER_EXTS.items() if exts and ext.lower() in exts), "other")
+                else:
+                    kind = "other"
+                bucket = kind if kind in by_filter else "other"
+                by_filter["all"].append(f)
+                by_filter[bucket].append(f)
+                file_sizes["all"] += f.size
+                file_sizes[bucket] += f.size
+                seen_group_kinds.add(kind if kind in group_counts else "other")
+            for kind in seen_group_kinds:
+                group_counts[kind] += 1
+        self._files_by_filter = by_filter
+        self._filter_counts = {k: len(v) for k, v in by_filter.items()}
+        self._filter_sizes = file_sizes
+        self._filter_group_counts = group_counts
+        self._refresh_filter_labels()
+
+    def _refresh_filter_labels(self) -> None:
+        self._filter_bar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
+        self._refresh_stats_header()
+
+    def _refresh_stats_header(self) -> None:
+        fl = next((lab for k, lab in _FILTER_TABS if k == self._filter_key), self._filter_key.title())
+        self._stats_header.refresh(
+            self._mode,
+            fl,
+            self._filter_key,
+            self._filter_counts,
+            self._filter_sizes,
+            self._filter_group_counts,
+            self._reviewed_group_ids,
+            self._sorted_groups_for_current_filter(),
+            self._t,
+        )
+
+
+class ReviewPageKeyboardMixin:
+    def _bind_keys(self) -> None:
+        self._bridge.flet_page.on_keyboard_event = self._on_key
+
+    def _on_key(self, e: ft.KeyboardEvent) -> None:
+        if self._mode != "compare":
+            return
+        k = e.key.lower().replace(" ", "")
+        if k in ("arrowleft", "left", "arrowup", "up"):
+            self._prev_group()
+        elif k in ("arrowright", "right", "arrowdown", "down"):
+            self._next_group()
+        elif k == "d":
+            self._delete_compare_side("b")
+        elif k == "k":
+            self._delete_compare_side("a")
+        elif k in ("delete", "backspace"):
+            self._delete_compare_side("b")
+        elif k == "enter":
+            self._next_group()
+        elif k == "space":
+            self._apply_smart_select_compare_current()
+            self._next_group()
+        elif k == "1":
+            self._delete_compare_side("b")
+        elif k == "2":
+            self._delete_compare_side("a")
+
+
+class ReviewPageNavThemeMixin:
+    def _go_back(self, e=None) -> None:
+        if self._mode in ("compare", "grid"):
+            self._enter_mode("groups")
+        else:
+            self._bridge.navigate("dashboard")
+
+    def _undo_last_trash_delete(self) -> None:
+        ok, restored = DeleteService.undo_last_trash_delete()
+        if ok and restored > 0:
+            self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
+        elif restored > 0:
+            self._bridge.show_snackbar(
+                f"Partially restored {restored:,} file(s). Check missing paths.",
+                info=True,
+            )
+        else:
+            self._bridge.show_snackbar("Nothing to undo.", info=True)
+
+    def apply_theme(self, mode: str) -> None:
+        self._glass_cache = {}
+        self._t = theme_for_mode(mode)
+        self._compare_ui.sync_theme(self._t)
+        self._grid_view.sync_theme(self._t)
+
+        g04 = self._get_glass_style(0.04)
+        self._stats_header.bgcolor = g04.get("bgcolor")
+        self._stats_header.border = g04.get("border")
+        self._filter_bar.sync_theme(self._t)
+        self._refresh_filter_labels()
+
+        self._compare_ui.apply_cmp_bar_glass()
+
+        self._empty_state.bgcolor = g04.get("bgcolor")
+        self._empty_state.border = g04.get("border")
+
+        if self._mode == "compare":
+            self._apply_compare_panel_tints()
+        else:
+            self._reset_compare_panels_idle_chrome()
+
+        self._apply_pill_chrome()
+
+        if self._is_mounted():
+            self.update()

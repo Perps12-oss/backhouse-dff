@@ -53,6 +53,14 @@ class BackendService:
     def is_scanning(self) -> bool:
         return self._scanning
 
+    @property
+    def is_paused(self) -> bool:
+        """True when the orchestrator reports the active engine is paused."""
+        try:
+            return bool(self._orchestrator.is_paused())
+        except Exception:
+            return False
+
     # -- Callback registration ------------------------------------------------
 
     def set_on_progress(self, cb: Callable[[Dict[str, Any]], None]) -> None:
@@ -129,9 +137,16 @@ class BackendService:
 
     def cancel_scan(self) -> None:
         """Request scan cancellation."""
+        _log.info(
+            "cancel_scan requested: scanning=%s cancel_event_set=%s",
+            self._scanning,
+            self._cancel_event.is_set(),
+        )
         self._cancel_event.set()
         try:
+            _log.info("cancel_scan forwarding to orchestrator.cancel()")
             self._orchestrator.cancel()
+            _log.info("cancel_scan forwarded to orchestrator.cancel()")
         except Exception:
             _log.exception("Cancel failed")
 

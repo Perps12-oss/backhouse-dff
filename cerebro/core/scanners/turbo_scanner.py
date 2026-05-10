@@ -27,7 +27,13 @@ import time
 import hashlib
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    ProcessPoolExecutor,
+    as_completed,
+    wait,
+    FIRST_COMPLETED,
+)
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Callable, Any, Generator
@@ -757,41 +763,68 @@ class TurboScanner:
 
         hash_workers = self.config.hash_workers
         futures_map: Dict = {}
-
-        with ThreadPoolExecutor(max_workers=max(2, min(hash_workers, 16))) as pool:
+        # Do not use ``with ThreadPoolExecutor`` here: on cancel, __exit__ would call
+        # shutdown(wait=True) and block until every submitted Tier-A read finishes
+        # (often hundreds of thousands of tasks), making cancel slower than scanning.
+        pool = ThreadPoolExecutor(max_workers=max(2, min(hash_workers, 16)))
+        abrupt_exit = False
+        try:
             for size_key, paths in size_groups.items():
                 for path, mtime in paths:
                     if cancel_event is not None and cancel_event.is_set():
+                        abrupt_exit = True
                         return size_groups, candidates_in, candidates_in
                     fut = pool.submit(compute_tier_a_hash, path, tier_algo)
                     futures_map[fut] = (size_key, path, mtime)
 
-        # Re-group by (size_key, tier_a_hash): only groups with ≥ 2 matching files survive.
-        from collections import defaultdict as _dd
-        keyed: Dict[tuple, list] = _dd(list)
-        for fut, (size_key, path, mtime) in futures_map.items():
-            if cancel_event is not None and cancel_event.is_set():
-                return size_groups, candidates_in, candidates_in
+            # Re-group by (size_key, tier_a_hash): only groups with ≥ 2 matching files survive.
+            from collections import defaultdict as _dd
+
+            keyed: Dict[tuple, list] = _dd(list)
+            total_jobs = max(1, len(futures_map))
+            processed_jobs = 0
+            next_pct_log = 10
+            for fut in as_completed(list(futures_map.keys())):
+                size_key, path, mtime = futures_map[fut]
+                if cancel_event is not None and cancel_event.is_set():
+                    abrupt_exit = True
+                    return size_groups, candidates_in, candidates_in
+                try:
+                    ta_hash = fut.result()
+                except Exception:
+                    ta_hash = None
+                if ta_hash is None:
+                    # I/O error: keep the file in the pipeline to avoid false negatives.
+                    keyed[(size_key, "__error__")].append((path, mtime))
+                else:
+                    keyed[(size_key, ta_hash)].append((path, mtime))
+                processed_jobs += 1
+                pct = int((processed_jobs / total_jobs) * 100)
+                if pct >= next_pct_log:
+                    logger.info(
+                        "[Turbo] Tier-A progress: %d%% (%d/%d)",
+                        pct,
+                        processed_jobs,
+                        total_jobs,
+                    )
+                    next_pct_log += 10
+
+            # Rebuild size_groups: merge sub-groups that share same size_key and ≥ 2 files.
+            survivors: Dict[Any, List[Tuple[Path, float]]] = {}
+            for (size_key, _), paths in keyed.items():
+                if len(paths) < 2:
+                    continue
+                existing = survivors.setdefault(size_key, [])
+                existing.extend(paths)
+
+            candidates_out = sum(len(v) for v in survivors.values())
+            return survivors, candidates_in, candidates_out
+        finally:
             try:
-                ta_hash = fut.result()
-            except Exception:
-                ta_hash = None
-            if ta_hash is None:
-                # I/O error: keep the file in the pipeline to avoid false negatives.
-                keyed[(size_key, "__error__")].append((path, mtime))
-            else:
-                keyed[(size_key, ta_hash)].append((path, mtime))
-
-        # Rebuild size_groups: merge sub-groups that share same size_key and ≥ 2 files.
-        survivors: Dict[Any, List[Tuple[Path, float]]] = {}
-        for (size_key, _), paths in keyed.items():
-            if len(paths) < 2:
-                continue
-            existing = survivors.setdefault(size_key, [])
-            existing.extend(paths)
-
-        candidates_out = sum(len(v) for v in survivors.values())
-        return survivors, candidates_in, candidates_out
+                pool.shutdown(wait=not abrupt_exit, cancel_futures=abrupt_exit)
+            except TypeError:
+                # Python < 3.9: no cancel_futures kwarg
+                pool.shutdown(wait=False if abrupt_exit else True)
 
     def _invalidate_caches_if_scope_changed(self) -> None:
         if not self.config.use_cache:
@@ -944,8 +977,24 @@ class TurboScanner:
                 },
             )
             discovered_files: List[Tuple[Path, int, float]] = []
+            _resume_ce = self.config.cancel_event
+            _resume_checked = 0
             for batch in ckpt.iter_pending_files(scan_id):
+                if _resume_ce is not None and _resume_ce.is_set():
+                    logger.info(
+                        "[Turbo] Cancel observed during checkpoint pending load: loaded=%d",
+                        len(discovered_files),
+                    )
+                    return
                 for path_str, size, mtime in batch:
+                    _resume_checked += 1
+                    if (_resume_checked % 128) == 0 and _resume_ce is not None and _resume_ce.is_set():
+                        logger.info(
+                            "[Turbo] Cancel observed during checkpoint pending iteration: checked=%d loaded=%d",
+                            _resume_checked,
+                            len(discovered_files),
+                        )
+                        return
                     p = Path(path_str)
                     if not p.exists():
                         ckpt.enqueue_hash_result(scan_id, path_str, None, None, "error")
@@ -956,7 +1005,22 @@ class TurboScanner:
             # Load completed files so size-grouping catches cross-pairs between
             # already-hashed and pending files (hash_cache will serve them instantly).
             for batch in ckpt.iter_completed_hashes(scan_id):
+                if _resume_ce is not None and _resume_ce.is_set():
+                    logger.info(
+                        "[Turbo] Cancel observed during checkpoint completed load: pending_loaded=%d total_loaded=%d",
+                        _pending_count,
+                        len(discovered_files),
+                    )
+                    return
                 for path_str, size, mtime, _hash in batch:
+                    _resume_checked += 1
+                    if (_resume_checked % 128) == 0 and _resume_ce is not None and _resume_ce.is_set():
+                        logger.info(
+                            "[Turbo] Cancel observed during checkpoint completed iteration: checked=%d total_loaded=%d",
+                            _resume_checked,
+                            len(discovered_files),
+                        )
+                        return
                     p = Path(path_str)
                     if p.exists():
                         discovered_files.append((p, int(size), float(mtime)))
@@ -975,6 +1039,7 @@ class TurboScanner:
                 ScanStage.DISCOVERING,
                 len(discovered_files),
                 len(discovered_files),
+                str(discovered_files[-1][0]) if discovered_files else "",
                 metrics={
                     "total_files_in_scope": len(discovered_files),
                     "files_processed": len(discovered_files),
@@ -1006,20 +1071,57 @@ class TurboScanner:
         _pause_gate()
         _emit(
             ScanStage.GROUPING_BY_SIZE,
+            0,
             _scope_total,
-            _scope_total,
+            str(discovered_files[0][0]) if discovered_files else "",
             metrics={
                 "total_files_in_scope": _scope_total,
-                "files_processed": _scope_total,
+                "files_processed": 0,
                 "candidates_found": 0,
             },
         )
         size_groups = defaultdict(list)
         _ce = self.config.cancel_event
+        _group_total = max(1, len(discovered_files))
+        _next_group_pct_log = 10
+        _last_group_emit = 0
+        _cancel_log_grouping_emitted = False
         for gi, (path, size, mtime) in enumerate(discovered_files):
             if gi % 128 == 0 and _ce is not None and _ce.is_set():
+                if not _cancel_log_grouping_emitted:
+                    logger.info(
+                        "[Turbo] Cancel observed during grouping_by_size: processed=%d/%d groups_seen=%d",
+                        gi,
+                        _group_total,
+                        len(size_groups),
+                    )
+                    _cancel_log_grouping_emitted = True
                 return
             size_groups[size].append((path, mtime))
+            processed = gi + 1
+            pct = int((processed / _group_total) * 100)
+            if pct >= _next_group_pct_log:
+                logger.info(
+                    "[Turbo] Grouping progress: %d%% (%d/%d)",
+                    pct,
+                    processed,
+                    _group_total,
+                )
+                _next_group_pct_log += 10
+            # Emit often enough that the UI path strip stays alive (was 5000 only).
+            if processed - _last_group_emit >= 512 or processed == _group_total:
+                _last_group_emit = processed
+                _emit(
+                    ScanStage.GROUPING_BY_SIZE,
+                    processed,
+                    _scope_total,
+                    str(path),
+                    metrics={
+                        "total_files_in_scope": _scope_total,
+                        "files_processed": processed,
+                        "candidates_found": 0,
+                    },
+                )
         
         # Filter out unique sizes
         size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
@@ -1035,6 +1137,11 @@ class TurboScanner:
         _tier_a_in = 0
         if self.config.use_quick_hash and size_groups:
             _pause_gate()
+            logger.info(
+                "[Turbo] Grouping finished -> Tier-A started: size_groups=%d candidates=%d",
+                len(size_groups),
+                _diag_size_candidates,
+            )
             _effective_algo_for_tier_a = str(self.config.hash_algorithm or "auto").lower()
             if _effective_algo_for_tier_a == "auto":
                 _effective_algo_for_tier_a = "xxhash" if xxhash is not None else "sha256"
@@ -1055,10 +1162,16 @@ class TurboScanner:
         # Phase 3: Quick hash for size groups (parallel with caching)
         _pause_gate()
         candidates_found = sum(len(v) for v in size_groups.values()) if size_groups else 0
+        _grp_sample = ""
+        if size_groups:
+            _v0 = next(iter(size_groups.values()))
+            if _v0:
+                _grp_sample = str(_v0[0][0])
         _emit(
             ScanStage.GROUPING_BY_SIZE,
             _scope_total,
             _scope_total,
+            _grp_sample,
             metrics={
                 "total_files_in_scope": _scope_total,
                 "files_processed": _scope_total,
@@ -1353,18 +1466,41 @@ class TurboScanner:
             executor: Optional[Any],
             warn_prefix: str,
         ) -> None:
-            """Drain futures; stop listing early when cancel_event is set."""
+            """Drain futures; poll cancel continuously while waiting for workers."""
             nonlocal discovered_so_far
-            for future in as_completed(future_to_root):
+            pending = set(future_to_root.keys())
+            while pending:
                 if self.config.cancel_event is not None and self.config.cancel_event.is_set():
+                    logger.info(
+                        "[Turbo] Cancel observed during discovery collect: completed=%d pending=%d",
+                        len(future_to_root) - len(pending),
+                        len(pending),
+                    )
+                    _shutdown_exec(executor)
                     return
+                done, pending = wait(
+                    pending,
+                    timeout=0.25,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
+                for future in done:
+                    if self.config.cancel_event is not None and self.config.cancel_event.is_set():
+                        logger.info(
+                            "[Turbo] Cancel observed while handling discovery result: completed=%d pending=%d",
+                            len(future_to_root) - len(pending) - 1,
+                            len(pending),
+                        )
+                        _shutdown_exec(executor)
+                        return
                 root_dir = future_to_root[future]
                 try:
                     results = future.result()
                     all_files.extend(results)
                     discovered_so_far += len(results)
                     if emit and discovered_so_far % 100 <= len(results):
-                        emit(ScanStage.DISCOVERING, discovered_so_far, 0)
+                        emit(ScanStage.DISCOVERING, discovered_so_far, 0, str(root_dir))
                     if self.dir_cache and results:
                         sig = DirectorySignature.from_directory(root_dir)
                         if sig:
@@ -1452,6 +1588,9 @@ class TurboScanner:
 
         pause_event = self.config.pause_event
         cancel_event = self.config.cancel_event
+        _cancel_log_prefetch_emitted = False
+        _cancel_log_hash_emit_emitted = False
+        _cancel_log_post_pool_emitted = False
 
         if emit and total > 0:
             try:
@@ -1482,6 +1621,14 @@ class TurboScanner:
             _prep_emit = time.monotonic()
             for idx, (p, _) in enumerate(files_to_hash):
                 if cancel_event is not None and cancel_event.is_set():
+                    if not _cancel_log_prefetch_emitted:
+                        logger.info(
+                            "[Turbo] Cancel observed during %s prefetch: prepared=%d/%d",
+                            stage_name,
+                            idx,
+                            total,
+                        )
+                        _cancel_log_prefetch_emitted = True
                     return {}
                 try:
                     _batch_sigs[str(p)] = StatSignature.from_path(p)
@@ -1511,6 +1658,14 @@ class TurboScanner:
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
             if cancel_event is not None and cancel_event.is_set():
+                if not _cancel_log_prefetch_emitted:
+                    logger.info(
+                        "[Turbo] Cancel observed during %s prefetch finalization: prepared=%d/%d",
+                        stage_name,
+                        len(_batch_sigs),
+                        total,
+                    )
+                    _cancel_log_prefetch_emitted = True
                 return {}
             # Page SQLite cache reads (cancel checked immediately before each query).
             # Adaptive chunk sizing keeps cold / network disks responsive.
@@ -1524,6 +1679,14 @@ class TurboScanner:
 
             while page_off < n_paths:
                 if cancel_event is not None and cancel_event.is_set():
+                    if not _cancel_log_prefetch_emitted:
+                        logger.info(
+                            "[Turbo] Cancel observed during %s cache-page scan: page_off=%d/%d",
+                            stage_name,
+                            page_off,
+                            n_paths,
+                        )
+                        _cancel_log_prefetch_emitted = True
                     return {}
 
                 slice_paths = _batch_paths[page_off : page_off + chunk_sz]
@@ -1532,6 +1695,14 @@ class TurboScanner:
                 slice_sigs = {p: _batch_sigs[p] for p in slice_paths if p in _batch_sigs}
 
                 if cancel_event is not None and cancel_event.is_set():
+                    if not _cancel_log_prefetch_emitted:
+                        logger.info(
+                            "[Turbo] Cancel observed before %s cache lookup: page_off=%d/%d",
+                            stage_name,
+                            page_off,
+                            n_paths,
+                        )
+                        _cancel_log_prefetch_emitted = True
                     return {}
 
                 dt_sql = 0.0
@@ -1634,13 +1805,34 @@ class TurboScanner:
 
             return path, mtime, hash_val
 
+        executor = ThreadPoolExecutor(max_workers=workers)
+        cancel_aborted = False
         try:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(hash_worker, pm) for pm in files_to_hash]
-                processed = 0
-                _last_emit_time = time.monotonic()
-                _current_file = ""
+            # Chunked submit so cancel is honored before every task is queued (huge
+            # candidate sets otherwise spend seconds only in list-comprehension submit).
+            futures = []
+            _submit_chunk = 4096
+            for i in range(0, len(files_to_hash), _submit_chunk):
+                if cancel_event is not None and cancel_event.is_set():
+                    if not _cancel_log_hash_emit_emitted:
+                        logger.info(
+                            "[Turbo] Cancel observed before %s worker submit: queued=%d/%d",
+                            stage_name,
+                            len(futures),
+                            total,
+                        )
+                        _cancel_log_hash_emit_emitted = True
+                    cancel_aborted = True
+                    break
+                for pm in files_to_hash[i : i + _submit_chunk]:
+                    futures.append(executor.submit(hash_worker, pm))
+            processed = 0
+            _last_emit_time = time.monotonic()
+            _current_file = ""
 
+            if cancel_aborted:
+                pass
+            else:
                 for future in as_completed(futures):
                     _path_for_emit = ""
                     try:
@@ -1680,8 +1872,24 @@ class TurboScanner:
                                 },
                             )
                     if cancel_event is not None and cancel_event.is_set():
+                        if not _cancel_log_hash_emit_emitted:
+                            logger.info(
+                                "[Turbo] Cancel observed during %s hashing: completed=%d/%d",
+                                stage_name,
+                                processed,
+                                total,
+                            )
+                            _cancel_log_hash_emit_emitted = True
+                        cancel_aborted = True
                         break
         finally:
+            try:
+                if cancel_aborted:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                else:
+                    executor.shutdown(wait=True)
+            except TypeError:
+                executor.shutdown(wait=False if cancel_aborted else True)
             # Hashing uses short-lived worker thread pools; each worker may create a
             # dedicated SQLite connection in HashCache. Proactively close those
             # connections after every hash phase so rescans do not accumulate them.
@@ -1690,8 +1898,15 @@ class TurboScanner:
                     self.hash_cache.close_all_connections()
                 except (sqlite3.Error, OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
-        
+
         # Filter out groups with only one file
+        if cancel_event is not None and cancel_event.is_set() and not _cancel_log_post_pool_emitted:
+            logger.info(
+                "[Turbo] %s unwind complete after cancel: hash_groups=%d",
+                stage_name,
+                len(hash_groups),
+            )
+            _cancel_log_post_pool_emitted = True
         return {k: v for k, v in hash_groups.items() if len(v) >= 2}
 
     def _auto_pick_hash_algorithm(self, sample_paths: List[Path], *, quick: bool) -> str:

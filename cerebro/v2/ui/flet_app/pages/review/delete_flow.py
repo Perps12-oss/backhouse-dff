@@ -49,7 +49,10 @@ def run_delete_with_progress(
     safe_update: Callable[[ft.Control | None], None],
     on_complete: Callable[[List[DuplicateGroup], int, int, int, Exception | None], None],
 ) -> None:
-    """Show progress modal, run ``delete_and_prune_async``, invoke ``on_complete`` on the UI thread."""
+    """Show progress modal, run ``delete_and_prune_async``, invoke ``on_complete`` on the UI thread.
+
+    *safe_update* is typically ``review.safe_controls.safe_update`` (not ``ReviewPage._safe_update``).
+    """
     progress_text = ft.Text("Preparing deletion...", size=t.typography.size_sm)
     progress_bar = ft.ProgressBar(value=0)
     progress_dialog = ft.AlertDialog(

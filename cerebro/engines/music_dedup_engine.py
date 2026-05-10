@@ -25,6 +25,7 @@ from cerebro.engines.base_engine import (
     ScanProgress,
     ScanState,
 )
+from cerebro.engines.scan_stage import ScanStage
 
 AUDIO_EXTENSIONS = {
     ".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a", ".wma",
@@ -193,7 +194,7 @@ class MusicDedupEngine(BaseEngine):
                         audio_files.append(p)
 
         total = len(audio_files)
-        cb(ScanProgress(state=ScanState.SCANNING, files_total=total))
+        cb(ScanProgress(state=ScanState.SCANNING, stage=ScanStage.DISCOVERING, files_total=total))
 
         # Extract tags
         tags_map: Dict[Path, Dict] = {}
@@ -205,10 +206,15 @@ class MusicDedupEngine(BaseEngine):
             t = _extract_tags(af)
             if t is not None:
                 tags_map[af] = t
-            cb(ScanProgress(
-                state=ScanState.SCANNING,
-                files_scanned=i + 1, files_total=total, current_file=str(af),
-            ))
+            cb(
+                ScanProgress(
+                    state=ScanState.SCANNING,
+                    stage=ScanStage.HASHING_PARTIAL,
+                    files_scanned=i + 1,
+                    files_total=total,
+                    current_file=str(af),
+                )
+            )
 
         if self._cancel_event.is_set():
             self._state = ScanState.CANCELLED
@@ -263,13 +269,17 @@ class MusicDedupEngine(BaseEngine):
                 self._results.append(DuplicateGroup(group_id=gid, files=files))
 
         self._state = ScanState.COMPLETED
-        cb(ScanProgress(
-            state=ScanState.COMPLETED,
-            files_scanned=total, files_total=total,
-            groups_found=len(self._results),
-            duplicates_found=sum(len(g.files) - 1 for g in self._results),
-            bytes_reclaimable=sum(g.reclaimable for g in self._results),
-        ))
+        cb(
+            ScanProgress(
+                state=ScanState.COMPLETED,
+                stage=ScanStage.COMPLETE,
+                files_scanned=total,
+                files_total=total,
+                groups_found=len(self._results),
+                duplicates_found=sum(len(g.files) - 1 for g in self._results),
+                bytes_reclaimable=sum(g.reclaimable for g in self._results),
+            )
+        )
 
     def pause(self) -> None:
         self._pause_event.set()

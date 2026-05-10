@@ -72,12 +72,12 @@ class ReviewGridView(ft.Stack):
                 content=ft.Row(
                     [
                         ft.ProgressRing(width=14, height=14, stroke_width=2, color=RC.side_a),
-                        ft.Text("View ready - filling items...", size=t.typography.size_xs, color="#9FDDF7"),
+                        ft.Text("View ready - filling items...", size=t.typography.size_xs, color=RC.grid_badge_text),
                     ],
                     spacing=6,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                bgcolor=ft.Colors.with_opacity(0.82, "#09111D"),
+                bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
                 border=ft.border.all(1, ft.Colors.with_opacity(0.25, RC.side_a)),
                 border_radius=999,
                 padding=ft.padding.symmetric(horizontal=10, vertical=6),
@@ -271,18 +271,14 @@ class ReviewGridView(ft.Stack):
             if all_files and hasattr(page, "run_task"):
                 page.run_task(self._load_thumbnails_async, list(all_files), self._thumb_load_generation)
 
-    def _tile_for_file_placeholder(self, f: DuplicateFile, marked_paths: Set[str]) -> ft.Container:
-        t = self._t
-        p = Path(str(f.path))
-        key = str(getattr(f, "path", ""))
-
-        info_bar = ft.Container(
+    def _tile_info_footer(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> ft.Container:
+        return ft.Container(
             content=ft.Column(
                 [
                     ft.Text(
                         p.name,
                         size=t.typography.size_xs,
-                        color="#FFFFFF",
+                        color=RC.tile_name_on_thumb,
                         overflow=ft.TextOverflow.ELLIPSIS,
                         max_lines=1,
                         text_align=ft.TextAlign.CENTER,
@@ -290,7 +286,7 @@ class ReviewGridView(ft.Stack):
                     ft.Text(
                         fmt_size(f.size),
                         size=t.typography.size_xs,
-                        color=ft.Colors.with_opacity(0.75, "#FFFFFF"),
+                        color=ft.Colors.with_opacity(0.75, RC.tile_name_on_thumb),
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -301,6 +297,12 @@ class ReviewGridView(ft.Stack):
             animate_opacity=(None if self._reduce_motion else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)),
             opacity=0,
         )
+
+    def _tile_for_file_placeholder(self, f: DuplicateFile, marked_paths: Set[str]) -> ft.Container:
+        t = self._t
+        p = Path(str(f.path))
+        key = str(getattr(f, "path", ""))
+        info_bar = self._tile_info_footer(f, p, t)
 
         placeholder = ft.Container(
             content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE)),

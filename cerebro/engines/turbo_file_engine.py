@@ -272,8 +272,16 @@ class TurboFileEngine(BaseEngine):
         self._pause_event.set()  # ensure unpaused at start
         self._results = []
         self._state = ScanState.SCANNING
-        self._progress = ScanProgress(state=ScanState.SCANNING)
+        # Non-empty stage from tick 0: the UI HUD matches on ``ScanStage`` literals; an empty
+        # default made Home show "Scanning…" / generic step captions until the first scanner emit.
         self._scan_wall_t0 = time.monotonic()
+        self._progress = ScanProgress(
+            state=ScanState.SCANNING,
+            stage=ScanStage.DISCOVERING,
+            files_scanned=0,
+            files_total=0,
+        )
+        self._emit_progress()
         self._total_files_in_scope = 0
         self._files_processed = 0
         self._candidates_found = 0
@@ -308,6 +316,13 @@ class TurboFileEngine(BaseEngine):
         self._pause_event.set()  # unblock the scan loop
 
     def cancel(self) -> None:
+        logger.info(
+            "Turbo cancel requested: stage=%s scanned=%d total=%d state=%s",
+            self._progress.stage,
+            int(self._progress.files_scanned or 0),
+            int(self._progress.files_total or 0),
+            self._state,
+        )
         self._cancel_event.set()
         self._state = ScanState.CANCELLED
 

@@ -6,6 +6,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ class StatsHeader(ft.Container):
             [ft.Container(expand=True), self._stats_row, ft.Container(expand=True)],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-        is_light = "light" in bridge.app_theme.lower() if hasattr(bridge, "app_theme") else False
+        is_light = app_theme_is_light(bridge)
         bg = ft.Colors.with_opacity(0.04, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         border_color = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         super().__init__(
@@ -139,10 +140,10 @@ class StatsHeader(ft.Container):
             self._summary_lbl.value += " · Back returns to the group list"
         self._stats_row.controls = [
             self._metric_chip("Groups", f"{selected_groups:,}", RC.side_b),
-            self._metric_chip("Files", f"{selected_files:,}", "#7DD3FC"),
+            self._metric_chip("Files", f"{selected_files:,}", RC.stats_chip_files),
             self._metric_chip("Total Size", reclaimable, RC.success),
-            self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", "#FBBF24"),
-            self._metric_chip("Remaining", fmt_size(remaining_reclaimable), "#F87171"),
+            self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", RC.stats_chip_reviewed),
+            self._metric_chip("Remaining", fmt_size(remaining_reclaimable), RC.stats_chip_remaining),
         ]
         if mode == "compare":
             self._workflow_lbl.value = (

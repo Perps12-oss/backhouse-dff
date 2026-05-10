@@ -6,6 +6,7 @@ import asyncio
 from collections import deque
 import json
 import logging
+import os
 import threading
 import time
 import re
@@ -83,7 +84,7 @@ class DashboardPage(ft.Column):
         self._actions: ft.Row
         self._last_session_btn: ft.TextButton
         self._start_btn: ft.FilledButton
-        self._stop_btn: ft.OutlinedButton
+        self._pause_scan_btn: ft.OutlinedButton
         self._phase_prep_status: ft.Text
         self._phase_hash_title: ft.Text
         self._phase_hash_bar: ft.ProgressBar
@@ -103,6 +104,8 @@ class DashboardPage(ft.Column):
         self._ring_counter: ft.Text
         self._hash_algo_label: ft.Text
         self._ring_timer: ft.Text
+        self._scan_elapsed_clock: ft.Text
+        self._scan_elapsed_timer_icon: ft.Icon
         self._ring_path: ft.Text
         self._cancel_btn: ft.OutlinedButton
         self._view_results_btn: ft.FilledButton
@@ -146,13 +149,17 @@ class DashboardPage(ft.Column):
         self._scan_hud_snap: dict = {}
         self._scan_hud_stop = threading.Event()
         self._scan_timer_thread: Optional[threading.Thread] = None
-        self._last_path_paint_ts: float = 0.0
         self._speed_points: deque[tuple[float, int]] = deque(maxlen=60)
+        self._eta_smoothed_seconds: Optional[float] = None
+        self._eta_last_stage: str = ""
+        self._eta_last_update_ts: float = 0.0
         self._status_token: int = 0
         self._cancelled_banner_token: int = 0
+        self._cancel_watchdog_token: int = 0
         self._io_failure_hits_by_root: dict[str, int] = {}
         self._io_pause_dialog_open: bool = False
         self._io_paused_root: str = ""
+        self._scan_network_warn_shown: bool = False
         # Largest file-catalogue count seen (discovery + grouping); explains hashing denominator.
         self._scan_files_catalogued: int = 0
         # Canvas chunk bar state
@@ -311,12 +318,12 @@ class DashboardPage(ft.Column):
         cast_col = self._folder_container.content
 
         # Action buttons — clear hierarchy: primary CTA, secondary, tertiary
-        self._stop_btn = ft.OutlinedButton(
-            "Stop Scan",
-            icon=ft.icons.Icons.STOP,
-            on_click=self._stop_scan,
+        self._pause_scan_btn = ft.OutlinedButton(
+            "Pause scan",
+            icon=ft.icons.Icons.PAUSE,
+            on_click=self._on_hero_pause_toggle,
             visible=False,
-            style=pill_outlined_button_style(t, danger=True),
+            style=pill_outlined_button_style(t),
         )
         self._start_btn = ft.FilledButton(
             "START SCAN",
@@ -346,7 +353,7 @@ class DashboardPage(ft.Column):
             [
                 start_wrap,
                 self._scan_safety_note,
-                self._stop_btn,
+                self._pause_scan_btn,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.START,
             spacing=s.xs,
@@ -473,11 +480,23 @@ class DashboardPage(ft.Column):
             text_align=ft.TextAlign.CENTER,
             visible=False,
         )
+        self._scan_elapsed_timer_icon = ft.Icon(
+            ft.icons.Icons.TIMER_OUTLINED,
+            size=20,
+            color=t.colors.accent,
+        )
+        self._scan_elapsed_clock = ft.Text(
+            "0:00",
+            size=t.typography.size_xxl,
+            weight=ft.FontWeight.W_800,
+            color=t.colors.fg,
+            text_align=ft.TextAlign.START,
+        )
         self._ring_timer = ft.Text(
             "",
-            size=t.typography.size_lg,
-            weight=ft.FontWeight.W_600,
-            color=t.colors.fg2,
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_500,
+            color=t.colors.fg_muted,
             text_align=ft.TextAlign.START,
         )
         self._ring_path = ft.Text(
@@ -511,14 +530,29 @@ class DashboardPage(ft.Column):
                     content=ft.Column(
                         [
                             ft.Text(
-                                "Time & estimate",
+                                "Scan elapsed",
+                                size=t.typography.size_xs,
+                                color=t.colors.fg_muted,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            ft.Row(
+                                [
+                                    self._scan_elapsed_timer_icon,
+                                    self._scan_elapsed_clock,
+                                ],
+                                spacing=6,
+                                tight=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Text(
+                                "Pace & ETA",
                                 size=t.typography.size_xs,
                                 color=t.colors.fg_muted,
                                 weight=ft.FontWeight.W_500,
                             ),
                             self._ring_timer,
                         ],
-                        spacing=2,
+                        spacing=4,
                         tight=True,
                         horizontal_alignment=ft.CrossAxisAlignment.START,
                     ),
@@ -845,7 +879,7 @@ class DashboardPage(ft.Column):
             **self._get_glass_style(0.035),
         )
 
-        # Paused scans section (shown when checkpoint DB has interrupted scans)
+        # Checkpoint restore section (checkpoint DB manifests, not in-session pause)
         self._paused_scans_col = ft.Column([], spacing=s.xs, visible=False)
         self._paused_scans_section = ft.Container(
             content=ft.Column(
@@ -854,7 +888,7 @@ class DashboardPage(ft.Column):
                         [
                             ft.Icon(ft.icons.Icons.PAUSE_CIRCLE, size=16, color=t.colors.warning),
                             ft.Text(
-                                "PAUSED SCANS",
+                                "CHECKPOINT RESTORE",
                                 size=t.typography.size_xs,
                                 weight=ft.FontWeight.W_700,
                                 color=t.colors.warning,
@@ -1394,7 +1428,7 @@ class DashboardPage(ft.Column):
         """Match shell nav pill styling; call after theme changes."""
         t = self._t
         self._last_session_btn.style = pill_text_button_style(t, variant="muted")
-        self._stop_btn.style = pill_outlined_button_style(t, danger=True)
+        self._pause_scan_btn.style = pill_outlined_button_style(t)
         self._sync_start_button_state()
         self._view_results_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
         self._view_partial_btn.style = pill_outlined_button_style(t)
@@ -1405,7 +1439,7 @@ class DashboardPage(ft.Column):
         self._cancelled_results_btn.style = pill_text_button_style(t, variant="primary")
         for ctrl in (
             self._last_session_btn,
-            self._stop_btn,
+            self._pause_scan_btn,
             self._view_results_btn,
             self._view_partial_btn,
             self._partial_back_home_btn,
@@ -1475,6 +1509,7 @@ class DashboardPage(ft.Column):
         self._io_failure_hits_by_root.clear()
         self._io_pause_dialog_open = False
         self._io_paused_root = ""
+        self._scan_network_warn_shown = False
         self._scan_files_catalogued = 0
         self._bar_slices = 0
         self._bar_active_markers.clear()
@@ -1490,6 +1525,7 @@ class DashboardPage(ft.Column):
         self._ring_counter.value = "Files found so far: 0"
         self._ring_counter_tip.visible = False
         self._ring_timer.value = ""
+        self._scan_elapsed_clock.value = "0:00"
         self._hash_algo_label.value = ""
         self._hash_algo_label.visible = False
         self._ring_path.value = ""
@@ -1521,9 +1557,14 @@ class DashboardPage(ft.Column):
         self._bridge.begin_scan_session(self._folders, "+".join(scan_modes))
         self._start_scan_elapsed_timer()
         self._speed_points.clear()
-        self._last_path_paint_ts = 0.0
+        self._eta_smoothed_seconds = None
+        self._eta_last_stage = ""
+        self._eta_last_update_ts = 0.0
+        self._scan_elapsed_clock.value = self._scan_elapsed_clock_value()
         self._ring_timer.value = self._build_scan_timer_line()
         try:
+            if self._scan_elapsed_clock.page is not None:
+                self._scan_elapsed_clock.update()
             if self._ring_timer.page is not None:
                 self._ring_timer.update()
         except Exception:
@@ -1536,6 +1577,7 @@ class DashboardPage(ft.Column):
             backend.set_on_error(self._on_scan_error)
             scan_opts = self._effective_scan_options()
             backend.start_scan(self._folders, mode=scan_modes, options=scan_opts)
+            self._sync_pause_scan_hero_button()
             self._resume_interrupted_scan_once = False
             if resume_interrupted:
                 try:
@@ -1658,7 +1700,7 @@ class DashboardPage(ft.Column):
             _log.exception("Failed clearing incomplete scan snapshot")
 
     def _refresh_paused_scans(self) -> None:
-        """Populate the paused scans section from checkpoint DB (non-blocking)."""
+        """Populate the checkpoint-restore cards from checkpoint DB (non-blocking)."""
         try:
             from cerebro.v2.core.checkpoint_db import get_checkpoint_db
             ckpt = get_checkpoint_db()
@@ -1729,7 +1771,7 @@ class DashboardPage(ft.Column):
                                     style=ft.ButtonStyle(color=t.colors.fg_muted),
                                 ),
                                 ft.FilledButton(
-                                    f"Resume ({pending:,} left)",
+                                    f"Restore checkpoint ({pending:,} left)",
                                     on_click=_make_resume_cb(),
                                     style=ft.ButtonStyle(
                                         shape=ft.RoundedRectangleBorder(radius=8),
@@ -1850,7 +1892,10 @@ class DashboardPage(ft.Column):
         folders = [Path(str(p)) for p in folders_raw if Path(str(p)).exists()]
         if not folders:
             self._clear_incomplete_scan_session()
-            self._bridge.show_snackbar("Saved scan folders are unavailable. Resume skipped.", info=True)
+            self._bridge.show_snackbar(
+                "Saved scan folders are unavailable. Restore from checkpoint was skipped.",
+                info=True,
+            )
             return
         self._folders = folders
         if isinstance(modes, list):
@@ -1916,6 +1961,47 @@ class DashboardPage(ft.Column):
         if total > 0:
             return min(scanned / total, 1.0)
         return 0.05
+
+    @staticmethod
+    def _normalize_scan_stage_for_ui(raw: object) -> str:
+        """Coerce progress ``stage`` to ``ScanStage`` literals.
+
+        The scan HUD uses strict equality on ``ScanStage`` constants. Engines that omit
+        ``stage`` (empty default), use legacy names (``comparing``), or vary casing would
+        otherwise show the generic "Scanning…" headline, empty timer copy, and "Waiting…"
+        under step 2 while ``files_scanned`` / ``files_total`` still advance.
+        """
+        s = str(raw or "").strip()
+        if not s:
+            return ""
+        key = s.lower().replace("-", "_").replace(" ", "_")
+        while "__" in key:
+            key = key.replace("__", "_")
+        if key == "network_error":
+            return "network_error"
+        known = frozenset(
+            {
+                ScanStage.DISCOVERING,
+                ScanStage.GROUPING_BY_SIZE,
+                ScanStage.HASHING_PARTIAL,
+                ScanStage.HASHING_FULL,
+                ScanStage.COMPLETE,
+                ScanStage.CANCELLED,
+            }
+        )
+        if key in known:
+            return key
+        aliases = {
+            "comparing": ScanStage.HASHING_PARTIAL,
+            "hashing": ScanStage.HASHING_PARTIAL,
+            "hashingpartial": ScanStage.HASHING_PARTIAL,
+            "verifying": ScanStage.HASHING_FULL,
+            "verifying_duplicates": ScanStage.HASHING_FULL,
+            "analyzing_images": ScanStage.HASHING_PARTIAL,
+            "extracting_text": ScanStage.HASHING_FULL,
+            "reading_timestamps": ScanStage.DISCOVERING,
+        }
+        return aliases.get(key, key)
 
     def _scan_hud_strings(self, stage: str, scanned: int, total: int, files_catalogued: int) -> tuple[str, str, str]:
         """Return (main headline, short subtitle, counter line without throughput)."""
@@ -1994,7 +2080,14 @@ class DashboardPage(ft.Column):
     def _present_cancel_waiting_for_results(self, *, phase_files: int) -> None:
         """Stop UI: stay on scan surface with a clear fork until the engine reports partial groups."""
         t = self._t
+        frozen_elapsed = DashboardPage._fmt_elapsed_compact(
+            max(0.0, time.monotonic() - self._scan_elapsed_start)
+        )
         self._stop_scan_elapsed_timer()
+        try:
+            self._scan_elapsed_clock.value = f"Total {frozen_elapsed}"
+        except Exception:
+            pass
         self._ring.value = None
         self._ring.color = "#F59E0B"
         self._ring_label.value = "Scan cancelled"
@@ -2083,6 +2176,10 @@ class DashboardPage(ft.Column):
             p.visible = False
         self._scan_hud_snap = dict(self._scan_hud_snap)
         self._scan_hud_snap["rate"] = None
+        try:
+            self._scan_elapsed_clock.value = f"Total {DashboardPage._fmt_elapsed_compact(max(0.0, time.monotonic() - self._scan_elapsed_start))}"
+        except Exception:
+            pass
 
         if self._cancel_user_dismissed_choice:
             self._cancel_user_dismissed_choice = False
@@ -2168,8 +2265,58 @@ class DashboardPage(ft.Column):
             self._phase_hash_bar.value = None
             self._phase_hash_caption.value = "Waiting…"
 
+    def _path_strip_caption(self) -> str:
+        """Latest file path, or stage-based text so long phases still feel alive."""
+        snap = self._scan_hud_snap or {}
+        st = str(snap.get("stage") or "")
+        raw = str(snap.get("current_file_path") or snap.get("current_file") or "").strip()
+        if raw:
+            if raw.lower().startswith("network path unreachable"):
+                return raw
+            if len(raw) > 110:
+                return f"Scanning: {raw[:48]}…{raw[-56:]}"
+            return f"Scanning: {raw}"
+        tot = int(snap.get("total") or 0)
+        scanned = int(snap.get("scanned") or 0)
+        t_scope = int(snap.get("total_files_in_scope") or 0)
+        proc = int(snap.get("files_processed") or scanned or 0)
+        cand = int(snap.get("candidates_found") or 0)
+        cat = int(snap.get("files_catalogued") or 0)
+        if st == ScanStage.DISCOVERING:
+            if t_scope > 0:
+                return f"Discovering — {proc:,} / {t_scope:,} paths catalogued"
+            return f"Discovering — {proc:,} paths indexed"
+        if st == ScanStage.GROUPING_BY_SIZE and tot > 0:
+            return (
+                f"Grouping by size — {scanned:,} / {tot:,} files "
+                f"(per-path lines resume as hashing reports each file)"
+            )
+        if st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+            algo = str(snap.get("active_hash_algorithm") or "")
+            suf = f" · {algo}" if algo else ""
+            if tot > 0:
+                extra = f" · {cand:,} candidates" if cand else ""
+                return f"Hashing — {scanned:,} / {tot:,} work units{extra}{suf}"
+            return f"Hashing — {cat:,} paths in scope{suf}"
+        if st == ScanStage.COMPLETE:
+            return "Finishing — assembling duplicate groups…"
+        return "Preparing scan…"
+
     def _on_scan_progress(self, data: dict) -> None:
-        stage = data.get("stage", "")
+        raw_stage = data.get("stage", "")
+        stage = DashboardPage._normalize_scan_stage_for_ui(raw_stage)
+        if stage and stage not in frozenset(
+            {
+                ScanStage.DISCOVERING,
+                ScanStage.GROUPING_BY_SIZE,
+                ScanStage.HASHING_PARTIAL,
+                ScanStage.HASHING_FULL,
+                ScanStage.COMPLETE,
+                ScanStage.CANCELLED,
+                "network_error",
+            }
+        ):
+            _log.warning("Unknown scan stage %r (normalized=%r); HUD may show generic copy", raw_stage, stage)
         state = data.get("state", "")
         scanned = data.get("files_scanned", 0) or 0
         total = data.get("files_total", 0) or 0
@@ -2198,9 +2345,21 @@ class DashboardPage(ft.Column):
         _log.debug("UI progress recv: stage=%s scanned=%d total=%d", stage, scanned, total)
 
         if stage == "network_error":
+            if not self._scan_network_warn_shown:
+                self._scan_network_warn_shown = True
+                try:
+                    self._bridge.show_snackbar(
+                        "Some paths became unavailable — skipped or retried files can make this run incomplete.",
+                        info=True,
+                    )
+                except Exception:
+                    pass
             root = self._extract_unreachable_root(current_file)
             if root:
                 self._handle_repeated_io_failure(root)
+                self._sync_pause_scan_hero_button()
+            if current_file_path or current_file:
+                self._ring_path.value = str(current_file_path or current_file)
             return
 
         # Ignore a late "complete" tick from the scanner after the user cancelled —
@@ -2210,7 +2369,9 @@ class DashboardPage(ft.Column):
 
         # Handle cancelled terminal event from progress stream (may arrive before on_complete).
         if state == "cancelled" or stage == ScanStage.CANCELLED:
+            self._cancel_watchdog_token += 1
             if self._cancel_complete_handled:
+                self._sync_pause_scan_hero_button()
                 self._do_page_update()
                 return
             self._was_cancelled = True
@@ -2232,6 +2393,7 @@ class DashboardPage(ft.Column):
                 )
             except Exception:
                 _log.debug("persist interrupted snapshot failed", exc_info=True)
+            self._sync_pause_scan_hero_button()
             self._do_page_update()
             return
 
@@ -2279,15 +2441,7 @@ class DashboardPage(ft.Column):
 
         self._ring_counter.value = counter
 
-        now = time.monotonic()
-        if (now - self._last_path_paint_ts) >= 0.10:
-            self._last_path_paint_ts = now
-            if current_file_path:
-                self._ring_path.value = f"Scanning: {current_file_path}"
-            elif current_file:
-                self._ring_path.value = f"Scanning: {current_file}"
-            else:
-                self._ring_path.value = ""
+        self._ring_path.value = self._path_strip_caption()
 
         self._update_dual_phase_bars(stage, int(scanned), int(total))
         self._progress_detail.value = f"Duplicate candidates tracked: {candidates_found:,}"
@@ -2298,6 +2452,7 @@ class DashboardPage(ft.Column):
             self._hash_algo_label.value = ""
             self._hash_algo_label.visible = False
 
+        self._scan_elapsed_clock.value = self._scan_elapsed_clock_value()
         self._ring_timer.value = self._build_scan_timer_line()
 
         # Canvas chunk bar — visible only during hashing phases.
@@ -2318,6 +2473,7 @@ class DashboardPage(ft.Column):
                 self._bar_slices = 0
                 self._draw_bar()
 
+        self._sync_pause_scan_hero_button()
         self._do_page_update()
 
     def _do_page_update(self) -> None:
@@ -2383,6 +2539,17 @@ class DashboardPage(ft.Column):
         except Exception:
             pass
 
+    def _scan_elapsed_clock_value(self) -> str:
+        """Compact H:MM:SS / M:SS for the live scan clock (UI thread)."""
+        if not self._scan_timer_active:
+            return "0:00"
+        elapsed = time.monotonic() - self._scan_elapsed_start
+        return DashboardPage._fmt_elapsed_compact(elapsed)
+
+    async def _async_tick_scan_elapsed(self) -> None:
+        """Flet ``run_task`` path when ``run_thread`` is unavailable."""
+        self._apply_tick_scan_hud()
+
     def _start_scan_elapsed_timer(self) -> None:
         self._stop_scan_elapsed_timer()
         self._scan_hud_stop = threading.Event()
@@ -2396,7 +2563,12 @@ class DashboardPage(ft.Column):
                 if not self._scan_timer_active:
                     break
                 try:
-                    page.run_thread(self._apply_tick_scan_hud)
+                    if hasattr(page, "run_thread"):
+                        page.run_thread(self._apply_tick_scan_hud)
+                    elif hasattr(page, "run_task"):
+                        page.run_task(self._async_tick_scan_elapsed)
+                    else:
+                        self._apply_tick_scan_hud()
                 except Exception:
                     _log.debug("scan elapsed tick scheduling failed", exc_info=True)
 
@@ -2419,8 +2591,12 @@ class DashboardPage(ft.Column):
             self._speed_points.append((time.monotonic(), fp))
             self._headline_pulse_tick += 1
             self._ring_label.opacity = 0.78 if (self._headline_pulse_tick % 2 == 1) else 1.0
+            self._scan_elapsed_clock.value = self._scan_elapsed_clock_value()
             self._ring_timer.value = self._build_scan_timer_line()
+            self._ring_path.value = self._path_strip_caption()
+            DashboardPage._safe_update(self._scan_elapsed_clock)
             DashboardPage._safe_update(self._ring_timer)
+            DashboardPage._safe_update(self._ring_path)
             DashboardPage._safe_update(self._ring_label)
             now = time.monotonic()
             if now - float(getattr(self, "_last_incomplete_persist_ts", 0.0) or 0.0) >= 15.0:
@@ -2433,30 +2609,79 @@ class DashboardPage(ft.Column):
             _log.debug("scan elapsed tick update failed", exc_info=True)
 
     def _build_scan_timer_line(self) -> str:
+        """Pace / ETA / phase hints — elapsed lives on ``_scan_elapsed_clock``."""
         if not self._scan_timer_active:
             return ""
         elapsed = time.monotonic() - self._scan_elapsed_start
-        el = DashboardPage._fmt_elapsed_compact(elapsed)
         snap = self._scan_hud_snap or {}
         st = str(snap.get("stage") or "")
 
-        parts = [f"Elapsed {el}"]
+        parts: list[str] = []
         if not st:
-            parts.append("Preparing scan…")
-            return "  ·  ".join(parts)
+            return "Preparing scan…"
 
         is_hs = st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
 
         # Hide ETA / throughput outside hashing phases (avoids stale files/s during assembly).
         if not is_hs:
+            total = int(snap.get("total") or 0)
+            scanned = int(snap.get("scanned") or 0)
             if st == ScanStage.COMPLETE:
                 parts.append("Assembling duplicate groups…")
             elif st == ScanStage.CANCELLED:
                 parts.append("Stopping scan…")
             elif st == ScanStage.GROUPING_BY_SIZE:
-                parts.append("Grouping same-size candidates…")
+                if total > 0:
+                    pct = int(max(0.0, min(100.0, (float(scanned) / float(total)) * 100.0)))
+                    stage_eta_s, conf = self._stable_stage_eta_seconds(
+                        stage=st,
+                        elapsed=elapsed,
+                        scanned=scanned,
+                        total=total,
+                        rolling_rate=self._rolling_speed_files_per_sec(),
+                        warmup_seconds=5.0,
+                        min_scanned=max(1000, int(total * 0.03)),
+                    )
+                    if stage_eta_s is not None:
+                        eta_txt = (
+                            self._fmt_eta_bucket(stage_eta_s)
+                            if conf == "low"
+                            else self._fmt_eta(stage_eta_s)
+                        )
+                        if eta_txt:
+                            parts.append(f"Grouping same-size candidates… {pct}%  ·  ETA ~{eta_txt}")
+                        else:
+                            parts.append(f"Grouping same-size candidates… {pct}%")
+                    else:
+                        parts.append(f"Grouping same-size candidates… {pct}%")
+                else:
+                    parts.append("Grouping same-size candidates…")
             elif st == ScanStage.DISCOVERING:
-                parts.append("Listing file paths…")
+                if total > 0 and 0 < scanned < total:
+                    pct = int(max(0.0, min(100.0, (float(scanned) / float(total)) * 100.0)))
+                    stage_eta_s, conf = self._stable_stage_eta_seconds(
+                        stage=st,
+                        elapsed=elapsed,
+                        scanned=scanned,
+                        total=total,
+                        rolling_rate=self._rolling_speed_files_per_sec(),
+                        warmup_seconds=4.0,
+                        min_scanned=max(500, int(total * 0.02)),
+                    )
+                    if stage_eta_s is not None:
+                        eta_txt = (
+                            self._fmt_eta_bucket(stage_eta_s)
+                            if conf == "low"
+                            else self._fmt_eta(stage_eta_s)
+                        )
+                        if eta_txt:
+                            parts.append(f"Listing file paths… {pct}%  ·  ETA ~{eta_txt}")
+                        else:
+                            parts.append(f"Listing file paths… {pct}%")
+                    else:
+                        parts.append(f"Listing file paths… {pct}%")
+                else:
+                    parts.append("Listing file paths…")
             else:
                 parts.append("Working…")
             return "  ·  ".join(parts)
@@ -2466,11 +2691,18 @@ class DashboardPage(ft.Column):
         scanned = int(snap.get("scanned") or 0)
 
         rolling_rate = self._rolling_speed_files_per_sec()
-        if rolling_rate is not None and total > 0 and scanned < total:
-            eta_s = (float(total) - float(scanned)) / float(rolling_rate)
-            eta = self._fmt_eta(eta_s)
+        stable_eta_s, conf = self._stable_hashing_eta_seconds(
+            stage=st,
+            elapsed=elapsed,
+            scanned=scanned,
+            total=total,
+            rolling_rate=rolling_rate,
+        )
+        if stable_eta_s is not None:
+            eta = self._fmt_eta(stable_eta_s)
             if eta:
-                parts.append(f"ETA ~{eta}")
+                suffix = " (estimating)" if conf == "low" else ""
+                parts.append(f"ETA ~{eta}{suffix}")
             else:
                 parts.append("Finishing…")
         elif rolling_rate is not None and total > 0:
@@ -2516,6 +2748,116 @@ class DashboardPage(ft.Column):
             parts.append("Working…")
         return "  ·  ".join(parts)
 
+    def _stable_hashing_eta_seconds(
+        self,
+        *,
+        stage: str,
+        elapsed: float,
+        scanned: int,
+        total: int,
+        rolling_rate: float | None,
+    ) -> tuple[float | None, str]:
+        """Return (stable_eta_seconds, confidence) for hashing phases."""
+        if stage != self._eta_last_stage:
+            self._eta_last_stage = stage
+            self._eta_smoothed_seconds = None
+            self._eta_last_update_ts = time.monotonic()
+        if rolling_rate is None or total <= 0 or scanned <= 0 or scanned >= total:
+            return None, "low"
+        # Warm-up gate: avoid noisy early ETA.
+        if elapsed < 8.0 or scanned < max(250, int(total * 0.02)):
+            return None, "low"
+
+        raw_eta = max(0.0, (float(total) - float(scanned)) / max(1e-6, float(rolling_rate)))
+        prev = self._eta_smoothed_seconds
+        if prev is None:
+            smoothed = raw_eta
+        else:
+            # EMA smooths short-term throughput spikes/drops.
+            smoothed = (0.25 * raw_eta) + (0.75 * prev)
+            # Clamp jump size per tick so ETA cannot wildly swing.
+            lo = prev * 0.85
+            hi = prev * 1.15
+            smoothed = max(lo, min(hi, smoothed))
+
+        self._eta_smoothed_seconds = smoothed
+        self._eta_last_update_ts = time.monotonic()
+
+        # Confidence from recent rate variance.
+        confidence = "high"
+        points = list(self._speed_points)
+        if len(points) >= 6:
+            rates: list[float] = []
+            for i in range(1, len(points)):
+                dt = points[i][0] - points[i - 1][0]
+                df = points[i][1] - points[i - 1][1]
+                if dt > 0.2 and df > 0:
+                    rates.append(df / dt)
+            if len(rates) >= 4:
+                mean = sum(rates) / float(len(rates))
+                if mean > 0:
+                    variance = sum((r - mean) ** 2 for r in rates) / float(len(rates))
+                    coeff_var = (variance ** 0.5) / mean
+                    if coeff_var > 0.42:
+                        confidence = "low"
+                    elif coeff_var > 0.24:
+                        confidence = "medium"
+        return smoothed, confidence
+
+    def _stable_stage_eta_seconds(
+        self,
+        *,
+        stage: str,
+        elapsed: float,
+        scanned: int,
+        total: int,
+        rolling_rate: float | None,
+        warmup_seconds: float,
+        min_scanned: int,
+    ) -> tuple[float | None, str]:
+        """Stage-agnostic stable ETA (for discovery/grouping/hash)."""
+        if stage != self._eta_last_stage:
+            self._eta_last_stage = stage
+            self._eta_smoothed_seconds = None
+            self._eta_last_update_ts = time.monotonic()
+        if rolling_rate is None or total <= 0 or scanned <= 0 or scanned >= total:
+            return None, "low"
+        if elapsed < warmup_seconds or scanned < max(1, min_scanned):
+            return None, "low"
+
+        raw_eta = max(0.0, (float(total) - float(scanned)) / max(1e-6, float(rolling_rate)))
+        prev = self._eta_smoothed_seconds
+        if prev is None:
+            smoothed = raw_eta
+        else:
+            smoothed = (0.22 * raw_eta) + (0.78 * prev)
+            lo = prev * 0.86
+            hi = prev * 1.14
+            smoothed = max(lo, min(hi, smoothed))
+
+        self._eta_smoothed_seconds = smoothed
+        self._eta_last_update_ts = time.monotonic()
+
+        confidence = "high"
+        points = list(self._speed_points)
+        if len(points) >= 6:
+            rates: list[float] = []
+            for i in range(1, len(points)):
+                dt = points[i][0] - points[i - 1][0]
+                df = points[i][1] - points[i - 1][1]
+                if dt > 0.2 and df > 0:
+                    rates.append(df / dt)
+            if len(rates) >= 4:
+                mean = sum(rates) / float(len(rates))
+                if mean > 0:
+                    variance = sum((r - mean) ** 2 for r in rates) / float(len(rates))
+                    coeff_var = (variance ** 0.5) / mean
+                    if coeff_var > 0.42:
+                        confidence = "low"
+                    elif coeff_var > 0.24:
+                        confidence = "medium"
+        return smoothed, confidence
+
     @staticmethod
     def _fmt_elapsed_compact(seconds: float) -> str:
         s = int(max(0.0, seconds))
@@ -2526,6 +2868,11 @@ class DashboardPage(ft.Column):
         return f"{m}:{sec:02d}"
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
+        self._cancel_watchdog_token += 1
+        self._pause_scan_btn.visible = False
+        frozen_scan_elapsed = DashboardPage._fmt_elapsed_compact(
+            max(0.0, time.monotonic() - self._scan_elapsed_start)
+        )
         self._stop_scan_elapsed_timer()
         # If cancel was clicked, the backend still calls on_complete with partial
         # results (state=cancelled). Route those to the partial-results flow.
@@ -2553,6 +2900,10 @@ class DashboardPage(ft.Column):
         self._ring_counter.value = ""
         self._scan_mode_run_label.value = ""
         self._ring_timer.value = ""
+        try:
+            self._scan_elapsed_clock.value = frozen_scan_elapsed
+        except Exception:
+            pass
         self._ring_path.value = ""
         self._cancel_btn.visible = False
         self._view_results_btn.visible = True
@@ -2582,13 +2933,19 @@ class DashboardPage(ft.Column):
         self._bridge.play_sound("success")
 
     def _on_scan_error(self, msg: str) -> None:
+        self._cancel_watchdog_token += 1
         if "network path unreachable:" in str(msg or "").lower():
             root = self._extract_unreachable_root(str(msg))
             if root:
                 self._handle_repeated_io_failure(root)
                 return
+        self._pause_scan_btn.visible = False
         self._stop_scan_elapsed_timer()
         self._ring_timer.value = ""
+        try:
+            self._scan_elapsed_clock.value = ""
+        except Exception:
+            pass
         self._bar_row.visible = False
         try:
             self._persist_incomplete_scan_session(
@@ -2604,6 +2961,91 @@ class DashboardPage(ft.Column):
         self._status.value = f"Scan error: {msg}"
         DashboardPage._safe_update(self)
         self._bridge.play_sound("error")
+
+    def _folders_readable_for_continue_scan(self) -> tuple[bool, str]:
+        """Return (True, '') if every scan folder exists and is readable; else (False, hint path)."""
+        for raw in list(getattr(self, "_folders", []) or []):
+            p = Path(raw)
+            try:
+                resolved = p.resolve()
+            except OSError:
+                resolved = p
+            try:
+                if not resolved.exists():
+                    return False, str(p)
+                if not os.access(os.fspath(resolved), os.R_OK):
+                    return False, str(p)
+            except OSError:
+                return False, str(p)
+        return True, ""
+
+    def _sync_pause_scan_hero_button(self) -> None:
+        """Show Pause / Continue scan under START when a scan is active; hide when idle or cancelling."""
+        btn = self._pause_scan_btn
+        try:
+            scanning = bool(self._bridge.backend.is_scanning)
+        except Exception:
+            scanning = False
+        show = scanning and bool(self._scan_view.visible) and not self._was_cancelled
+        if not show:
+            btn.visible = False
+            btn.text = "Pause scan"
+            btn.icon = ft.icons.Icons.PAUSE
+            btn.style = pill_outlined_button_style(self._t)
+            btn.disabled = False
+            DashboardPage._safe_update(btn)
+            return
+        paused = False
+        try:
+            paused = bool(self._bridge.backend.is_paused)
+        except Exception:
+            paused = False
+        if paused:
+            btn.text = "Continue scan"
+            btn.icon = ft.icons.Icons.PLAY_ARROW
+            btn.style = pill_outlined_button_style(self._t, success=True)
+        else:
+            btn.text = "Pause scan"
+            btn.icon = ft.icons.Icons.PAUSE
+            btn.style = pill_outlined_button_style(self._t)
+        btn.visible = True
+        btn.disabled = False
+        DashboardPage._safe_update(btn)
+
+    def _on_hero_pause_toggle(self, _e: ft.ControlEvent) -> None:
+        if self._was_cancelled:
+            return
+        try:
+            if not self._bridge.backend.is_scanning:
+                return
+        except Exception:
+            return
+        try:
+            if self._bridge.backend.is_paused:
+                ok, bad = self._folders_readable_for_continue_scan()
+                if not ok:
+                    try:
+                        self._bridge.show_snackbar(
+                            f"Cannot continue — folder not accessible ({bad}). Reconnect the drive and try again.",
+                            info=True,
+                        )
+                    except Exception:
+                        pass
+                    return
+                self._bridge.backend.resume_scan()
+                try:
+                    self._persist_incomplete_scan_session(status="in_progress")
+                except Exception:
+                    _log.debug("persist after continue scan failed", exc_info=True)
+            else:
+                self._bridge.backend.pause_scan()
+                try:
+                    self._persist_incomplete_scan_session(status="in_progress")
+                except Exception:
+                    _log.debug("persist after pause scan failed", exc_info=True)
+        except Exception:
+            _log.exception("Hero pause/continue")
+        self._sync_pause_scan_hero_button()
 
     def _stop_scan(self, e: ft.ControlEvent) -> None:
         elapsed_minutes = max(0, int((time.monotonic() - self._scan_elapsed_start) / 60))
@@ -2624,11 +3066,23 @@ class DashboardPage(ft.Column):
     def _confirm_stop_scan(self, _e: ft.ControlEvent) -> None:
         self._bridge.dismiss_top_dialog()
         self._persist_incomplete_scan_session(status="cancel_requested")
+        snap = dict(self._scan_hud_snap or {})
+        _log.info(
+            "cancel_requested stage=%s scanned=%s total=%s candidates=%s",
+            snap.get("stage", ""),
+            snap.get("scanned", 0),
+            snap.get("total", 0),
+            snap.get("candidates_found", 0),
+        )
         self._cancel_btn.text = "Cancelling…"
         self._cancel_btn.disabled = True
         self._was_cancelled = True
+        self._sync_pause_scan_hero_button()
         self._ring_label.value = "Cancelling…"
-        self._ring_phase_label.value = "Stopping the scan safely — this can take a moment on large files."
+        self._ring_phase_label.value = "Stopping the engine safely — this can take a moment on large scans."
+        self._ring_timer.value = "Cancel requested — waiting for engine to stop…"
+        self._cancel_watchdog_token += 1
+        token = self._cancel_watchdog_token
         DashboardPage._safe_update(self)
         try:
             self._bridge.flet_page.update()
@@ -2636,8 +3090,46 @@ class DashboardPage(ft.Column):
             pass
         try:
             self._bridge.backend.cancel_scan()
+            try:
+                self._bridge.flet_page.run_task(self._cancel_watchdog_tick, token)
+            except Exception:
+                pass
         except Exception as err:
             _log.error("Failed to stop scan: %s", err)
+
+    async def _cancel_watchdog_tick(self, token: int) -> None:
+        """Keep users informed if engine cancellation takes longer than expected."""
+        await asyncio.sleep(15.0)
+        if token != self._cancel_watchdog_token:
+            return
+        if not self._scan_view.visible or not self._was_cancelled:
+            return
+        stage = str((self._scan_hud_snap or {}).get("stage") or "")
+        scanned = int((self._scan_hud_snap or {}).get("scanned") or 0)
+        total = int((self._scan_hud_snap or {}).get("total") or 0)
+        backend_running = False
+        try:
+            backend_running = bool(getattr(self._bridge.backend, "is_scanning", False))
+        except Exception:
+            backend_running = False
+        _log.warning(
+            "cancel_waiting stage=%s scanned=%d total=%d backend_scanning=%s",
+            stage,
+            scanned,
+            total,
+            backend_running,
+        )
+        self._ring_phase_label.value = (
+            "Still stopping the engine… large candidate sets can take longer to unwind."
+        )
+        self._ring_timer.value = "Cancel requested — waiting for terminal callback…"
+        DashboardPage._safe_update(self)
+        # Keep notifying while cancellation is still pending.
+        if backend_running:
+            try:
+                self._bridge.flet_page.run_task(self._cancel_watchdog_tick, token)
+            except Exception:
+                pass
 
     @staticmethod
     def _extract_unreachable_root(message: str) -> str:
@@ -2664,16 +3156,17 @@ class DashboardPage(ft.Column):
             self._bridge.backend.pause_scan()
         except Exception:
             _log.exception("Failed to pause scan after repeated I/O failures")
+        self._sync_pause_scan_hero_button()
 
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Drive disconnected"),
             content=ft.Text(
                 f"Repeated read failures were detected at:\n{key}\n\n"
-                "The scan is paused. Choose Resume to keep trying, or Cancel to stop now and keep partial results."
+                "The scan is paused. Choose Continue scan to keep trying, or Cancel to stop now and keep partial results."
             ),
             actions=[
-                ft.TextButton("Resume Scan", on_click=self._resume_after_io_pause),
+                ft.TextButton("Continue scan", on_click=self._resume_after_io_pause),
                 ft.FilledButton("Cancel & Keep Partial Results", on_click=self._cancel_after_io_pause),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
@@ -2686,10 +3179,26 @@ class DashboardPage(ft.Column):
         if self._io_paused_root:
             self._io_failure_hits_by_root[self._io_paused_root] = 0
         self._io_paused_root = ""
+        ok, bad = self._folders_readable_for_continue_scan()
+        if not ok:
+            try:
+                self._bridge.show_snackbar(
+                    f"Cannot continue — folder not accessible ({bad}). Reconnect the drive and try again.",
+                    info=True,
+                )
+            except Exception:
+                pass
+            self._sync_pause_scan_hero_button()
+            return
         try:
             self._bridge.backend.resume_scan()
+            try:
+                self._persist_incomplete_scan_session(status="in_progress")
+            except Exception:
+                _log.debug("persist after I/O continue failed", exc_info=True)
         except Exception:
-            _log.exception("Failed to resume scan after I/O pause")
+            _log.exception("Failed to continue scan after I/O pause")
+        self._sync_pause_scan_hero_button()
 
     def _cancel_after_io_pause(self, _e: ft.ControlEvent) -> None:
         self._bridge.dismiss_top_dialog()
@@ -2707,9 +3216,11 @@ class DashboardPage(ft.Column):
         if paused_root:
             self._status.value = f"Drive disconnected at {paused_root}. Cancelling and preserving partial results."
             DashboardPage._safe_update(self._status)
+        self._sync_pause_scan_hero_button()
 
     def _go_to_results(self, e: ft.ControlEvent) -> None:
         """Navigate to results after a successful scan completion."""
+        self._pause_scan_btn.visible = False
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
@@ -2735,6 +3246,7 @@ class DashboardPage(ft.Column):
             return
         self._cancel_choice_panel.visible = False
         self._partial_results_row.visible = False
+        self._pause_scan_btn.visible = False
         self._scan_view.visible = False
         for p in self._main_panels:
             p.visible = True
@@ -2750,8 +3262,13 @@ class DashboardPage(ft.Column):
     def _go_to_home(self, e: ft.ControlEvent) -> None:
         """Dismiss the scan view and return to the main panels."""
         self._cancel_user_dismissed_choice = True
+        self._pause_scan_btn.visible = False
         self._stop_scan_elapsed_timer()
         self._ring_timer.value = ""
+        try:
+            self._scan_elapsed_clock.value = ""
+        except Exception:
+            pass
         pending = list(self._pending_partial_results or [])
         had_partial = len(pending) > 0 and self._was_cancelled
         self._bridge.abort_scan_session()
@@ -2777,6 +3294,21 @@ class DashboardPage(ft.Column):
         if h > 0:
             return f"{h}h {m}m"
         return f"{m}m {s}s"
+
+    @staticmethod
+    def _fmt_eta_bucket(seconds: float) -> str:
+        s = max(0, int(seconds))
+        if s < 180:
+            return "a few minutes"
+        if s < 900:
+            return "5–15 min"
+        if s < 1800:
+            return "15–30 min"
+        if s < 3600:
+            return "30–60 min"
+        if s < 7200:
+            return "1–2 hours"
+        return "2+ hours"
 
     def _rolling_speed_files_per_sec(self) -> float | None:
         if len(self._speed_points) < 2:
@@ -2872,6 +3404,7 @@ class DashboardPage(ft.Column):
         except Exception:
             is_scanning = False
         if self._scan_view.visible and not is_scanning:
+            self._pause_scan_btn.visible = False
             self._scan_view.visible = False
             for p in self._main_panels:
                 p.visible = True
@@ -2879,6 +3412,10 @@ class DashboardPage(ft.Column):
             self._partial_results_row.visible = False
             self._cancel_btn.visible = False
             self._ring_timer.value = ""
+            try:
+                self._scan_elapsed_clock.value = ""
+            except Exception:
+                pass
             self._ring_path.value = ""
             # Returning to Home after completion/cancel should not keep stale
             # terminal status lines from the previous run.
@@ -2914,6 +3451,8 @@ class DashboardPage(ft.Column):
         self._ring_phase_label.color = self._t.colors.fg_muted
         self._scan_mode_run_label.color = self._t.colors.fg2
         self._ring_timer.color = self._t.colors.fg_muted
+        self._scan_elapsed_clock.color = self._t.colors.fg
+        self._scan_elapsed_timer_icon.color = self._t.colors.accent
         self._ring_counter_tip.icon_color = self._t.colors.fg_muted
         self._update_stats_ui()
         self._update_modes_ui()

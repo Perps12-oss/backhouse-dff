@@ -23,6 +23,7 @@ from cerebro.engines.base_engine import (
     ScanProgress,
     ScanState,
 )
+from cerebro.engines.scan_stage import ScanStage
 
 # Extensions to always skip (system files)
 _SKIP_EXTENSIONS = {".sys", ".dll", ".drv", ".lnk"}
@@ -86,7 +87,13 @@ class LargeFileEngine(BaseEngine):
         top_n      = self._options.get("top_n", 500)
         skip_sys   = self._options.get("skip_system", True)
 
-        cb(ScanProgress(state=ScanState.SCANNING, current_file="Collecting file sizes…"))
+        cb(
+            ScanProgress(
+                state=ScanState.SCANNING,
+                stage=ScanStage.DISCOVERING,
+                current_file="Collecting file sizes…",
+            )
+        )
 
         candidates: List[DuplicateFile] = []
         scanned = 0
@@ -115,11 +122,14 @@ class LargeFileEngine(BaseEngine):
                             ))
                         scanned += 1
                         if scanned % 500 == 0:
-                            cb(ScanProgress(
-                                state=ScanState.SCANNING,
-                                files_scanned=scanned,
-                                current_file=str(p),
-                            ))
+                            cb(
+                                ScanProgress(
+                                    state=ScanState.SCANNING,
+                                    stage=ScanStage.DISCOVERING,
+                                    files_scanned=scanned,
+                                    current_file=str(p),
+                                )
+                            )
                     except OSError:
                         pass
 
@@ -139,14 +149,17 @@ class LargeFileEngine(BaseEngine):
             self._results.append(dg)
 
         self._state = ScanState.COMPLETED
-        cb(ScanProgress(
-            state=ScanState.COMPLETED,
-            files_scanned=scanned,
-            files_total=scanned,
-            groups_found=len(self._results),
-            duplicates_found=len(self._results),
-            bytes_reclaimable=sum(g.reclaimable for g in self._results),
-        ))
+        cb(
+            ScanProgress(
+                state=ScanState.COMPLETED,
+                stage=ScanStage.COMPLETE,
+                files_scanned=scanned,
+                files_total=scanned,
+                groups_found=len(self._results),
+                duplicates_found=len(self._results),
+                bytes_reclaimable=sum(g.reclaimable for g in self._results),
+            )
+        )
 
     def pause(self) -> None:
         self._pause_event.set()

@@ -27,6 +27,7 @@ from cerebro.engines.base_engine import (
     ScanProgress,
     ScanState,
 )
+from cerebro.engines.scan_stage import ScanStage
 
 # Video file extensions
 VIDEO_EXTENSIONS = {
@@ -255,7 +256,14 @@ class VideoDedupEngine(BaseEngine):
                             pass
 
         total = len(video_files)
-        cb(ScanProgress(state=ScanState.SCANNING, files_total=total, current_file="Computing signatures…"))
+        cb(
+            ScanProgress(
+                state=ScanState.SCANNING,
+                stage=ScanStage.DISCOVERING,
+                files_total=total,
+                current_file="Computing signatures…",
+            )
+        )
 
         # Compute signatures
         signatures: Dict[Path, Tuple] = {}
@@ -267,12 +275,15 @@ class VideoDedupEngine(BaseEngine):
             sig = _video_signature(vf, self._ffmpeg)
             if sig:
                 signatures[vf] = sig
-            cb(ScanProgress(
-                state=ScanState.SCANNING,
-                files_scanned=i + 1,
-                files_total=total,
-                current_file=str(vf),
-            ))
+            cb(
+                ScanProgress(
+                    state=ScanState.SCANNING,
+                    stage=ScanStage.HASHING_PARTIAL,
+                    files_scanned=i + 1,
+                    files_total=total,
+                    current_file=str(vf),
+                )
+            )
 
         if self._cancel_event.is_set():
             self._state = ScanState.CANCELLED
@@ -322,14 +333,17 @@ class VideoDedupEngine(BaseEngine):
                 self._results.append(dg)
 
         self._state = ScanState.COMPLETED
-        cb(ScanProgress(
-            state=ScanState.COMPLETED,
-            files_scanned=total,
-            files_total=total,
-            groups_found=len(self._results),
-            duplicates_found=sum(len(g.files) - 1 for g in self._results),
-            bytes_reclaimable=sum(g.reclaimable for g in self._results),
-        ))
+        cb(
+            ScanProgress(
+                state=ScanState.COMPLETED,
+                stage=ScanStage.COMPLETE,
+                files_scanned=total,
+                files_total=total,
+                groups_found=len(self._results),
+                duplicates_found=sum(len(g.files) - 1 for g in self._results),
+                bytes_reclaimable=sum(g.reclaimable for g in self._results),
+            )
+        )
 
     def pause(self) -> None:
         self._pause_event.set()

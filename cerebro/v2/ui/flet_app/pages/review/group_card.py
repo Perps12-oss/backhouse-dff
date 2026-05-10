@@ -10,6 +10,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
+from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -79,14 +80,14 @@ def build_group_card(
 ) -> ft.Container:
     reclaim = int(getattr(g, "reclaimable", 0) or 0)
     reviewed = g.group_id in reviewed_ids
-    title_color = "#A7F3D0" if reviewed else t.colors.fg
+    title_color = RC.group_title_reviewed if reviewed else t.colors.fg
     pct = (100.0 * reclaim / total_reclaim_scan) if total_reclaim_scan > 0 else 0.0
     pct_s = f" · {pct:.1f}% of scan reclaim" if total_reclaim_scan > 0 and reclaim > 0 else ""
     stripe = _GROUP_STRIPE[g.group_id % len(_GROUP_STRIPE)]
     line_dup = group_duplicate_summary(g)
     line_path = group_path_hint(list(g.files))
     glass = get_glass_style(0.05)
-    is_light = bridge.app_theme == "light"
+    is_light = app_theme_is_light(bridge)
     edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
     thin = ft.BorderSide(1, edge)
     return ft.Container(
