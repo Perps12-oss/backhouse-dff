@@ -232,6 +232,81 @@ class HashCache:
     ) -> None:
         self._upsert(Path(path), sig, full_hash=full_hash, full_algo=algo)
 
+    def set_many_full(
+        self,
+        items: list[tuple[str | Path, StatSignature, str, str]],
+    ) -> None:
+        """Batch-write full hashes with a single lock acquisition.
+
+        ``items`` is a list of ``(path, sig, full_hash, algo)`` tuples.
+        Existing quick_hash / quick_algo values are preserved (merged via SELECT
+        first, then a single executemany upsert).  Per-item locking overhead is
+        avoided: the lock is held for the entire batch.
+        """
+        if not items:
+            return
+        now = time.time()
+        for attempt in range(5):
+            try:
+                with self._write_lock:
+                    conn = self._require_conn()
+                    path_strs = [str(p) for p, _, _, _ in items]
+                    existing: dict[str, tuple] = {}
+                    # Batch-fetch existing quick_hash/quick_algo to preserve them.
+                    chunk_sz = self._SQLITE_MAX_VARS
+                    for i in range(0, len(path_strs), chunk_sz):
+                        chunk = path_strs[i : i + chunk_sz]
+                        ph = ",".join("?" * len(chunk))
+                        for row in conn.execute(
+                            f"SELECT path, quick_hash, quick_algo, quick_bytes "
+                            f"FROM file_hashes WHERE path IN ({ph})",
+                            chunk,
+                        ):
+                            existing[row[0]] = (row[1], row[2], row[3])
+
+                    rows = []
+                    for path, sig, full_hash, algo in items:
+                        p = str(path)
+                        ex = existing.get(p)
+                        qh = ex[0] if ex else None
+                        qa = ex[1] if ex else None
+                        qb = int(ex[2]) if ex and ex[2] is not None else 0
+                        rows.append((
+                            p,
+                            sig.size, sig.mtime_ns, sig.dev, sig.inode,
+                            qh, qa, qb,
+                            full_hash, algo, now,
+                        ))
+
+                    conn.executemany(
+                        """
+                        INSERT INTO file_hashes
+                          (path, size, mtime_ns, dev, inode,
+                           quick_hash, quick_algo, quick_bytes,
+                           full_hash, full_algo, updated_ts)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                          size=excluded.size,
+                          mtime_ns=excluded.mtime_ns,
+                          dev=excluded.dev,
+                          inode=excluded.inode,
+                          quick_hash=excluded.quick_hash,
+                          quick_algo=excluded.quick_algo,
+                          quick_bytes=excluded.quick_bytes,
+                          full_hash=excluded.full_hash,
+                          full_algo=excluded.full_algo,
+                          updated_ts=excluded.updated_ts
+                        """,
+                        rows,
+                    )
+                    conn.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower() and attempt < 4:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

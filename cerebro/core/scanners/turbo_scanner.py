@@ -224,6 +224,22 @@ class TurboScanConfig:
     scan_id: Optional[str] = None
     resume_from_checkpoint: bool = False
 
+    # --- Staged enhancement flags (all default False = legacy path) ---
+    # Canonical path dedup guard before hash phases (Phase 2).
+    # Suppresses alias/symlink/hardlink/case-variant self-duplicates.
+    enable_prehash_canonical_dedup: bool = False
+    # Adaptive Tier-A per-group bounded submission with escalation (Phase 1).
+    enable_tier_a_adaptive: bool = False
+    # Phase-aware separate worker caps for Tier-A / quick / full hash (Phase 3).
+    enable_phase_worker_policy: bool = False
+    # Durable size/partial phase artifacts for resume (Phase 4).
+    enable_resume_artifacts: bool = False
+
+    # Per-phase worker overrides — 0 means fall back to hash_workers (Phase 3).
+    tier_a_workers: int = 0
+    quick_hash_workers: int = 0
+    full_hash_workers: int = 0
+
 
 # ============================================================================
 # DIRECTORY CACHE
@@ -430,6 +446,28 @@ def compute_quick_hash_fast(path: Path, algorithm: str = "md5") -> Optional[str]
         return None
 
 
+def _phase_artifact_version_hash(cfg: "TurboScanConfig") -> str:
+    """Compute a fingerprint for phase artifact compatibility gating.
+
+    Encodes scan-affecting config fields so that artifacts from a prior run
+    with a different algorithm, filter set, or engine version are rejected.
+    """
+    import hashlib as _hashlib
+
+    _ENGINE_VERSION = "1"  # bump when artifact format changes
+    parts = "|".join([
+        _ENGINE_VERSION,
+        str(cfg.hash_algorithm or "auto"),
+        str(cfg.min_size),
+        str(cfg.max_size),
+        str(cfg.skip_hidden),
+        str(cfg.recursive),
+        str(sorted(cfg.exclude_paths or [])),
+        str(sorted(cfg.exclude_dirs or [])),
+    ])
+    return _hashlib.sha256(parts.encode()).hexdigest()[:16]
+
+
 def compute_tier_a_hash(path: Path, algorithm: str = "xxhash") -> Optional[str]:
     """Hash the first 4 KiB of a file (tier-A pre-filter).
 
@@ -440,6 +478,25 @@ def compute_tier_a_hash(path: Path, algorithm: str = "xxhash") -> Optional[str]:
     try:
         with open(path, "rb") as f:
             data = f.read(TIER_A_SIZE)
+        if not data:
+            return None
+        h = _new_hasher(algorithm)
+        h.update(data)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def compute_partial_hash(path: Path, algorithm: str, nbytes: int) -> Optional[str]:
+    """Hash the first ``nbytes`` of a file (adaptive Tier-A pre-filter).
+
+    Same semantics as compute_tier_a_hash but with a caller-specified byte
+    count for adaptive escalation on oversized candidate groups.
+    Can only reject — never used to confirm duplicates.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read(nbytes)
         if not data:
             return None
         h = _new_hasher(algorithm)
@@ -732,26 +789,38 @@ class TurboScanner:
             "recursive": bool(self.config.recursive),
         }
 
+    # Threshold for adaptive escalation: groups whose total bytes exceed this
+    # get a stronger prefix read (up to 64 KiB) before the full quick-hash phase.
+    _TIER_A_ADAPTIVE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
+    _TIER_A_ESCALATED_BYTES = 64 * 1024             # max escalated prefix (=quick-hash size)
+
     def _apply_tier_a_filter(
         self,
         size_groups: Dict[Any, List[Tuple[Path, float]]],
         algorithm: str,
         cancel_event: Optional[threading.Event],
     ) -> tuple[Dict[Any, List[Tuple[Path, float]]], int, int]:
-        """Apply 4 KiB prefix hash as a cheap pre-filter before the quick-hash phase.
+        """Apply a prefix-hash pre-filter before the quick-hash phase.
 
         Returns (filtered_size_groups, candidates_in, candidates_out).
-        Correctness guarantee: tier-A can only *reject* non-matches — files that
-        share a 4 KiB prefix still go through quick-hash + full-hash before being
+        Correctness guarantee: Tier-A can only *reject* non-matches — files that
+        share the prefix hash still go through quick-hash + full-hash before being
         confirmed as duplicates.
 
-        Files ≤ TIER_A_SIZE bytes are hashed in their entirety by tier-A; any
-        survivors still go through the full-hash phase (no shortcutting).
+        Two modes controlled by config.enable_tier_a_adaptive:
+        • False (default): legacy flat task flooding — all groups submitted at once
+          with a fixed 4 KiB prefix read (unchanged behaviour).
+        • True: per-group bounded submission with adaptive escalation. Groups whose
+          total bytes exceed _TIER_A_ADAPTIVE_THRESHOLD use a stronger prefix
+          (up to _TIER_A_ESCALATED_BYTES) to get a better rejection rate.
+          self._tier_a_groups_escalated is incremented for observability.
 
         The filter is skipped (returns size_groups unchanged) when:
         • there are no candidates, or
         • hash_workers < 2 (not worth the overhead).
         """
+        from collections import defaultdict as _dd
+
         candidates_in = sum(len(v) for v in size_groups.values())
         if not size_groups or candidates_in < 2:
             return size_groups, candidates_in, candidates_in
@@ -762,69 +831,143 @@ class TurboScanner:
             tier_algo = "xxhash"
 
         hash_workers = self.config.hash_workers
-        futures_map: Dict = {}
+        # Per-phase cap (Phase 3): use tier_a_workers if set and policy is enabled.
+        if self.config.enable_phase_worker_policy and self.config.tier_a_workers > 0:
+            effective_workers = max(2, min(self.config.tier_a_workers, 32))
+        else:
+            effective_workers = max(2, min(hash_workers, 16))
+
         # Do not use ``with ThreadPoolExecutor`` here: on cancel, __exit__ would call
         # shutdown(wait=True) and block until every submitted Tier-A read finishes
         # (often hundreds of thousands of tasks), making cancel slower than scanning.
-        pool = ThreadPoolExecutor(max_workers=max(2, min(hash_workers, 16)))
+        pool = ThreadPoolExecutor(max_workers=effective_workers)
         abrupt_exit = False
-        try:
-            for size_key, paths in size_groups.items():
-                for path, mtime in paths:
+
+        if not self.config.enable_tier_a_adaptive:
+            # ── Legacy flat path (default) ────────────────────────────────────
+            futures_map: Dict = {}
+            try:
+                for size_key, paths in size_groups.items():
+                    for path, mtime in paths:
+                        if cancel_event is not None and cancel_event.is_set():
+                            abrupt_exit = True
+                            return size_groups, candidates_in, candidates_in
+                        fut = pool.submit(compute_tier_a_hash, path, tier_algo)
+                        futures_map[fut] = (size_key, path, mtime)
+
+                keyed: Dict[tuple, list] = _dd(list)
+                total_jobs = max(1, len(futures_map))
+                processed_jobs = 0
+                next_pct_log = 10
+                for fut in as_completed(list(futures_map.keys())):
+                    size_key, path, mtime = futures_map[fut]
                     if cancel_event is not None and cancel_event.is_set():
                         abrupt_exit = True
                         return size_groups, candidates_in, candidates_in
-                    fut = pool.submit(compute_tier_a_hash, path, tier_algo)
-                    futures_map[fut] = (size_key, path, mtime)
+                    try:
+                        ta_hash = fut.result()
+                    except Exception:
+                        ta_hash = None
+                    if ta_hash is None:
+                        keyed[(size_key, "__error__")].append((path, mtime))
+                    else:
+                        keyed[(size_key, ta_hash)].append((path, mtime))
+                    processed_jobs += 1
+                    pct = int((processed_jobs / total_jobs) * 100)
+                    if pct >= next_pct_log:
+                        logger.info(
+                            "[Turbo] Tier-A progress: %d%% (%d/%d)",
+                            pct,
+                            processed_jobs,
+                            total_jobs,
+                        )
+                        next_pct_log += 10
 
-            # Re-group by (size_key, tier_a_hash): only groups with ≥ 2 matching files survive.
-            from collections import defaultdict as _dd
+                survivors: Dict[Any, List[Tuple[Path, float]]] = {}
+                for (size_key, _), grp_paths in keyed.items():
+                    if len(grp_paths) < 2:
+                        continue
+                    existing = survivors.setdefault(size_key, [])
+                    existing.extend(grp_paths)
 
-            keyed: Dict[tuple, list] = _dd(list)
-            total_jobs = max(1, len(futures_map))
-            processed_jobs = 0
-            next_pct_log = 10
-            for fut in as_completed(list(futures_map.keys())):
-                size_key, path, mtime = futures_map[fut]
-                if cancel_event is not None and cancel_event.is_set():
-                    abrupt_exit = True
-                    return size_groups, candidates_in, candidates_in
+                candidates_out = sum(len(v) for v in survivors.values())
+                return survivors, candidates_in, candidates_out
+            finally:
                 try:
-                    ta_hash = fut.result()
-                except Exception:
-                    ta_hash = None
-                if ta_hash is None:
-                    # I/O error: keep the file in the pipeline to avoid false negatives.
-                    keyed[(size_key, "__error__")].append((path, mtime))
-                else:
-                    keyed[(size_key, ta_hash)].append((path, mtime))
-                processed_jobs += 1
-                pct = int((processed_jobs / total_jobs) * 100)
-                if pct >= next_pct_log:
-                    logger.info(
-                        "[Turbo] Tier-A progress: %d%% (%d/%d)",
-                        pct,
-                        processed_jobs,
-                        total_jobs,
-                    )
-                    next_pct_log += 10
+                    pool.shutdown(wait=not abrupt_exit, cancel_futures=abrupt_exit)
+                except TypeError:
+                    pool.shutdown(wait=False if abrupt_exit else True)
 
-            # Rebuild size_groups: merge sub-groups that share same size_key and ≥ 2 files.
-            survivors: Dict[Any, List[Tuple[Path, float]]] = {}
-            for (size_key, _), paths in keyed.items():
-                if len(paths) < 2:
-                    continue
-                existing = survivors.setdefault(size_key, [])
-                existing.extend(paths)
-
-            candidates_out = sum(len(v) for v in survivors.values())
-            return survivors, candidates_in, candidates_out
-        finally:
+        else:
+            # ── Adaptive per-group path ───────────────────────────────────────
+            # Process one size-group at a time so:
+            #  • Oversized groups get a stronger prefix read (adaptive escalation).
+            #  • Queue depth stays bounded (effective_workers tasks in flight per group).
+            #  • Cancel checks happen at group boundaries, not just per-file.
+            survivors_adaptive: Dict[Any, List[Tuple[Path, float]]] = {}
             try:
-                pool.shutdown(wait=not abrupt_exit, cancel_futures=abrupt_exit)
-            except TypeError:
-                # Python < 3.9: no cancel_futures kwarg
-                pool.shutdown(wait=False if abrupt_exit else True)
+                for size_key, paths in size_groups.items():
+                    if cancel_event is not None and cancel_event.is_set():
+                        abrupt_exit = True
+                        return size_groups, candidates_in, candidates_in
+
+                    # Decide prefix size for this group.
+                    group_total_bytes = len(paths) * int(size_key)
+                    if (
+                        group_total_bytes > self._TIER_A_ADAPTIVE_THRESHOLD
+                        and int(size_key) > TIER_A_SIZE
+                    ):
+                        prefix_bytes = min(int(size_key), self._TIER_A_ESCALATED_BYTES)
+                        self._tier_a_groups_escalated += 1
+                        logger.debug(
+                            "[Turbo] Tier-A adaptive: escalating group size_key=%d "
+                            "n=%d total_bytes=%d → prefix=%d",
+                            size_key, len(paths), group_total_bytes, prefix_bytes,
+                        )
+                    else:
+                        prefix_bytes = TIER_A_SIZE
+
+                    # Submit this group's tasks.
+                    grp_futures: Dict = {}
+                    for path, mtime in paths:
+                        if cancel_event is not None and cancel_event.is_set():
+                            abrupt_exit = True
+                            return size_groups, candidates_in, candidates_in
+                        fut = pool.submit(compute_partial_hash, path, tier_algo, prefix_bytes)
+                        grp_futures[fut] = (path, mtime)
+
+                    # Collect results for this group.
+                    keyed_grp: Dict[str, list] = _dd(list)
+                    for fut in as_completed(list(grp_futures.keys())):
+                        path, mtime = grp_futures[fut]
+                        if cancel_event is not None and cancel_event.is_set():
+                            abrupt_exit = True
+                            return size_groups, candidates_in, candidates_in
+                        try:
+                            ta_hash = fut.result()
+                        except Exception:
+                            ta_hash = None
+                        bucket = ta_hash if ta_hash is not None else "__error__"
+                        keyed_grp[bucket].append((path, mtime))
+
+                    # Merge survivors back into size_key bucket.
+                    for bucket_paths in keyed_grp.values():
+                        if len(bucket_paths) >= 2:
+                            existing = survivors_adaptive.setdefault(size_key, [])
+                            existing.extend(bucket_paths)
+
+                candidates_out = sum(len(v) for v in survivors_adaptive.values())
+                if self._tier_a_groups_escalated:
+                    logger.info(
+                        "[Turbo] Tier-A adaptive: %d groups escalated to stronger prefix",
+                        self._tier_a_groups_escalated,
+                    )
+                return survivors_adaptive, candidates_in, candidates_out
+            finally:
+                try:
+                    pool.shutdown(wait=not abrupt_exit, cancel_futures=abrupt_exit)
+                except TypeError:
+                    pool.shutdown(wait=False if abrupt_exit else True)
 
     def _invalidate_caches_if_scope_changed(self) -> None:
         if not self.config.use_cache:
@@ -1178,8 +1321,55 @@ class TurboScanner:
         # Filter out unique sizes
         size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
         logger.info("[Turbo] Found %d size groups with potential duplicates", len(size_groups))
+
+        # Canonical-path dedup guard: suppress alias/symlink/hardlink/case variants
+        # before any hash I/O.  Only activated when enable_prehash_canonical_dedup=True
+        # (default False = legacy path unchanged).
+        _canonical_dedup_removed = 0
+        if self.config.enable_prehash_canonical_dedup and size_groups:
+            cleaned: Dict[int, List] = {}
+            for sz, entries in size_groups.items():
+                seen_canonical: Dict[str, int] = {}  # canonical_key -> first index kept
+                kept = []
+                for entry in entries:
+                    path_obj = entry[0] if isinstance(entry, (tuple, list)) else entry
+                    try:
+                        canonical_key = os.path.normcase(
+                            str(Path(str(path_obj)).resolve())
+                        )
+                    except (OSError, ValueError):
+                        canonical_key = os.path.normcase(str(path_obj))
+                    if canonical_key not in seen_canonical:
+                        seen_canonical[canonical_key] = 1
+                        kept.append(entry)
+                    else:
+                        _canonical_dedup_removed += 1
+                if len(kept) >= 2:
+                    cleaned[sz] = kept
+            size_groups = cleaned
+            if _canonical_dedup_removed:
+                logger.info(
+                    "[Turbo] Canonical dedup guard: removed %d alias paths, %d size groups remain",
+                    _canonical_dedup_removed,
+                    len(size_groups),
+                )
+
         _diag_size_candidates = sum(len(v) for v in size_groups.values())
         _t_grouping_end = time.perf_counter()
+
+        # Persist size-group artifact for resume (Phase 4).
+        if self.config.enable_resume_artifacts and ckpt and scan_id and size_groups:
+            try:
+                _art_ver = _phase_artifact_version_hash(self.config)
+                _art_data = {
+                    "size_groups": {
+                        str(k): [[str(p), mt] for p, mt in v]
+                        for k, v in size_groups.items()
+                    }
+                }
+                ckpt.save_phase_artifact(scan_id, "size_groups", _art_data, _art_ver)
+            except Exception:
+                pass
 
         # Tier-A pre-filter (4 KiB prefix hash) — cheaply rejects non-matches before
         # the more expensive 64 KiB quick-hash phase.  Runs only when quick-hash is
@@ -1187,6 +1377,7 @@ class TurboScanner:
         _t_tier_a_start = time.perf_counter()
         _tier_a_rejected = 0
         _tier_a_in = 0
+        self._tier_a_groups_escalated = 0  # reset before each scan; updated inside _apply_tier_a_filter
         if self.config.use_quick_hash and size_groups:
             _pause_gate()
             logger.info(
@@ -1209,6 +1400,19 @@ class TurboScanner:
                 100.0 * _tier_a_rejected / max(1, _tier_a_in),
                 time.perf_counter() - _t_tier_a_start,
             )
+            # Persist Tier-A survivors for resume (Phase 4).
+            if self.config.enable_resume_artifacts and ckpt and scan_id and size_groups:
+                try:
+                    _art_ver = _phase_artifact_version_hash(self.config)
+                    _art_data = {
+                        "size_groups": {
+                            str(k): [[str(p), mt] for p, mt in v]
+                            for k, v in size_groups.items()
+                        }
+                    }
+                    ckpt.save_phase_artifact(scan_id, "tier_a_survivors", _art_data, _art_ver)
+                except Exception:
+                    pass
         _t_tier_a_end = time.perf_counter()
 
         # Phase 3: Quick hash for size groups (parallel with caching)
@@ -1359,11 +1563,15 @@ class TurboScanner:
             _t_yield_end - _t_full_hash_end,
             _t_yield_end - _t_scan_start,
         )
+        _tier_a_groups_escalated = getattr(self, "_tier_a_groups_escalated", 0)
         logger.info(
-            "[Turbo] summary: discovered=%d files_in_size_candidate_groups=%d "
+            "[Turbo] summary: discovered=%d canonical_dedup_removed=%d "
+            "tier_a_groups_escalated=%d files_in_size_candidate_groups=%d "
             "final_duplicate_groups=%d file_rows_emitted=%d elapsed=%.2fs "
             "cache_hits=%d cache_misses=%d cache_hit_pct=%.1f%%",
             discovered_count,
+            _canonical_dedup_removed,
+            _tier_a_groups_escalated,
             _diag_size_candidates,
             _final_ngroups,
             emitted_count,
@@ -1423,6 +1631,8 @@ class TurboScanner:
                     "total_files_in_scope": discovered_count,
                     "files_processed": discovered_count,
                     "candidates_found": candidates_found,
+                    "canonical_dedup_removed": _canonical_dedup_removed,
+                    "tier_a_groups_escalated": _tier_a_groups_escalated,
                 },
             )
 
@@ -1809,10 +2019,25 @@ class TurboScanner:
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
 
-        # Use thread pool (not process pool) for hashing to share cache
-        workers = min(self.config.hash_workers, len(files_to_hash))
+        # Use thread pool (not process pool) for hashing to share cache.
+        # When phase_worker_policy is enabled, use a phase-specific cap; otherwise
+        # fall back to hash_workers (legacy behaviour preserved exactly).
+        if self.config.enable_phase_worker_policy:
+            if stage_name in (ScanStage.HASHING_PARTIAL,):
+                _phase_cap = self.config.quick_hash_workers or self.config.hash_workers
+            else:
+                # ScanStage.HASHING_FULL or any other stage → full-hash cap
+                _phase_cap = self.config.full_hash_workers or self.config.hash_workers
+        else:
+            _phase_cap = self.config.hash_workers
+        workers = max(1, min(_phase_cap, len(files_to_hash)))
         _ckpt = self.config.checkpoint_db
         _sid = self.config.scan_id
+
+        # For full-hash phase with cache: workers compute but do NOT write to cache.
+        # The as_completed loop collects results and batch-writes via set_many_full().
+        # For quick-hash phase and no-cache path: original per-file write behaviour.
+        _batch_write_full = (not quick) and (self.hash_cache is not None)
 
         def hash_worker(path_mtime: Tuple[Path, float]) -> Tuple[Path, float, Optional[str]]:
             path, mtime = path_mtime
@@ -1831,16 +2056,23 @@ class TurboScanner:
                     self.stats['hash_cache_hits'] += 1
                     return path, mtime, cached
             if self.hash_cache:
-                hash_val = compute_hash_cached(
-                    path,
-                    self.hash_cache,
-                    effective_algorithm,
-                    quick=quick,
-                )
-                if hash_val:
-                    self.stats['hash_cache_hits'] += 1
-                else:
+                if _batch_write_full:
+                    # Full-hash batch path: _batch_cache already contains every
+                    # prefetched hit; any path that reaches here is a confirmed
+                    # miss — compute without an extra DB round-trip.
+                    hash_val = compute_full_hash_mmap(path, effective_algorithm)
                     self.stats['hash_cache_misses'] += 1
+                else:
+                    hash_val = compute_hash_cached(
+                        path,
+                        self.hash_cache,
+                        effective_algorithm,
+                        quick=quick,
+                    )
+                    if hash_val:
+                        self.stats['hash_cache_hits'] += 1
+                    else:
+                        self.stats['hash_cache_misses'] += 1
             else:
                 if quick:
                     hash_val = compute_quick_hash_fast(path, effective_algorithm)
@@ -1881,6 +2113,9 @@ class TurboScanner:
             processed = 0
             _last_emit_time = time.monotonic()
             _current_file = ""
+            # Batch accumulator for full-hash cache writes (Phase 5).
+            _full_hash_batch: list = []
+            _FULL_HASH_FLUSH_SIZE = 500
 
             if cancel_aborted:
                 pass
@@ -1892,6 +2127,13 @@ class TurboScanner:
                         _path_for_emit = str(path)
                         if hash_val:
                             hash_groups[hash_val].append((path, mtime))
+                            # Collect for batch write when in full-hash batch mode.
+                            if _batch_write_full:
+                                p_sig = _batch_sigs.get(str(path))
+                                if p_sig is not None:
+                                    _full_hash_batch.append(
+                                        (path, p_sig, hash_val, effective_algorithm)
+                                    )
                     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                         pass
                     finally:
@@ -1923,6 +2165,13 @@ class TurboScanner:
                                     "active_hash_algorithm": effective_algorithm,
                                 },
                             )
+                        # Flush batch every _FULL_HASH_FLUSH_SIZE results.
+                        if _batch_write_full and len(_full_hash_batch) >= _FULL_HASH_FLUSH_SIZE:
+                            try:
+                                self.hash_cache.set_many_full(_full_hash_batch)
+                            except Exception:
+                                pass
+                            _full_hash_batch = []
                     if cancel_event is not None and cancel_event.is_set():
                         if not _cancel_log_hash_emit_emitted:
                             logger.info(
@@ -1934,6 +2183,13 @@ class TurboScanner:
                             _cancel_log_hash_emit_emitted = True
                         cancel_aborted = True
                         break
+                # Flush remaining batch after loop.
+                if _batch_write_full and _full_hash_batch:
+                    try:
+                        self.hash_cache.set_many_full(_full_hash_batch)
+                    except Exception:
+                        pass
+                    _full_hash_batch = []
         finally:
             try:
                 if cancel_aborted:

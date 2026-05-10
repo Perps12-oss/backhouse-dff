@@ -373,6 +373,7 @@ class TurboFileEngine(BaseEngine):
         if max_threads_opt > 0:
             hash_workers = max(1, min(max_threads_opt, DEFAULT_HASH_WORKERS))
             dir_workers = max(1, min(max_threads_opt, DEFAULT_DIR_WORKERS))
+            io_cap = max_threads_opt
         else:
             # I/O-aware cap: avoid disk thrash on HDD/network mounts.
             io_cap, storage_label = _detect_io_worker_cap(self._folders)
@@ -383,6 +384,21 @@ class TurboFileEngine(BaseEngine):
                 storage_label,
                 hash_workers,
             )
+
+        # Phase-aware worker caps (Phase 3). When enable_phase_worker_policy is
+        # active, Tier-A uses a conservative cap (avoid disk thrash on large reads),
+        # quick-hash gets the full io_cap, and full-hash gets a slightly reduced cap
+        # to leave headroom. All caps respect max_threads_opt when set.
+        # Values of 0 fall back to hash_workers inside the scanner.
+        _enable_phase_policy = bool(opts.get("enable_phase_worker_policy", False))
+        if _enable_phase_policy:
+            _tier_a_workers = max(2, min(hash_workers, max(4, io_cap // 2)))
+            _quick_hash_workers = min(DEFAULT_HASH_WORKERS, io_cap)
+            _full_hash_workers = max(2, min(DEFAULT_HASH_WORKERS, io_cap))
+        else:
+            _tier_a_workers = 0
+            _quick_hash_workers = 0
+            _full_hash_workers = 0
 
         # Build TurboScanConfig from UI options — accept both naming conventions.
         use_cache = bool(opts.get("incremental_scan", True))
@@ -456,6 +472,17 @@ class TurboFileEngine(BaseEngine):
             checkpoint_db=_ckpt_db,
             scan_id=_scan_id,
             resume_from_checkpoint=_resume_from_ckpt,
+            # Staged enhancement flags — all default False (legacy path)
+            enable_prehash_canonical_dedup=bool(
+                opts.get("enable_prehash_canonical_dedup", False)
+            ),
+            enable_tier_a_adaptive=bool(opts.get("enable_tier_a_adaptive", False)),
+            enable_phase_worker_policy=_enable_phase_policy,
+            enable_resume_artifacts=bool(opts.get("enable_resume_artifacts", False)),
+            # Phase-aware worker caps (0 = fall back to hash_workers in scanner)
+            tier_a_workers=_tier_a_workers,
+            quick_hash_workers=_quick_hash_workers,
+            full_hash_workers=_full_hash_workers,
         )
         if cfg.scan_archives:
             logger.warning(
@@ -611,6 +638,7 @@ class TurboFileEngine(BaseEngine):
             # On resume the scanner emits completed_offset / total from checkpoint.
             scanned = processed  # may be non-zero if resuming
             ft = total if total > 0 else 0
+            ft = max(ft, scanned)  # files_total must never be < files_scanned
         elif entering_hashing:
             # Phase handoff: checkpoint resume seeds from completed offset; fresh scans
             # carry discovery's files_scanned (offset is 0 but prev is non-zero).
@@ -619,7 +647,7 @@ class TurboFileEngine(BaseEngine):
             ft = total if total > 0 else (total_scope if total_scope > 0 else 0)
             ft = max(ft, scanned, prev.files_total or 0, prev.files_scanned or 0)
         elif is_hashing:
-            scanned = processed + offset
+            scanned = max(prev.files_scanned, processed + offset)
             # ``total`` from TurboScanner is hash *work units* (e.g. 2× files when cache-prep
             # is counted). ``_ckpt_total`` is checkpoint row counts — same scale as *files*, not
             # work units — so prefer the live ``total`` from the callback. Always keep the

@@ -114,3 +114,46 @@ def test_discovery_speed_local_disk(tree):
         f"discovery rate {rate:.0f} files/sec is too slow "
         f"(floor 500). elapsed={elapsed:.3f}s"
     )
+
+
+def test_canonical_dedup_guard_no_self_duplicates(tmp_path: Path) -> None:
+    """enable_prehash_canonical_dedup=True must not emit self-duplicate groups.
+
+    A single real file with no actual duplicates must produce zero groups.
+    If the guard incorrectly aliased paths, the same file would appear twice
+    in a size group and bubble up as a false positive.
+    """
+    content = b"unique canonical content" * 500
+    real_file = tmp_path / "real.bin"
+    real_file.write_bytes(content)
+
+    sc = TurboScanner(TurboScanConfig(
+        min_size=0,
+        use_cache=False,
+        enable_prehash_canonical_dedup=True,
+    ))
+    results = [m for m in sc.scan([tmp_path]) if m is not None]
+    assert results == [], (
+        f"Canonical dedup guard produced false positives: {results}"
+    )
+
+
+def test_canonical_dedup_guard_preserves_real_duplicates(tmp_path: Path) -> None:
+    """Canonical dedup guard must not remove files with distinct real paths."""
+    content = b"duplicate data " * 500
+    (tmp_path / "dup_a.bin").write_bytes(content)
+    (tmp_path / "dup_b.bin").write_bytes(content)
+
+    sc = TurboScanner(TurboScanConfig(
+        min_size=0,
+        use_cache=False,
+        enable_prehash_canonical_dedup=True,
+        hash_algorithm="sha256",
+    ))
+    list(sc.scan([tmp_path]))  # exhaust generator; groups land in sc.last_groups
+    groups = sc.last_groups
+    # Two real duplicate files must still appear as one group of 2.
+    assert len(groups) == 1, (
+        f"Canonical dedup guard removed real duplicates: got {len(groups)} groups"
+    )
+    assert groups[0]["count"] == 2

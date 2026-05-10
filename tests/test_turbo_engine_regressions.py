@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -105,3 +106,128 @@ def test_turbo_cache_invalidates_when_scan_scope_options_change(tmp_path: Path) 
     list(scanner_b.scan([scan_root]))
     assert scanner_b.hash_cache is not None
     assert scanner_b.hash_cache.get_stats()["total_entries"] == 0
+
+
+def test_correctness_parity_same_scan_twice(tmp_path: Path) -> None:
+    """Same directory scanned twice must produce identical duplicate groups."""
+    scan_root = tmp_path / "scan"
+    scan_root.mkdir()
+    (scan_root / "a.txt").write_bytes(b"hello duplicate" * 100)
+    (scan_root / "b.txt").write_bytes(b"hello duplicate" * 100)
+    (scan_root / "c.txt").write_bytes(b"unique content 1" * 50)
+    (scan_root / "d.txt").write_bytes(b"unique content 2" * 50)
+
+    def _run_scan(scan_root: Path) -> list[frozenset[str]]:
+        scanner = TurboScanner(TurboScanConfig(
+            min_size=0,
+            hash_algorithm="sha256",
+            use_cache=False,
+        ))
+        list(scanner.scan([scan_root]))  # exhaust; groups land in scanner.last_groups
+        groups = [frozenset(g["paths"]) for g in scanner.last_groups]
+        return sorted(groups, key=lambda g: min(g))
+
+    first = _run_scan(scan_root)
+    second = _run_scan(scan_root)
+    assert first == second, (
+        f"Correctness parity violation: scan 1 groups={first}, scan 2 groups={second}"
+    )
+    assert len(first) == 1
+    assert frozenset([str(scan_root / "a.txt"), str(scan_root / "b.txt")]) in first
+
+
+def test_terminal_state_monotonicity_cancelled_stays_cancelled(tmp_path: Path) -> None:
+    """Once CANCELLED is emitted it must never be followed by COMPLETED."""
+    scan_root = tmp_path / "scan"
+    scan_root.mkdir()
+    for i in range(20):
+        (scan_root / f"f{i}.bin").write_bytes(bytes(range(256)) * 8)
+
+    engine = TurboFileEngine()
+    states_seen: list[str] = []
+
+    def _cb(progress: ScanProgress) -> None:
+        states_seen.append(progress.state.value if hasattr(progress.state, "value") else str(progress.state))
+
+    engine.configure(
+        folders=[scan_root],
+        protected=[],
+        options={"min_size_bytes": 0, "hash_algorithm": "sha256"},
+    )
+    engine.start(_cb)
+
+    # Cancel after a short delay — scan may not have started yet, that's fine.
+    time.sleep(0.05)
+    engine.cancel()
+
+    deadline = time.time() + 15
+    while engine.state in (ScanState.IDLE, ScanState.SCANNING) and time.time() < deadline:
+        time.sleep(0.05)
+
+    # Terminal state must be either CANCELLED or COMPLETED (not an infinite loop).
+    assert engine.state in (ScanState.CANCELLED, ScanState.COMPLETED)
+
+    # If cancel was acknowledged: COMPLETED must never follow CANCELLED in the stream.
+    if ScanState.CANCELLED in [
+        s for s in states_seen if s in ("cancelled", ScanState.CANCELLED.value if hasattr(ScanState.CANCELLED, "value") else "cancelled")
+    ]:
+        cancelled_idx = next(
+            (i for i, s in enumerate(states_seen) if "cancelled" in str(s).lower()), None
+        )
+        if cancelled_idx is not None:
+            after_cancel = states_seen[cancelled_idx + 1:]
+            assert not any("completed" in str(s).lower() for s in after_cancel), (
+                f"Terminal state regression: COMPLETED after CANCELLED. states={states_seen}"
+            )
+
+
+def test_progress_monotonicity_across_all_phase_transitions(tmp_path: Path) -> None:
+    """files_scanned must never decrease and files_total must always >= files_scanned."""
+    scan_root = tmp_path / "scan"
+    scan_root.mkdir()
+    content = b"dup content" * 200
+    for i in range(6):
+        (scan_root / f"dup{i}.bin").write_bytes(content)
+    (scan_root / "unique.bin").write_bytes(b"uniqueXYZ" * 200)
+
+    engine = TurboFileEngine()
+    snap_lock = threading.Lock()
+    snapshots: list[tuple[int, int, str]] = []
+
+    def _cb(progress: ScanProgress) -> None:
+        with snap_lock:
+            snapshots.append((
+                progress.files_scanned,
+                progress.files_total,
+                str(progress.stage or ""),
+            ))
+
+    engine.configure(
+        folders=[scan_root],
+        protected=[],
+        options={"min_size_bytes": 0, "hash_algorithm": "sha256"},
+    )
+    engine.start(_cb)
+
+    deadline = time.time() + 30
+    while engine.state in (ScanState.IDLE, ScanState.SCANNING) and time.time() < deadline:
+        time.sleep(0.05)
+
+    with snap_lock:
+        snaps = list(snapshots)
+
+    # files_total >= files_scanned at every point.
+    for scanned, total, stage in snaps:
+        assert total >= scanned, (
+            f"Progress invariant violated at stage={stage!r}: "
+            f"files_total={total} < files_scanned={scanned}"
+        )
+
+    # files_scanned must never decrease.
+    for i in range(1, len(snaps)):
+        prev_scanned = snaps[i - 1][0]
+        cur_scanned = snaps[i][0]
+        assert cur_scanned >= prev_scanned, (
+            f"Monotonicity violated: files_scanned dropped from {prev_scanned} → "
+            f"{cur_scanned} at stage={snaps[i][2]!r}"
+        )

@@ -126,6 +126,18 @@ class CheckpointDB:
                 -- Speeds resume: iter_pending_files ORDER BY file_size DESC per scan.
                 CREATE INDEX IF NOT EXISTS idx_fc_pending_size
                     ON file_checkpoints (scan_id, hash_status, file_size);
+
+                -- Phase-level resumable artifacts (size-candidate / partial-hash stage).
+                -- version_hash is a fingerprint of scan scope + config + engine version so
+                -- stale artifacts from a different scope or algorithm are rejected on load.
+                CREATE TABLE IF NOT EXISTS phase_artifacts (
+                    scan_id      TEXT NOT NULL,
+                    phase_name   TEXT NOT NULL,
+                    artifact_json TEXT NOT NULL,
+                    version_hash  TEXT NOT NULL,
+                    created_at    REAL NOT NULL,
+                    PRIMARY KEY (scan_id, phase_name)
+                );
             """)
             self._conn.commit()
 
@@ -515,6 +527,79 @@ class CheckpointDB:
             return False
 
     # ------------------------------------------------------------------ #
+    # Phase artifact persistence (enable_resume_artifacts)                 #
+    # ------------------------------------------------------------------ #
+
+    def save_phase_artifact(
+        self,
+        scan_id: str,
+        phase_name: str,
+        data: Dict,
+        version_hash: str,
+    ) -> None:
+        """Persist a resumable phase artifact (size-candidate or partial-hash stage).
+
+        ``version_hash`` must encode scope + config + engine version so that
+        ``load_phase_artifact`` can reject stale artifacts from a prior run with
+        a different algorithm or filter set.
+        """
+        now = time.time()
+        artifact_json = json.dumps(data, sort_keys=True)
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO phase_artifacts
+                     (scan_id, phase_name, artifact_json, version_hash, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(scan_id, phase_name) DO UPDATE SET
+                     artifact_json=excluded.artifact_json,
+                     version_hash=excluded.version_hash,
+                     created_at=excluded.created_at
+                """,
+                (scan_id, phase_name, artifact_json, version_hash, now),
+            )
+            self._conn.commit()
+
+    def load_phase_artifact(
+        self,
+        scan_id: str,
+        phase_name: str,
+        version_hash: str,
+    ) -> Optional[Dict]:
+        """Load a phase artifact, returning None if absent or version mismatch.
+
+        ``version_hash`` must match the stored hash exactly — any divergence
+        (scope change, algorithm change, engine upgrade) is treated as stale.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT artifact_json, version_hash FROM phase_artifacts
+                   WHERE scan_id=? AND phase_name=?""",
+                (scan_id, phase_name),
+            ).fetchone()
+        if not row:
+            return None
+        stored_json, stored_ver = row
+        if stored_ver != version_hash:
+            _log.info(
+                "[Checkpoint] phase_artifact stale: scan_id=%s phase=%s "
+                "stored_ver=%s expected=%s — rejecting",
+                scan_id, phase_name, stored_ver, version_hash,
+            )
+            return None
+        try:
+            return json.loads(stored_json)
+        except (ValueError, TypeError):
+            return None
+
+    def delete_phase_artifacts(self, scan_id: str) -> None:
+        """Remove all phase artifacts for a scan (called on successful completion)."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM phase_artifacts WHERE scan_id=?", (scan_id,)
+            )
+            self._conn.commit()
+
+    # ------------------------------------------------------------------ #
     # Garbage collection                                                   #
     # ------------------------------------------------------------------ #
 
@@ -532,6 +617,7 @@ class CheckpointDB:
                 ph = ",".join("?" * len(ids))
                 self._conn.execute(f"DELETE FROM file_checkpoints WHERE scan_id IN ({ph})", ids)
                 self._conn.execute(f"DELETE FROM scan_sessions WHERE scan_id IN ({ph})", ids)
+                self._conn.execute(f"DELETE FROM phase_artifacts WHERE scan_id IN ({ph})", ids)
                 self._conn.execute(f"DELETE FROM scan_manifests WHERE scan_id IN ({ph})", ids)
                 self._conn.commit()
         return len(ids)
