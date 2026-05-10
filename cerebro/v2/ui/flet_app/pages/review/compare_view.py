@@ -483,7 +483,10 @@ class ReviewCompareView:
         slot.content = viewer
         self._safe_update(slot)
 
-    # --- Pill targets (ReviewPage._apply_pill_chrome) ---
+    # --- Pill targets (ReviewPageChromeMixin._apply_pill_chrome) ---
+    # Bisect/partial checkout: do not pair this file with an older review_mixins that
+    # still styles delete_btn/keep_btn — those controls were removed; use hero_delete_marked_btn.
+    # Checkout compare_view + compare_delegate + shell_attach + review_mixins + review_page together.
     @property
     def btn_cmp_grid(self) -> ft.TextButton:
         return self._btn_cmp_grid
