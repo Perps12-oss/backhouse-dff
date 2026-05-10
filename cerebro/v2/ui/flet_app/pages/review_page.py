@@ -21,11 +21,8 @@ from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache,
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.deletion_dialog import build_confirm_dialog
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FilterBar, _FILTER_TABS
-from cerebro.v2.ui.flet_app.pages.review.group_card import (
-    build_group_card,
-    group_duplicate_summary,
-    group_path_hint,
-)
+from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
+from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
 from cerebro.v2.ui.flet_app.pill_button_styles import (
@@ -97,9 +94,6 @@ class ReviewPage(ft.Column):
         self._compare_render_generation = 0
         self._compare_thumb_slots: Dict[str, ft.Container] = {}
         self._compare_dims_labels: Dict[str, ft.Text] = {}
-        self._group_list_items: Dict[int, ft.Container] = {}
-        self._group_list_order: List[int] = []
-        self._active_group_row_id: Optional[int] = None
         self._compare_nav_in_flight = False
         self._thumb_load_generation = 0
 
@@ -122,6 +116,7 @@ class ReviewPage(ft.Column):
         self._rendering_badge: ft.Container
         self._compare_panel_a: ft.Container
         self._compare_panel_b: ft.Container
+        self._group_list: GroupListPanel
         self._group_list_panel: ft.ListView
         self._group_list_scroll_host: ft.Container
         self._compare_columns: ft.Row
@@ -492,12 +487,8 @@ class ReviewPage(ft.Column):
         # Compare view (left list + right multi-copy viewer)
         # The group list must live in a height-bounded area so it scrolls internally; otherwise the
         # Row grows to thousands of px and default cross-axis CENTER places A/B mid-scroll (~"group 237").
-        self._group_list_panel = ft.ListView(
-            expand=True,
-            spacing=6,
-            padding=ft.padding.all(8),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        )
+        self._group_list = GroupListPanel(t)
+        self._group_list_panel = self._group_list.list_view
         self._group_list_scroll_host = ft.Container(
             content=self._group_list_panel,
             expand=True,
@@ -673,9 +664,7 @@ class ReviewPage(ft.Column):
     def load_group(self, groups: List[DuplicateGroup], group_id: int, mode: Optional[str] = None) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._group_list_items.clear()
-        self._group_list_order = []
-        self._active_group_row_id = None
+        self._group_list.clear_tracking()
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
@@ -708,9 +697,7 @@ class ReviewPage(ft.Column):
     ) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
-        self._group_list_items.clear()
-        self._group_list_order = []
-        self._active_group_row_id = None
+        self._group_list.clear_tracking()
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if defer_render:
@@ -731,11 +718,9 @@ class ReviewPage(ft.Column):
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
         new_ids = {g.group_id for g in self._groups}
         if old_ids != new_ids:
-            self._group_list_items.clear()
-            self._group_list_order = []
-            self._active_group_row_id = None
+            self._group_list.clear_tracking()
         else:
-            self._group_list_order = []
+            self._group_list.invalidate_order()
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
@@ -1460,73 +1445,12 @@ class ReviewPage(ft.Column):
         self._update_compare_panels()
 
     def _refresh_group_list_panel(self) -> None:
-        def _set_row_style(row: ft.Container, active: bool) -> None:
-            row.bgcolor = ft.Colors.with_opacity(0.10 if active else 0.04, RC.side_a if active else ft.Colors.WHITE)
-            row.border = ft.border.all(
-                1,
-                ft.Colors.with_opacity(0.28 if active else 0.10, RC.side_a if active else ft.Colors.WHITE),
-            )
-
-        current_order = [g.group_id for g in self._groups]
-        needs_full_build = (
-            not self._group_list_items
-            or current_order != self._group_list_order
+        self._group_list.refresh(
+            groups=self._groups,
+            compare_gid=self._compare_gid,
+            on_pick=self._enter_compare,
+            safe_update=ReviewPage._safe_update,
         )
-
-        if needs_full_build:
-            self._group_list_items.clear()
-            controls: list[ft.Control] = []
-            for i, g in enumerate(self._groups):
-                active = g.group_id == self._compare_gid
-                row = ft.Container(
-                    padding=ft.padding.symmetric(horizontal=10, vertical=8),
-                    border_radius=8,
-                    ink=True,
-                    on_click=lambda _e, gid=g.group_id: self._enter_compare(gid),
-                    content=ft.Column(
-                        [
-                            ft.Text(f"Group {i + 1} · {fmt_size(g.reclaimable)}", size=self._t.typography.size_sm, weight=ft.FontWeight.W_700),
-                            ft.Text(
-                                group_duplicate_summary(g),
-                                size=self._t.typography.size_xs,
-                                color=self._t.colors.fg_muted,
-                                max_lines=2,
-                            ),
-                            ft.Text(
-                                group_path_hint(list(g.files)),
-                                size=self._t.typography.size_xs,
-                                color=self._t.colors.fg2,
-                                max_lines=2,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                            ),
-                        ],
-                        spacing=2,
-                    ),
-                )
-                _set_row_style(row, active)
-                self._group_list_items[g.group_id] = row
-                controls.append(row)
-            self._group_list_order = current_order
-            self._group_list_panel.controls = controls
-            self._active_group_row_id = self._compare_gid
-            self._safe_update(self._group_list_panel)
-            return
-
-        prev_gid = self._active_group_row_id
-        curr_gid = self._compare_gid
-        if prev_gid == curr_gid:
-            return
-        if prev_gid is not None:
-            prev = self._group_list_items.get(prev_gid)
-            if prev is not None:
-                _set_row_style(prev, False)
-                self._safe_update(prev)
-        if curr_gid is not None:
-            curr = self._group_list_items.get(curr_gid)
-            if curr is not None:
-                _set_row_style(curr, True)
-                self._safe_update(curr)
-        self._active_group_row_id = curr_gid
 
     def _recompute_marked_bytes(self) -> None:
         total = 0
@@ -1938,6 +1862,7 @@ class ReviewPage(ft.Column):
         """Updates theme properties without destroying UI controls or keyboard bindings."""
         self._glass_cache = {}
         self._t = theme_for_mode(mode)
+        self._group_list.sync_theme(self._t)
 
         # Update Glass Styles
         self._stats_header.bgcolor = self._get_glass_style(0.04).get('bgcolor')
