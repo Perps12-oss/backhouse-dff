@@ -448,19 +448,40 @@ class ReviewGridView(ft.Stack):
                     padding=ft.padding.only(right=6, top=6),
                     content=badge,
                 ),
+                ft.Container(
+                    alignment=ft.Alignment(0, 1),
+                    padding=ft.padding.only(bottom=28),
+                    content=cmp_hint,
+                ),
             ],
             expand=True,
+        )
+
+        cmp_hint = ft.Container(
+            content=ft.Text(
+                "Compare →",
+                size=9,
+                weight=ft.FontWeight.W_700,
+                color=RC.side_a,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.45, RC.side_a)),
+            border_radius=4,
+            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            visible=False,
         )
 
         def _hover(e: ft.ControlEvent) -> None:
             enter = e.data == "true"
             info_bar.opacity = 1 if enter else 0
+            cmp_hint.visible = enter
             tile.border = (
                 ft.border.all(2, RC.side_a)
                 if enter
                 else ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE))
             )
             self._safe_update(info_bar)
+            self._safe_update(cmp_hint)
             self._safe_update(tile)
 
         tile = ft.Container(

@@ -46,8 +46,22 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
             for val, label in RULE_LABELS
         ],
     )
+    page._btn_smart_select_all = ft.TextButton(
+        "Select All per Rule",
+        icon=ft.icons.Icons.CHECK_BOX_OUTLINED,
+        on_click=page._apply_smart_select_review,
+        style=pill_text_button_style(t, variant="muted"),
+        tooltip="Apply the active smart rule to mark files across all groups.",
+    )
+    page._btn_deselect_all = ft.TextButton(
+        "Clear Selection",
+        icon=ft.icons.Icons.CHECK_BOX_OUTLINE_BLANK,
+        on_click=page._deselect_all,
+        style=pill_text_button_style(t, variant="muted"),
+        tooltip="Remove all file selections.",
+    )
     page._smart_row = ft.Row(
-        [page._smart_seg, page._grid_view.zoom_row],
+        [page._smart_seg, page._btn_smart_select_all, page._btn_deselect_all, page._grid_view.zoom_row],
         spacing=t.spacing.sm,
         visible=False,
         wrap=True,

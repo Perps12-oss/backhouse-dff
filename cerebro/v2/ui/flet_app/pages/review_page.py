@@ -81,6 +81,8 @@ class ReviewPage(
         self._pending_deferred_render: bool = False
         self._cmp_smart_rule: str = "keep_largest"
         self._compare_nav_in_flight = False
+        self._selected_group_id: Optional[int] = None
+        self._selected_file: Optional[DuplicateFile] = None
 
         self._stats_header: StatsHeader
         self._smart_seg: ft.SegmentedButton

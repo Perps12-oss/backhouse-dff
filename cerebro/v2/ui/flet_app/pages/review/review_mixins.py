@@ -165,11 +165,13 @@ class ReviewPageModeMixin:
         self.scroll = None
         if mode != "grid":
             self._grid_view.bump_thumb_generation()
-        if mode != "compare":
-            # Clear compare shortcuts; skip if flet_page is missing (tests / early lifecycle).
-            fp = getattr(self._bridge, "flet_page", None)
-            if fp:
+        # Bind keyboard for interactive modes; clear only for empty/loading states.
+        fp = getattr(self._bridge, "flet_page", None)
+        if fp:
+            if mode in ("empty", "loading"):
                 fp.on_keyboard_event = None
+            else:
+                self._bind_keys()
 
         self._content.controls.clear()
         if mode != "grid":
@@ -201,7 +203,6 @@ class ReviewPageModeMixin:
             self._refresh_grid()
         elif mode == "compare":
             self._content.controls.append(self._compare_view)
-            self._bind_keys()
 
         safe_update(self._content)
         safe_update(self._cmp_bar)
@@ -251,7 +252,30 @@ class ReviewPageGroupsGridMixin:
             self._reviewed_group_ids,
             get_glass_style=self._get_glass_style,
             smart_rule=self._smart_rule,
+            on_group_click=self._on_group_card_click,
+            on_inspector_select=self._on_group_inspector_select,
+            on_file_click=self._on_file_inspector_click,
         )
+
+    def _on_group_card_click(self, g: DuplicateGroup) -> None:
+        self._enter_compare(g.group_id)
+
+    def _on_group_inspector_select(self, g: DuplicateGroup) -> None:
+        self._selected_group_id = g.group_id
+        self._selected_file = None
+        self._inspector_panel.show_group(g, self._smart_rule, self._marked_paths)
+
+    def _on_file_inspector_click(self, f: DuplicateFile) -> None:
+        self._selected_file = f
+        group = next((g for g in self._groups if any(str(fi.path) == str(f.path) for fi in g.files)), None)
+        if group:
+            self._selected_group_id = group.group_id
+            self._inspector_panel.show_file(f, self._smart_rule, group, self._marked_paths)
+        gid = next(
+            (g.group_id for g in self._groups if any(str(fi.path) == str(f.path) for fi in g.files)), None
+        )
+        if gid is not None:
+            self._enter_compare(gid)
 
     def _keep_paths_for_current_filter(self) -> Set[str]:
         """Paths the active smart rule would keep (one per multi-file group in filter)."""
@@ -336,9 +360,12 @@ class ReviewPageGroupsGridMixin:
         return ext.lower() in exts if exts else True
 
     def _on_tile_clicked(self, f: DuplicateFile) -> None:
-        gid = next((g.group_id for g in self._groups if f in g.files), None)
-        if gid is not None:
-            self._enter_compare(gid)
+        self._selected_file = f
+        group = next((g for g in self._groups if f in g.files), None)
+        if group:
+            self._selected_group_id = group.group_id
+            self._inspector_panel.show_file(f, self._smart_rule, group, self._marked_paths)
+            self._enter_compare(group.group_id)
 
 
 class ReviewPageSmartMixin:
@@ -397,6 +424,17 @@ class ReviewPageSmartMixin:
             ],
         )
         self._bridge.show_modal_dialog(dlg)
+
+    def _deselect_all(self, e=None) -> None:
+        self._marked_paths.clear()
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        if self._mode == "grid":
+            self._grid_view.refresh_marks(self._marked_paths, self._keep_paths_for_current_filter())
+        elif self._mode == "compare":
+            self._update_compare_panels()
+        elif self._mode == "groups":
+            self._refresh_groups_overview()
 
     def _apply_rule_to_all_groups(self) -> None:
         rule = normalized_rule(self._smart_rule or "keep_largest")
@@ -535,6 +573,9 @@ class ReviewPageCompareNavMixin:
             self._refresh_group_list_panel()
             self._update_compare_panels()
             self._update_compare_chrome()
+            group = next((g for g in self._groups if g.group_id == gid), None)
+            if group and not self._selected_file:
+                self._inspector_panel.show_group(group, self._smart_rule, self._marked_paths)
             self._log_if_slow("review:on_click_group_nav", _t0)
         finally:
             self._compare_nav_in_flight = False
@@ -695,20 +736,29 @@ class ReviewPageKeyboardMixin:
         self._bridge.flet_page.on_keyboard_event = self._on_key
 
     def _on_key(self, e: ft.KeyboardEvent) -> None:
-        if self._mode != "compare":
-            return
         k = e.key.lower().replace(" ", "")
-        if k in ("arrowleft", "left", "arrowup", "up"):
-            self._prev_group()
-        elif k in ("arrowright", "right", "arrowdown", "down"):
-            self._next_group()
-        elif k in ("delete", "backspace"):
-            if self._marked_paths:
-                self._delete_marked_files()
-        elif k == "enter":
-            self._next_group()
-        elif k == "space":
-            self._apply_smart_select_compare_current()
+        # Escape works in all interactive modes.
+        if k == "escape":
+            self._go_back()
+            return
+        if self._mode == "compare":
+            if k in ("arrowleft", "left", "arrowup", "up"):
+                self._prev_group()
+            elif k in ("arrowright", "right", "arrowdown", "down"):
+                self._next_group()
+            elif k in ("delete", "backspace"):
+                if self._marked_paths:
+                    self._delete_marked_files()
+            elif k == "enter":
+                self._next_group()
+            elif k == "space":
+                self._apply_smart_select_compare_current()
+        elif self._mode == "groups":
+            if k == "g":
+                self._enter_mode("grid")
+        elif self._mode == "grid":
+            if k == "g":
+                self._enter_mode("groups")
 
 
 class ReviewPageNavThemeMixin:
