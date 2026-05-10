@@ -13,3 +13,4 @@ diagnostics/
 build/
 dist/
 .claude/
+scripts/.review_ui_layer_bisect_state.json

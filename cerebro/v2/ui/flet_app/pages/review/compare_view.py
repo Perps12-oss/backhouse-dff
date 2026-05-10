@@ -1,9 +1,8 @@
-"""Compare mode: nav bar, group list, A/B panels, progress and marked bars."""
+"""Compare mode: nav bar, group list, A/B panels, progress and marked summary."""
 
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 import time
 from pathlib import Path
@@ -11,18 +10,12 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 import flet as ft
 
-from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.engines.base_engine import DuplicateFile
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegate
 from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
-from cerebro.v2.ui.flet_app.pill_button_styles import (
-    pill_filled_accent,
-    pill_filled_danger,
-    pill_outlined_button_style,
-    pill_text_button_style,
-)
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
@@ -31,17 +24,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
 
-
-def _file_mtime_ts(f: DuplicateFile) -> float:
-    for attr in ("mtime", "modified"):
-        v = getattr(f, attr, None)
-        if v is None:
-            continue
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            continue
-    return 0.0
+_LEFT_NAV_WIDTH = 236
 
 
 class ReviewCompareView:
@@ -53,19 +36,31 @@ class ReviewCompareView:
         self._t = t
         self._compare_render_generation = 0
         self._compare_thumb_slots: Dict[str, ft.Container] = {}
-        self._compare_dims_labels: Dict[str, ft.Text] = {}
 
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
-        self.cmp_smart_seg = ft.SegmentedButton(
-            selected=["keep_largest"],
-            allow_multiple_selection=False,
-            on_change=self._del.on_cmp_smart_seg_change,
-            segments=[
-                ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
-                for val, label in RULE_LABELS
-            ],
+        self._hero_delete_marked = ft.FilledButton(
+            "Delete marked (0 files)",
+            icon=ft.icons.Icons.DELETE_FOREVER,
+            on_click=self._del.delete_marked_files,
+            disabled=True,
+            style=ft.ButtonStyle(
+                bgcolor=t.colors.danger,
+                color="#FFFFFF",
+                icon_color="#FFFFFF",
+                overlay_color=ft.Colors.with_opacity(0.22, t.colors.danger_hover),
+                padding=ft.padding.symmetric(horizontal=28, vertical=16),
+                shape=ft.RoundedRectangleBorder(radius=12),
+                text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
+            ),
+            tooltip="Confirm and remove every file marked for deletion (Trash or permanent, per dialog).",
         )
-        self._init_compare_toolbar_buttons(t)
+        self._btn_cmp_grid = ft.TextButton("← Grid", on_click=self._del.to_grid, style=pill_text_button_style(t))
+        self._btn_cmp_prev = ft.TextButton("← Prev", on_click=self._del.prev_group, style=pill_text_button_style(t))
+        self._btn_cmp_next = ft.TextButton(
+            "Next →",
+            on_click=self._del.next_group,
+            style=pill_text_button_style(t, variant="primary"),
+        )
         self.cmp_bar = self._build_cmp_bar_container(t)
 
         self._group_list = GroupListPanel(t)
@@ -76,7 +71,6 @@ class ReviewCompareView:
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
         left_panel = self._build_left_nav_panel(t)
-        # A/B containers must exist before _build_ab_row_container; left nav must follow group_list host.
         self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
         self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
         right_view = self._build_ab_row_container(t)
@@ -100,41 +94,6 @@ class ReviewCompareView:
             visible=False,
         )
 
-    def _init_compare_toolbar_buttons(self, t: ThemeTokens) -> None:
-        self._delete_btn = ft.OutlinedButton(
-            "Delete side B",
-            icon=ft.icons.Icons.DELETE_OUTLINE,
-            on_click=lambda e: self._del.delete_compare_side("b"),
-            style=pill_outlined_button_style(t, danger=True),
-            tooltip="After confirmation, removes the right-hand file (side B).",
-        )
-        self._keep_btn = ft.OutlinedButton(
-            "Keep side A",
-            icon=ft.icons.Icons.CHECK,
-            on_click=lambda e: self._del.delete_compare_side("a"),
-            style=pill_outlined_button_style(t, success=True),
-            tooltip="After confirmation, removes the left-hand file (side A).",
-        )
-        self._cmp_apply_rule_btn = ft.FilledButton(
-            "Mark by rule",
-            icon=ft.icons.Icons.FLAG,
-            on_click=self._del.on_cmp_apply_rule_click,
-            style=pill_filled_accent(
-                t,
-                padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                text_size=11,
-                weight=ft.FontWeight.W_600,
-            ),
-            tooltip="Uses the selected smart rule to mark extras in this group for deletion (checkboxes).",
-        )
-        self._btn_cmp_grid = ft.TextButton("← Grid", on_click=self._del.to_grid, style=pill_text_button_style(t))
-        self._btn_cmp_prev = ft.TextButton("← Prev", on_click=self._del.prev_group, style=pill_text_button_style(t))
-        self._btn_cmp_next = ft.TextButton(
-            "Next →",
-            on_click=self._del.next_group,
-            style=pill_text_button_style(t, variant="primary"),
-        )
-
     def _build_cmp_bar_container(self, t: ThemeTokens) -> ft.Container:
         return ft.Container(
             content=ft.Column(
@@ -144,28 +103,16 @@ class ReviewCompareView:
                             self._btn_cmp_grid,
                             self._btn_cmp_prev,
                             self._btn_cmp_next,
-                            self._cmp_title,
+                            ft.Container(content=self._cmp_title, expand=True),
                         ],
                         wrap=True,
                         spacing=t.spacing.xs,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    ft.Row(
-                        [
-                            self.cmp_smart_seg,
-                            self._cmp_apply_rule_btn,
-                            self._keep_btn,
-                            self._delete_btn,
-                        ],
-                        wrap=True,
-                        spacing=t.spacing.sm,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Text(
-                        "Smart rule only chooses marks in this group. Keep side A / Delete side B remove one pane at a time (confirmed).",
-                        size=t.typography.size_xs,
-                        color=t.colors.fg_muted,
-                        italic=True,
+                    ft.Container(
+                        content=self._hero_delete_marked,
+                        padding=ft.padding.only(top=t.spacing.sm),
+                        alignment=ft.Alignment(0, 0),
                     ),
                 ],
                 spacing=t.spacing.xs,
@@ -177,11 +124,11 @@ class ReviewCompareView:
 
     def _build_left_nav_panel(self, t: ThemeTokens) -> ft.Container:
         return ft.Container(
-            width=320,
+            width=_LEFT_NAV_WIDTH,
             padding=t.spacing.sm,
             content=ft.Column(
                 [
-                    ft.Text("Jump to group", size=t.typography.size_md, weight=ft.FontWeight.W_700),
+                    ft.Text("Jump to group", size=t.typography.size_sm, weight=ft.FontWeight.W_700),
                     self._group_list_scroll_host,
                 ],
                 spacing=t.spacing.xs,
@@ -215,19 +162,8 @@ class ReviewCompareView:
         )
         self._progress_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
         self._marked_lbl = ft.Text("", size=t.typography.size_sm, color=RC.marked_label_soft)
-        self._marked_delete_b_btn = ft.FilledButton(
-            "Delete side B",
-            on_click=lambda _e: self._del.delete_compare_side("b"),
-            style=pill_filled_danger(t),
-        )
-        self._marked_delete_marked_btn = ft.OutlinedButton(
-            "Delete marked files",
-            on_click=self._del.delete_marked_files,
-            style=pill_outlined_button_style(t, danger=True),
-            tooltip="Deletes every file you marked for removal (separate from side B).",
-        )
         self._marked_safety_lbl = ft.Text(
-            "Deletion always asks for confirmation. Prefer Move to Trash / Recycle Bin when offered.",
+            "Deletion always asks for confirmation. Prefer Move to Trash when offered.",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
         )
@@ -238,18 +174,7 @@ class ReviewCompareView:
             border=ft.border.only(top=ft.BorderSide(1, RC.danger)),
             content=ft.Column(
                 [
-                    ft.Row(
-                        [
-                            ft.Container(content=self._marked_lbl, expand=True),
-                            ft.Row(
-                                [self._marked_delete_b_btn, self._marked_delete_marked_btn],
-                                spacing=t.spacing.md,
-                                tight=True,
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                        spacing=t.spacing.sm,
-                    ),
+                    ft.Container(content=self._marked_lbl, expand=True),
                     self._marked_safety_lbl,
                 ],
                 spacing=t.spacing.xs,
@@ -284,6 +209,17 @@ class ReviewCompareView:
         self._progress_lbl.color = t.colors.fg2
         self._progress_bar.color = t.colors.accent
         self._progress_bar.bgcolor = ft.Colors.with_opacity(0.14, t.colors.border)
+        st = self._hero_delete_marked.style
+        if isinstance(st, ft.ButtonStyle):
+            self._hero_delete_marked.style = ft.ButtonStyle(
+                bgcolor=t.colors.danger,
+                color="#FFFFFF",
+                icon_color="#FFFFFF",
+                overlay_color=ft.Colors.with_opacity(0.22, t.colors.danger_hover),
+                padding=st.padding,
+                shape=st.shape,
+                text_style=st.text_style,
+            )
 
     def apply_cmp_bar_glass(self) -> None:
         g = self._del.get_glass_style(0.04)
@@ -303,7 +239,6 @@ class ReviewCompareView:
         self._compare_render_generation += 1
         gen = self._compare_render_generation
         self._compare_thumb_slots.clear()
-        self._compare_dims_labels.clear()
         self._compare_panel_a.content = self._build_compare_side(self._del.compare_a, "A", gen)
         self._compare_panel_b.content = self._build_compare_side(self._del.compare_b, "B", gen)
         self.apply_compare_panel_tints()
@@ -354,28 +289,23 @@ class ReviewCompareView:
         self._progress_lbl.value = (
             f"{reviewed} of {len(self._del.groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
         )
+        n_marked = len(self._del.marked_paths)
         if self._del.mode == "compare":
             self._marked_lbl.value = (
-                f"{fmt_size(marked_bytes)} marked for removal across {len(self._del.marked_paths)} file(s). "
-                "Use Keep side A / Delete side B for one-off deletes, or clear marks with each file's checkbox."
+                f"{fmt_size(marked_bytes)} marked for removal ({n_marked} file(s)). "
+                "Adjust marks with each checkbox. Use the Delete marked button above to confirm removal."
             )
         else:
-            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked for removal across {len(self._del.marked_paths)} file(s)"
+            self._marked_lbl.value = f"{fmt_size(marked_bytes)} marked for removal across {n_marked} file(s)"
         self._marked_bar.visible = bool(self._del.marked_paths) or self._del.mode == "compare"
+        lbl = f"Delete marked ({n_marked} file{'s' if n_marked != 1 else ''})"
+        self._hero_delete_marked.text = lbl
+        self._hero_delete_marked.disabled = n_marked == 0
         self._safe_update(self._progress_bar)
         self._safe_update(self._progress_lbl)
         self._safe_update(self._marked_lbl)
         self._safe_update(self._marked_bar)
-
-    @staticmethod
-    def _fmt_mtime(mtime) -> str:
-        try:
-            ts = float(mtime or 0)
-            if ts <= 0:
-                return ""
-            return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d  %H:%M")
-        except Exception:
-            return ""
+        self._safe_update(self._hero_delete_marked)
 
     def _compare_side_empty_column(self, label: str, t: ThemeTokens) -> ft.Column:
         return ft.Column(
@@ -384,47 +314,6 @@ class ReviewCompareView:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             expand=True,
         )
-
-    @staticmethod
-    def _meta_row(icon_name: str, value: str, t: ThemeTokens, color: str = RC.muted_text) -> ft.Row:
-        return ft.Row(
-            [
-                ft.Icon(icon_name, size=12, color=ft.Colors.with_opacity(0.55, color)),
-                ft.Text(value, size=t.typography.size_xs, color=color, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
-            ],
-            spacing=4,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-
-    def _compare_meta_box(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> tuple[ft.Container, ft.Text]:
-        meta_rows: list = []
-        date_str = self._fmt_mtime(_file_mtime_ts(f))
-        if date_str:
-            meta_rows.append(self._meta_row(ft.icons.Icons.SCHEDULE, date_str, t, RC.meta_date_blue))
-        dims_txt = ft.Text("", size=t.typography.size_xs, color=RC.meta_dims_purple)
-        meta_rows.append(
-            ft.Row(
-                [
-                    ft.Icon(
-                        ft.icons.Icons.ASPECT_RATIO,
-                        size=12,
-                        color=ft.Colors.with_opacity(0.55, RC.meta_dims_purple),
-                    ),
-                    dims_txt,
-                ],
-                spacing=4,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            )
-        )
-        meta_rows.append(self._meta_row(ft.icons.Icons.FOLDER_OPEN, str(p.parent), t, RC.info))
-        meta_box = ft.Container(
-            content=ft.Column(meta_rows, spacing=4, tight=True),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            border_radius=6,
-            width=400,
-        )
-        return meta_box, dims_txt
 
     def _exact_dup_banner_if_needed(self, label: str, t: ThemeTokens) -> ft.Control | None:
         if label != "A":
@@ -441,12 +330,40 @@ class ReviewCompareView:
             return None
         return ft.Container(
             content=ft.Text(
-                "Same name and size — engine matched these as exact duplicates. Compare folders below.",
+                "Same name and size — engine matched these as exact duplicates. Compare paths below.",
                 size=t.typography.size_xs,
                 color=t.colors.fg_muted,
                 text_align=ft.TextAlign.CENTER,
             ),
             padding=ft.padding.symmetric(horizontal=8, vertical=4),
+        )
+
+    def _slim_path_size_under_thumb(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> ft.Column:
+        path_txt = ft.Text(
+            str(p),
+            size=t.typography.size_xs,
+            color=RC.muted_text,
+            max_lines=2,
+            overflow=ft.TextOverflow.ELLIPSIS,
+            text_align=ft.TextAlign.CENTER,
+            tooltip=str(p),
+        )
+        size_txt = ft.Text(
+            fmt_size(f.size),
+            size=t.typography.size_xs,
+            weight=ft.FontWeight.W_600,
+            color=t.colors.fg2,
+            text_align=ft.TextAlign.CENTER,
+        )
+        return ft.Column(
+            [
+                ft.Divider(height=1, color=ft.Colors.with_opacity(0.2, t.colors.border)),
+                path_txt,
+                size_txt,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+            tight=True,
         )
 
     def _build_compare_side(self, f: Optional[DuplicateFile], label: str, gen: int) -> ft.Column:
@@ -457,8 +374,13 @@ class ReviewCompareView:
         p = Path(str(f.path))
         marked = str(f.path) in self._del.marked_paths
         name = p.name
-        thumb_slot = ft.Container(
+        thumb_inner = ft.Container(
             content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
+            expand=True,
+            alignment=ft.Alignment.CENTER,
+        )
+        thumb_slot = ft.Container(
+            content=thumb_inner,
             expand=True,
             alignment=ft.Alignment.CENTER,
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
@@ -477,24 +399,11 @@ class ReviewCompareView:
             border_radius=6,
             padding=ft.padding.symmetric(horizontal=10, vertical=4),
         )
-        size_badge = ft.Container(
-            content=ft.Text(
-                fmt_size(f.size),
-                size=t.typography.size_xs,
-                weight=ft.FontWeight.W_600,
-                color=RC.success,
-            ),
-            bgcolor=ft.Colors.with_opacity(0.10, RC.success),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.30, RC.success)),
-            border_radius=6,
-            padding=ft.padding.symmetric(horizontal=8, vertical=3),
-        )
 
-        meta_box, dims_txt = self._compare_meta_box(f, p, t)
+        slim_meta = self._slim_path_size_under_thumb(f, p, t)
 
         key = f"{label}:{gen}"
         self._compare_thumb_slots[key] = thumb_slot
-        self._compare_dims_labels[key] = dims_txt
         page = self._bridge.flet_page
         if hasattr(page, "run_task"):
             page.run_task(self._populate_compare_media_async, f, p, key, gen)
@@ -509,8 +418,7 @@ class ReviewCompareView:
             + [
                 thumb_slot,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
-                size_badge,
-                meta_box,
+                slim_meta,
                 ft.Checkbox(
                     label="Mark for deletion",
                     value=marked,
@@ -527,14 +435,14 @@ class ReviewCompareView:
     async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
         loop = asyncio.get_event_loop()
 
-        def _read_dims() -> str:
+        def _dims_tooltip() -> str:
             if not is_image_path(p):
                 return ""
             try:
                 from PIL import Image
 
                 with Image.open(p) as img:
-                    return f"{img.width} × {img.height}"
+                    return f"{img.width} × {img.height}px"
             except Exception:
                 return ""
 
@@ -546,40 +454,36 @@ class ReviewCompareView:
                 )
             except Exception:
                 b64 = None
-        dims = await loop.run_in_executor(None, _read_dims)
+        dims_tip = await loop.run_in_executor(None, _dims_tooltip)
 
         if gen != self._compare_render_generation:
             return
         slot = self._compare_thumb_slots.get(key)
-        dims_lbl = self._compare_dims_labels.get(key)
-        if slot is not None and b64:
-            slot.content = ft.Image(
-                src=f"data:image/jpeg;base64,{b64}",
-                expand=True,
-                fit=ft.BoxFit.COVER,
-                filter_quality=ft.FilterQuality.HIGH,
-                border_radius=8,
-                cache_width=1600,
-                cache_height=1200,
-            )
-            self._safe_update(slot)
-        if dims_lbl is not None:
-            dims_lbl.value = dims
-            self._safe_update(dims_lbl)
+        if slot is None or not b64:
+            return
+        tip = f"Pinch or scroll to zoom. Image size: {dims_tip}" if dims_tip else "Pinch or scroll to zoom"
+        img = ft.Image(
+            src=f"data:image/jpeg;base64,{b64}",
+            expand=True,
+            fit=ft.BoxFit.COVER,
+            filter_quality=ft.FilterQuality.HIGH,
+            border_radius=8,
+            cache_width=1600,
+            cache_height=1200,
+            tooltip=tip,
+        )
+        viewer = ft.InteractiveViewer(
+            content=img,
+            min_scale=0.85,
+            max_scale=3.5,
+            boundary_margin=ft.margin.all(20),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            expand=True,
+        )
+        slot.content = viewer
+        self._safe_update(slot)
 
     # --- Pill targets (ReviewPage._apply_pill_chrome) ---
-    @property
-    def cmp_apply_rule_btn(self) -> ft.FilledButton:
-        return self._cmp_apply_rule_btn
-
-    @property
-    def delete_btn(self) -> ft.OutlinedButton:
-        return self._delete_btn
-
-    @property
-    def keep_btn(self) -> ft.OutlinedButton:
-        return self._keep_btn
-
     @property
     def btn_cmp_grid(self) -> ft.TextButton:
         return self._btn_cmp_grid
@@ -593,9 +497,5 @@ class ReviewCompareView:
         return self._btn_cmp_next
 
     @property
-    def marked_delete_b_btn(self) -> ft.FilledButton:
-        return self._marked_delete_b_btn
-
-    @property
-    def marked_delete_marked_btn(self) -> ft.OutlinedButton:
-        return self._marked_delete_marked_btn
+    def hero_delete_marked_btn(self) -> ft.FilledButton:
+        return self._hero_delete_marked

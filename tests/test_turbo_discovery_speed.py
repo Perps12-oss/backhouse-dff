@@ -82,7 +82,9 @@ def test_walk_directory_worker_handles_unreadable_directory(tmp_path):
     # Just confirm it doesn't crash on a normal tree; permission
     # changes are platform-specific and tested in CI is brittle.
     (tmp_path / "ok.txt").write_bytes(b"hi")
-    out = walk_directory_worker((tmp_path, True, set(), 0, 0))
+    out = walk_directory_worker(
+        (tmp_path, True, set(), set(), True, 0, 0, False),
+    )
     assert any(p.name == "ok.txt" for p, _, _ in out)
 
 

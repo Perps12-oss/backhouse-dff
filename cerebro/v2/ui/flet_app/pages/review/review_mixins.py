@@ -6,13 +6,12 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
-from cerebro.v2.ui.flet_app.pages.review.deletion_dialog import build_confirm_dialog
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import _FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
@@ -22,8 +21,6 @@ from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normali
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_filled_accent,
-    pill_filled_danger,
-    pill_outlined_button_style,
     pill_text_button_style,
     pill_text_button_selected,
 )
@@ -31,6 +28,7 @@ from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, t
 
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
+_MAX_GROUPS_OVERVIEW = 150
 
 
 class ReviewPageChromeMixin:
@@ -81,45 +79,56 @@ class ReviewPageChromeMixin:
     def _apply_pill_chrome(self) -> None:
         t = self._t
         self._btn_back.style = pill_text_button_style(t, variant="primary")
-        self._smart_apply_all_btn.style = pill_filled_accent(
-            t,
-            padding=ft.padding.symmetric(horizontal=16, vertical=10),
-            text_size=12,
-            weight=ft.FontWeight.W_700,
-        )
-        self._compare_ui.delete_btn.style = pill_outlined_button_style(t, danger=True)
-        self._compare_ui.keep_btn.style = pill_outlined_button_style(t, success=True)
         self._compare_ui.btn_cmp_grid.style = pill_text_button_style(t)
         self._compare_ui.btn_cmp_prev.style = pill_text_button_style(t)
         self._compare_ui.btn_cmp_next.style = pill_text_button_style(t, variant="primary")
         self._empty_go_home_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
-        self._compare_ui.cmp_apply_rule_btn.style = pill_filled_accent(
-            t,
-            padding=ft.padding.symmetric(horizontal=12, vertical=8),
-            text_size=11,
-            weight=ft.FontWeight.W_600,
+        hd = self._compare_ui.hero_delete_marked_btn
+        hd.style = ft.ButtonStyle(
+            bgcolor=t.colors.danger,
+            color="#FFFFFF",
+            icon_color="#FFFFFF",
+            overlay_color=ft.Colors.with_opacity(0.22, t.colors.danger_hover),
+            padding=ft.padding.symmetric(horizontal=28, vertical=16),
+            shape=ft.RoundedRectangleBorder(radius=12),
+            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
         )
-        self._compare_ui.marked_delete_b_btn.style = pill_filled_danger(t)
-        self._compare_ui.marked_delete_marked_btn.style = pill_outlined_button_style(t, danger=True)
         self._sync_view_toggle_pills()
         self._grid_view.sync_zoom_pill_styles(t)
         for b in (
             self._btn_back,
-            self._smart_apply_all_btn,
-            self._compare_ui.delete_btn,
-            self._compare_ui.keep_btn,
-            self._compare_ui.cmp_apply_rule_btn,
             self._compare_ui.btn_cmp_grid,
             self._compare_ui.btn_cmp_prev,
             self._compare_ui.btn_cmp_next,
             self._empty_go_home_btn,
-            self._compare_ui.marked_delete_b_btn,
-            self._compare_ui.marked_delete_marked_btn,
+            hd,
         ):
             safe_update(b)
 
 
 class ReviewPageModeMixin:
+    def _sync_empty_workspace_message(self) -> None:
+        """Empty-state copy: pre-scan vs scan completed with zero duplicate groups."""
+        try:
+            unlocked = bool(getattr(self._bridge.state, "review_unlocked", False))
+        except Exception:
+            unlocked = False
+        title = getattr(self, "_empty_title_lbl", None)
+        body = getattr(self, "_empty_body_lbl", None)
+        if not isinstance(title, ft.Text) or not isinstance(body, ft.Text):
+            return
+        if unlocked and not self._groups:
+            title.value = "No duplicate groups in this run"
+            body.value = (
+                "The scan finished without any duplicate sets to review. "
+                "Try different folders or options on Home, then run another scan."
+            )
+        else:
+            title.value = "Nothing to review yet"
+            body.value = "Run a scan first, then come here to visually triage duplicates."
+        safe_update(title)
+        safe_update(body)
+
     _MODE_VISIBILITY: Dict[str, Dict[str, bool]] = {
         "empty": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
         "loading": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
@@ -128,11 +137,20 @@ class ReviewPageModeMixin:
         "compare": {"filter": False, "cmp_bar": True, "smart": False, "toggle": False, "sort": False},
     }
 
+    @staticmethod
+    def _ctrl_page_set(ctrl) -> bool:
+        try:
+            return ctrl.page is not None
+        except RuntimeError:
+            return False
+
     def _enter_mode(self, mode: str) -> None:
         if mode == "empty" and bool(self._groups):
             mode = "groups"
         self._mode = mode
-        self.scroll = None if mode == "compare" else ft.ScrollMode.AUTO
+        self._pending_deferred_render = False
+        # Keep outer Column non-scrollable; inner ListView / GridView / compare body scroll.
+        self.scroll = None
         if mode != "grid":
             self._grid_view.bump_thumb_generation()
         if mode != "compare":
@@ -155,15 +173,20 @@ class ReviewPageModeMixin:
 
         if mode == "empty":
             self._content.controls.append(self._empty_state)
+            self._sync_empty_workspace_message()
         elif mode == "loading":
             self._content.controls.append(self._loading_state)
         elif mode == "groups":
+            # Append *before* filling _groups_overview: after controls.clear() the overview
+            # is detached; safe_update() on it would no-op (no .page), leaving Workspace blank.
             self._refresh_filter_labels()
+            self._content.controls.append(
+                ft.Container(content=self._groups_overview, padding=ft.padding.all(16), expand=True)
+            )
             self._refresh_groups_overview()
-            self._content.controls.append(self._groups_overview)
         elif mode == "grid":
-            self._refresh_grid()
             self._content.controls.append(self._grid_view)
+            self._refresh_grid()
         elif mode == "compare":
             self._content.controls.append(self._compare_view)
             self._bind_keys()
@@ -176,6 +199,13 @@ class ReviewPageModeMixin:
         safe_update(self._group_sort_row)
         self._refresh_stats_header()
         self._apply_pill_chrome()
+        # Ensure the shell repaints after swapping the body subtree (Flet desktop can skip
+        # partial updates when only nested controls changed).
+        try:
+            if self._ctrl_page_set(self):
+                self.update()
+        except Exception:
+            pass
 
     async def _finish_load_to_grid_async(self) -> None:
         await asyncio.sleep(0)
@@ -184,14 +214,6 @@ class ReviewPageModeMixin:
             self._enter_mode("empty")
             return
         self._enter_mode("grid")
-
-    async def _finish_load_to_groups_async(self) -> None:
-        await asyncio.sleep(0)
-        self._loading = False
-        if not self._groups:
-            self._enter_mode("empty")
-            return
-        self._enter_mode("groups")
 
     async def _finish_load_to_compare_async(self, group_id: int) -> None:
         await asyncio.sleep(0)
@@ -223,7 +245,7 @@ class ReviewPageGroupsGridMixin:
             g for g in self._groups
             if self._filter_key == "all" or any(self._passes_filter(f) for f in g.files)
         ]
-        key = str(self._group_sort_key or "reclaimable_desc")
+        key = str(self._group_sort_key or "files_desc")
         if key == "files_desc":
             return sorted(filtered, key=lambda g: len(g.files), reverse=True)
         if key == "path_asc":
@@ -235,14 +257,37 @@ class ReviewPageGroupsGridMixin:
 
     def _refresh_groups_overview(self) -> None:
         filtered_groups = self._sorted_groups_for_current_filter()
+        _log.debug(
+            "_refresh_groups_overview: total_groups=%d filtered=%d filter_key=%r",
+            len(self._groups),
+            len(filtered_groups),
+            self._filter_key,
+        )
         total_r = sum(int(getattr(x, "reclaimable", 0) or 0) for x in self._groups) or 1
-        self._groups_overview.controls = [
-            self._build_group_card(g, i, total_r) for i, g in enumerate(filtered_groups)
-        ]
+        visible = filtered_groups[:_MAX_GROUPS_OVERVIEW]
+        cards: list = [self._build_group_card(g, i, total_r) for i, g in enumerate(visible)]
+        if len(filtered_groups) > _MAX_GROUPS_OVERVIEW:
+            t = self._t
+            cards.insert(
+                0,
+                ft.Container(
+                    content=ft.Text(
+                        f"Showing {_MAX_GROUPS_OVERVIEW:,} of {len(filtered_groups):,} groups — "
+                        "use filters or sort to narrow results.",
+                        size=t.typography.size_sm,
+                        color=t.colors.fg_muted,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    padding=ft.padding.symmetric(vertical=8, horizontal=16),
+                ),
+            )
+        _log.debug("_refresh_groups_overview: built %d cards (cap=%d)", len(cards), _MAX_GROUPS_OVERVIEW)
+        self._groups_overview.controls = cards
         safe_update(self._groups_overview)
+        safe_update(self._content)
 
     def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
-        self._group_sort_key = str(e.control.value or "reclaimable_desc")
+        self._group_sort_key = str(e.control.value or "files_desc")
         if self._mode == "groups":
             self._refresh_groups_overview()
             self._refresh_stats_header()
@@ -272,31 +317,28 @@ class ReviewPageSmartMixin:
     def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"keep_largest"}
         self._smart_rule = next(iter(sel), "keep_largest")
+        self._cmp_smart_rule = self._smart_rule
+        if self._mode == "compare" and self._compare_gid is not None:
+            self._sync_compare_group_marks_to_rule(self._compare_gid)
+            self._update_compare_panels()
+            self._refresh_grid()
+            self._update_progress_and_marked_bar()
 
-    def _on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None:
-        sel = getattr(e.control, "selected", None) or {"keep_largest"}
-        self._cmp_smart_rule = next(iter(sel), "keep_largest")
-
-    def _on_cmp_apply_rule_click(self, e=None) -> None:
-        self._apply_smart_select_compare_current_with_rule(self._cmp_smart_rule)
-
-    def _apply_smart_select_compare_current_with_rule(self, rule: str) -> None:
-        gid = self._compare_gid
+    def _sync_compare_group_marks_to_rule(self, gid: Optional[int] = None) -> None:
+        """Reset marks for files in this group to match the grid smart rule (per-group)."""
+        gid = gid if gid is not None else self._compare_gid
         if gid is None:
             return
         files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
-        if len(files) < 2:
-            return
-        to_delete = paths_to_delete(normalized_rule(rule), files)
-        if not to_delete:
-            return
-        for p in to_delete:
+        group_paths = {str(f.path) for f in files}
+        for p in list(self._marked_paths):
+            if p in group_paths:
+                self._marked_paths.discard(p)
+        rule = normalized_rule(self._smart_rule or "keep_largest")
+        for p in paths_to_delete(rule, files):
             self._marked_paths.add(str(p))
         self._recompute_marked_bytes()
         self._push_marked_paths_to_store()
-        self._update_compare_panels()
-        self._refresh_grid()
-        self._bridge.show_snackbar(f"Rule applied: {len(to_delete):,} files marked in this group.", info=True)
 
     def _apply_smart_select_review(self, e=None):
         rule = self._smart_rule or "keep_largest"
@@ -340,15 +382,13 @@ class ReviewPageSmartMixin:
         self._update_progress_and_marked_bar()
 
     def _apply_smart_select_compare_current(self, e=None) -> None:
-        gid = self._compare_gid
-        if gid is None:
+        """Re-apply the grid smart rule to marks for the current compare group."""
+        if self._compare_gid is None:
             return
-        rule = normalized_rule(self._cmp_smart_rule)
-        files = [f for f in self._group_files.get(gid, []) if self._passes_filter(f)]
-        to_delete = paths_to_delete(rule, files)
-        if not to_delete:
-            return
-        self._show_smart_delete_dialog(to_delete)
+        self._sync_compare_group_marks_to_rule(self._compare_gid)
+        self._update_compare_panels()
+        self._refresh_grid()
+        self._update_progress_and_marked_bar()
 
     def _show_smart_delete_dialog(self, paths: List[str]) -> None:
         show_smart_delete_paths_dialog(
@@ -456,10 +496,8 @@ class ReviewPageCompareNavMixin:
             self._compare_a = files[0]
             self._compare_b = files[1] if len(files) > 1 else None
             self._enter_mode("compare")
-            self._cmp_smart_rule = next(
-                iter(getattr(self._compare_ui.cmp_smart_seg, "selected", None) or {"keep_largest"}),
-                "keep_largest",
-            )
+            self._cmp_smart_rule = self._smart_rule
+            self._sync_compare_group_marks_to_rule(gid)
             self._refresh_group_list_panel()
             self._update_compare_panels()
             self._update_compare_chrome()
@@ -542,22 +580,6 @@ class ReviewPageCompareNavMixin:
         if idx < len(self._groups) - 1:
             self._enter_compare(self._groups[idx + 1].group_id)
 
-    def _delete_compare_side(self, side: str) -> None:
-        f = self._compare_a if side == "a" else self._compare_b
-        if not f:
-            return
-        name = Path(str(f.path)).name
-        path = str(f.path)
-
-        def _confirmed(policy: DeletionPolicy) -> None:
-            self._bridge.dismiss_top_dialog()
-            self._execute_smart_delete([path], policy)
-
-        self._bridge.show_modal_dialog(
-            build_confirm_dialog(f'"{name}"', _confirmed, self._bridge.dismiss_top_dialog, self._t)
-        )
-
-
 class ReviewPageFilterMixin:
     def _on_filter_changed(self, key: str) -> None:
         self._filter_key = key
@@ -632,21 +654,13 @@ class ReviewPageKeyboardMixin:
             self._prev_group()
         elif k in ("arrowright", "right", "arrowdown", "down"):
             self._next_group()
-        elif k == "d":
-            self._delete_compare_side("b")
-        elif k == "k":
-            self._delete_compare_side("a")
         elif k in ("delete", "backspace"):
-            self._delete_compare_side("b")
+            if self._marked_paths:
+                self._delete_marked_files()
         elif k == "enter":
             self._next_group()
         elif k == "space":
             self._apply_smart_select_compare_current()
-            self._next_group()
-        elif k == "1":
-            self._delete_compare_side("b")
-        elif k == "2":
-            self._delete_compare_side("a")
 
 
 class ReviewPageNavThemeMixin:
@@ -684,6 +698,12 @@ class ReviewPageNavThemeMixin:
 
         self._empty_state.bgcolor = g04.get("bgcolor")
         self._empty_state.border = g04.get("border")
+        self._empty_title_lbl.color = self._t.colors.fg
+        self._empty_body_lbl.color = self._t.colors.fg_muted
+        self._empty_title_lbl.size = self._t.typography.size_lg
+        self._empty_body_lbl.size = self._t.typography.size_base
+        if self._mode == "empty":
+            self._sync_empty_workspace_message()
 
         if self._mode == "compare":
             self._apply_compare_panel_tints()

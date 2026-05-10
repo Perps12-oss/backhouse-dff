@@ -122,6 +122,10 @@ class CheckpointDB:
                 CREATE INDEX IF NOT EXISTS idx_fc_group
                     ON file_checkpoints (scan_id, group_id)
                     WHERE group_id IS NOT NULL;
+
+                -- Speeds resume: iter_pending_files ORDER BY file_size DESC per scan.
+                CREATE INDEX IF NOT EXISTS idx_fc_pending_size
+                    ON file_checkpoints (scan_id, hash_status, file_size);
             """)
             self._conn.commit()
 

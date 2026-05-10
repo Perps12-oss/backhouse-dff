@@ -176,11 +176,45 @@ class BackendService:
     # -- Internal -------------------------------------------------------------
 
     def _deliver_on_ui_thread(self, fn: Callable[..., None], *args: Any) -> None:
-        """Run a callback on the Flet page thread (StateStore + control updates are not thread-safe)."""
-        if self._page is not None:
-            self._page.run_thread(fn, *args)
-        else:
+        """Marshal *fn* onto the Flet session asyncio loop.
+
+        ``Page.run_thread`` uses ``loop.run_in_executor`` (worker thread). Store
+        listeners and Flet control mutations are not safe there — scan completion
+        could dispatch ``ScanCompleted`` while the Review subtree never repaints.
+
+        ``Page.run_task`` schedules a coroutine via ``asyncio.run_coroutine_threadsafe``
+        onto ``page.session.connection.loop``, which is the supported path from
+        scanner/progress threads back to UI work.
+        """
+        page = self._page
+        if page is None:
             fn(*args)
+            return
+        if not hasattr(page, "run_task"):
+            fn(*args)
+            return
+
+        async def _run_ui() -> None:
+            fn(*args)
+            try:
+                if hasattr(page, "update_async"):
+                    await page.update_async()  # type: ignore[misc]
+                else:
+                    page.update()
+            except Exception:
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+        try:
+            page.run_task(_run_ui)
+        except Exception:
+            _log.exception("Failed to schedule UI callback via page.run_task")
+            try:
+                fn(*args)
+            except Exception:
+                _log.exception("Fallback UI callback failed")
 
     def _handle_progress(self, progress: ScanProgress) -> None:
         import time as _time

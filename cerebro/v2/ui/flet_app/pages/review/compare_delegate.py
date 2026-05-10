@@ -13,13 +13,10 @@ if TYPE_CHECKING:
 
 
 class ReviewCompareDelegate(Protocol):
-    """Callbacks and read-only state used by compare UI (matches prior ``coord`` usage)."""
+    """Callbacks and read-only state used by compare UI."""
 
     def get_glass_style(self, opacity: float = 0.06) -> dict: ...
 
-    def on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None: ...
-    def on_cmp_apply_rule_click(self, e: ft.ControlEvent | None = None) -> None: ...
-    def delete_compare_side(self, side: str) -> None: ...
     def delete_marked_files(self, e: ft.ControlEvent | None = None) -> None: ...
     def to_grid(self, e: ft.ControlEvent | None = None) -> None: ...
     def prev_group(self, e: ft.ControlEvent | None = None) -> None: ...
@@ -65,15 +62,6 @@ class ReviewCompareDelegateAdapter:
 
     def get_glass_style(self, opacity: float = 0.06) -> dict:
         return self._page._get_glass_style(opacity)
-
-    def on_cmp_smart_seg_change(self, e: ft.ControlEvent) -> None:
-        self._page._on_cmp_smart_seg_change(e)
-
-    def on_cmp_apply_rule_click(self, e: ft.ControlEvent | None = None) -> None:
-        self._page._on_cmp_apply_rule_click(e)
-
-    def delete_compare_side(self, side: str) -> None:
-        self._page._delete_compare_side(side)
 
     def delete_marked_files(self, e: ft.ControlEvent | None = None) -> None:
         self._page._delete_marked_files(e)

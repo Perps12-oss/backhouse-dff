@@ -9,11 +9,12 @@ import io
 import logging
 from collections import OrderedDict
 from pathlib import Path
+from functools import partial
 from typing import Awaitable, Callable, Iterable, Optional
 
 _log = logging.getLogger(__name__)
 
-_MAX_CACHE = 256
+_MAX_CACHE = 384
 _MAX_EDGE = 112
 _JPEG_QUALITY = 82
 
@@ -80,6 +81,37 @@ class ThumbnailCache:
         self._remember(key, b64)
         return b64
 
+    def get_base64_sized(self, path: Path, max_edge: int) -> Optional[str]:
+        """Decode JPEG thumbnail capped to ``max_edge`` (separate cache entry per size tier)."""
+        me = max(64, min(512, int(max_edge)))
+        p = Path(path)
+        key = f"{p.resolve()}|e{me}"
+        if key in self._data:
+            self._data.move_to_end(key)
+            return self._data[key]
+
+        if not p.is_file() or not is_image_path(p):
+            self._remember(key, None)
+            return None
+
+        try:
+            from PIL import Image
+
+            with Image.open(p) as im:
+                im = _normalize_for_safe_convert(im)
+                im = im.convert("RGB")
+                im.thumbnail((me, me), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            _log.debug("thumbnail failed for %s (edge=%s)", path, me, exc_info=True)
+            self._remember(key, None)
+            return None
+
+        self._remember(key, b64)
+        return b64
+
     def get_compare_preview_base64(self, path: Path) -> Optional[str]:
         """High-res JPEG preview for compare mode (separate cache key from grid thumbnails)."""
         p = Path(path)
@@ -119,18 +151,37 @@ class ThumbnailCache:
     def _load_one(self, path: Path) -> tuple[Path, Optional[str]]:
         return path, self.get_base64(path)
 
+    def _load_one_sized(self, path: Path, max_edge: int) -> tuple[Path, Optional[str]]:
+        return path, self.get_base64_sized(path, max_edge)
+
     async def load_batch_async(
         self,
         paths: Iterable[Path],
         on_thumbnail_ready: Callable[[Path, Optional[str]], Awaitable[None] | None],
+        *,
+        max_edge: Optional[int] = None,
     ) -> None:
-        """Load thumbnails in parallel and call callback as each one completes."""
+        """Load thumbnails in parallel and call callback as each one completes.
+
+        When ``max_edge`` is set, decode at that pixel cap (Review grid large tiles).
+        When omitted, use the default small grid edge (``_MAX_EDGE``).
+        """
         loop = asyncio.get_event_loop()
-        tasks = [
-            asyncio.ensure_future(loop.run_in_executor(self._pool, self._load_one, Path(p)))
-            for p in paths
-            if is_image_path(Path(p))
-        ]
+        if max_edge is None:
+            worker = self._load_one
+            tasks = [
+                asyncio.ensure_future(loop.run_in_executor(self._pool, worker, Path(p)))
+                for p in paths
+                if is_image_path(Path(p))
+            ]
+        else:
+            me = max(64, min(512, int(max_edge)))
+            worker = partial(self._load_one_sized, max_edge=me)
+            tasks = [
+                asyncio.ensure_future(loop.run_in_executor(self._pool, worker, Path(p)))
+                for p in paths
+                if is_image_path(Path(p))
+            ]
         for done in asyncio.as_completed(tasks):
             try:
                 p, b64 = await done

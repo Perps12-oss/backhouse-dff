@@ -20,6 +20,16 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+def _control_on_page(ctrl: ft.Control | None) -> bool:
+    """True if *ctrl* is attached to a Page (Flet raises RuntimeError if not)."""
+    if ctrl is None:
+        return False
+    try:
+        return ctrl.page is not None
+    except RuntimeError:
+        return False
+
+
 class AppLayout(ft.Column):
     """Root layout: top navigation bar and content area."""
 
@@ -181,8 +191,14 @@ class AppLayout(ft.Column):
         if self.page is not None:
             self.update()
 
-    def navigate_to(self, key: str) -> None:
-        """Switch the content area to the page identified by *key*."""
+    def navigate_to(self, key: str, *, run_on_show: bool = True) -> None:
+        """Switch the content area to the page identified by *key*.
+
+        If *run_on_show* is False, the tab's ``on_show`` hook is skipped (caller must run it
+        after hydrating page-specific state). Used for ``ScanCompleted`` so ``_sync_groups``
+        runs before Review paints — otherwise ``on_show`` sees empty ``_groups`` and Flet
+        can miss the follow-up subtree updates.
+        """
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
@@ -191,6 +207,18 @@ class AppLayout(ft.Column):
         # If already on this key and content is mounted, skip redundant rebuild.
         # If content host is unexpectedly empty, force remount for resilience.
         if key == self._current_key and self._content_host.content is not None:
+            # Re-selecting Workspace while a deferred load is pending must still run on_show;
+            # otherwise the Review singleton can stay on an empty _content subtree.
+            if key == "review":
+                wrap = self._tab_containers.get("review")
+                inner_ctrl = wrap.content if wrap is not None else None
+                if inner_ctrl is not None and getattr(
+                    inner_ctrl, "_pending_deferred_render", False
+                ) and hasattr(inner_ctrl, "on_show"):
+                    try:
+                        inner_ctrl.on_show()
+                    except Exception:
+                        _log.exception("on_show failed for deferred same-tab review revisit")
             return
         self._current_key = key
         _ = self._selected_nav_index_for_key(key)
@@ -210,7 +238,12 @@ class AppLayout(ft.Column):
                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 )
             else:
-                self._tab_containers[key].content = inner
+                tc = self._tab_containers[key]
+                # Flet may skip repainting when `content` is set to the same object instance
+                # again (singleton ReviewPage / DashboardPage). Bounce through None once.
+                if tc.content is inner:
+                    tc.content = None
+                tc.content = inner
             self._content_host.content = self._tab_containers[key]
         else:
             self._content_host.content = ft.Container(
@@ -219,7 +252,6 @@ class AppLayout(ft.Column):
                 content=ft.Text("Page not found"),
                 key="cerebro-tab-missing",
             )
-        self._content_host.update()
 
         route_info = ROUTE_MAP[key]
         self._page.route = route_info.route
@@ -232,11 +264,11 @@ class AppLayout(ft.Column):
         except Exception:
             _log.exception("Failed to sync active_tab for route key %s", key)
 
-        if inner is not None and hasattr(inner, "on_show"):
-            try:
-                inner.on_show()
-            except Exception:
-                _log.exception("on_show failed for route key %s", key)
+        # Mount the new content first so inner.page is assigned before on_show runs.
+        # Controls appended inside on_show (in-place list mutation) don't trigger dirty
+        # tracking, so we call _content_host.update() here to mount ReviewPage, then call
+        # on_show() while the page reference is live, and finally page.update() to flush.
+        self._content_host.update()
 
         # Apply any pending theme change that was deferred while this page was inactive
         if inner is not None and hasattr(inner, "_pending_theme"):
@@ -247,6 +279,18 @@ class AppLayout(ft.Column):
                     inner.apply_theme(pending)
                 except Exception:
                     _log.exception("Deferred apply_theme failed for route key %s", key)
+
+        if run_on_show and inner is not None and hasattr(inner, "on_show"):
+            try:
+                inner.on_show()
+            except Exception:
+                _log.exception("on_show failed for route key %s", key)
+
+        if self._page is not None:
+            try:
+                self._page.update()
+            except Exception:
+                _log.exception("page.update after navigate_to failed")
 
     def refresh_current(self) -> None:
         """Refresh the current page without a full navigation cycle (F10)."""

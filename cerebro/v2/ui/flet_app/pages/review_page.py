@@ -50,7 +50,9 @@ class ReviewPage(
     """Grid and compare view for visual triage of duplicate groups."""
 
     def __init__(self, bridge: "StateBridge"):
-        super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
+        # Do not use scroll=AUTO on this outer Column: it contains _content with expand=True,
+        # which often collapses to zero height in Flet (blank Workspace). Inner ListView/GridView scroll.
+        super().__init__(expand=True, scroll=None)
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._groups: List[DuplicateGroup] = []
@@ -78,7 +80,6 @@ class ReviewPage(
         self._compare_nav_in_flight = False
 
         self._stats_header: StatsHeader
-        self._smart_apply_all_btn: ft.FilledButton
         self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
         self._grid_view: ReviewGridView
@@ -87,10 +88,12 @@ class ReviewPage(
         self._filter_bar: FilterBar
         self._content: ft.Column
         self._empty_state: ft.Container
+        self._empty_title_lbl: ft.Text
+        self._empty_body_lbl: ft.Text
         self._loading_state: ft.Container
         self._grid: ft.GridView
         self._compare_view: ft.Column
-        self._groups_overview: ft.ListView
+        self._groups_overview: ft.Column
         self._view_toggle_row: ft.Row
         self._group_sort_dd: ft.Dropdown
         self._group_sort_key: str
@@ -112,7 +115,8 @@ class ReviewPage(
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
-            self._enter_mode("empty")
+            if self._page_is_set(self):
+                self._enter_mode("empty")
             return
         self._loading = True
         self._enter_mode("loading")
@@ -124,13 +128,18 @@ class ReviewPage(
             self._enter_compare(group_id)
 
     def _schedule_load_to_groups(self) -> None:
-        self._loading = True
-        self._enter_mode("loading")
-        page = self._bridge.flet_page
-        if hasattr(page, "run_task"):
-            page.run_task(self._finish_load_to_groups_async)
+        """Paint the group list directly without an intermediate loading frame.
+
+        Avoid page.run_task here: on some Windows/Flet builds the deferred coroutine
+        never ran after scan completion. Avoid a loading→groups double _enter_mode:
+        two rapid _content updates can cause Flet's delta tracker to commit the
+        intermediate state, leaving the workspace blank.
+        """
+        self._loading = False
+        if not self._groups:
+            if self._page_is_set(self):
+                self._enter_mode("empty")
         else:
-            self._loading = False
             self._enter_mode("groups")
 
     def load_results(
@@ -145,13 +154,21 @@ class ReviewPage(
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if defer_render:
-            self._pending_deferred_render = True
             if not self._groups:
-                self._mode = "empty"
+                self._pending_deferred_render = False
+                # Do not call _enter_mode until mounted — Flet raises if .page is read too early.
+                if self._page_is_set(self):
+                    self._enter_mode("empty")
+                return
+            self._pending_deferred_render = True
             return
         self._pending_deferred_render = False
         if not self._groups:
-            self._enter_mode("empty")
+            if self._page_is_set(self):
+                self._enter_mode("empty")
+            return
+        if not self._page_is_set(self):
+            self._pending_deferred_render = True
             return
         self._schedule_load_to_groups()
 
@@ -167,7 +184,8 @@ class ReviewPage(
         self._rebuild_group_index()
         self._rebuild_filter_index()
         if not self._groups:
-            self._enter_mode("empty")
+            if self._page_is_set(self):
+                self._enter_mode("empty")
             return
         if self._mode == "compare":
             if self._compare_gid is None or self._compare_gid not in self._group_files:
@@ -188,21 +206,57 @@ class ReviewPage(
         elif self._mode == "grid":
             self._refresh_grid()
         else:
-            self._schedule_load_to_groups()
+            if self._page_is_set(self):
+                self._schedule_load_to_groups()
+            else:
+                self._pending_deferred_render = True
+
+    @staticmethod
+    def _page_is_set(ctrl) -> bool:
+        try:
+            return ctrl.page is not None
+        except RuntimeError:
+            return False
 
     def on_show(self) -> None:
         self._reduce_motion = self._bridge.is_reduce_motion_enabled()
         self._grid_view.set_reduce_motion(self._reduce_motion)
         self._marked_paths = set(self._bridge.state.selected_files)
         self._recompute_marked_bytes()
+        # If the store already has scan results but this singleton never received them
+        # (missed listener, thread timing, or early navigation), hydrate now.
+        st = self._bridge.state
+        store_groups = list(getattr(st, "groups", []) or [])
+        if store_groups and not self._groups:
+            self.load_results(store_groups, getattr(st, "scan_mode", None) or "files", defer_render=False)
+            self._refresh_stats_header()
+            return
+        # Recover from Flet occasionally leaving the body column empty while groups exist
+        # (same-tab singleton remount / skipped repaint race after scan completion).
+        if (
+            self._groups
+            and not self._pending_deferred_render
+            and len(getattr(self._content, "controls", [])) == 0
+        ):
+            self._schedule_load_to_groups()
+            self._refresh_stats_header()
+            return
         if self._pending_deferred_render:
             self._pending_deferred_render = False
             if self._groups:
                 self._schedule_load_to_groups()
+            else:
+                if self._page_is_set(self):
+                    self._enter_mode("empty")
             self._refresh_stats_header()
+            try:
+                self._bridge.flet_page.update()
+            except Exception:
+                pass
             return
         if not self._groups:
-            self._enter_mode("empty")
+            if self._page_is_set(self):
+                self._enter_mode("empty")
             return
         if self._mode in ("empty", "loading"):
             self._schedule_load_to_groups()
@@ -217,10 +271,7 @@ class ReviewPage(
         return list(self._groups)
 
     def _is_mounted(self) -> bool:
-        try:
-            return self.page is not None
-        except RuntimeError:
-            return False
+        return self._page_is_set(self)
 
     def _push_marked_paths_to_store(self) -> None:
         self._bridge.store.dispatch(FileSelectionChanged(file_ids=tuple(self._marked_paths)))

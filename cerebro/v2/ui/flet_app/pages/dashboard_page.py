@@ -146,6 +146,9 @@ class DashboardPage(ft.Column):
         # Elapsed clock + ETA line (1 Hz); snapshot updated from progress callbacks.
         self._scan_timer_active: bool = False
         self._scan_elapsed_start: float = 0.0
+        # Last engine-reported wall elapsed (monotonic-based in TurboFileEngine); used when the
+        # 1 Hz UI timer thread does not advance the clock on some hosts.
+        self._last_progress_elapsed_seconds: float = 0.0
         self._scan_hud_snap: dict = {}
         self._scan_hud_stop = threading.Event()
         self._scan_timer_thread: Optional[threading.Thread] = None
@@ -162,6 +165,9 @@ class DashboardPage(ft.Column):
         self._scan_network_warn_shown: bool = False
         # Largest file-catalogue count seen (discovery + grouping); explains hashing denominator.
         self._scan_files_catalogued: int = 0
+        # After ``_on_scan_complete`` / ``_on_scan_error``, ignore queued progress callbacks so the
+        # HUD cannot show mid-scan bars while "View Results" / completion chrome is already up.
+        self._scan_accept_progress: bool = True
         # Canvas chunk bar state
         self._bar_slices: int = 0
         self._bar_active_markers: Set[int] = set()
@@ -1511,6 +1517,8 @@ class DashboardPage(ft.Column):
         self._io_paused_root = ""
         self._scan_network_warn_shown = False
         self._scan_files_catalogued = 0
+        self._scan_accept_progress = True
+        self._last_progress_elapsed_seconds = 0.0
         self._bar_slices = 0
         self._bar_active_markers.clear()
         self._bar_is_complete = False
@@ -2303,6 +2311,8 @@ class DashboardPage(ft.Column):
         return "Preparing scan…"
 
     def _on_scan_progress(self, data: dict) -> None:
+        if not self._scan_accept_progress:
+            return
         raw_stage = data.get("stage", "")
         stage = DashboardPage._normalize_scan_stage_for_ui(raw_stage)
         if stage and stage not in frozenset(
@@ -2401,6 +2411,15 @@ class DashboardPage(ft.Column):
             self._scan_files_catalogued = max(
                 self._scan_files_catalogued, int(scanned), int(total)
             )
+        elif stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+            # Discovery can finish without a HUD tick; keep Step 1 "paths in scope" honest.
+            tscope = int(total_files_in_scope or 0)
+            fproc = int(files_processed or 0)
+            self._scan_files_catalogued = max(
+                self._scan_files_catalogued,
+                tscope,
+                fproc,
+            )
 
         main, sub, counter_core = self._scan_hud_strings(
             stage, int(scanned), int(total), self._scan_files_catalogued
@@ -2452,7 +2471,16 @@ class DashboardPage(ft.Column):
             self._hash_algo_label.value = ""
             self._hash_algo_label.visible = False
 
-        self._scan_elapsed_clock.value = self._scan_elapsed_clock_value()
+        try:
+            self._last_progress_elapsed_seconds = float(data.get("elapsed_seconds", 0) or 0.0)
+        except (TypeError, ValueError):
+            self._last_progress_elapsed_seconds = 0.0
+        mono_elapsed = (
+            (time.monotonic() - self._scan_elapsed_start) if self._scan_timer_active else 0.0
+        )
+        self._scan_elapsed_clock.value = DashboardPage._fmt_elapsed_compact(
+            max(0.0, mono_elapsed, self._last_progress_elapsed_seconds)
+        )
         self._ring_timer.value = self._build_scan_timer_line()
 
         # Canvas chunk bar — visible only during hashing phases.
@@ -2541,10 +2569,11 @@ class DashboardPage(ft.Column):
 
     def _scan_elapsed_clock_value(self) -> str:
         """Compact H:MM:SS / M:SS for the live scan clock (UI thread)."""
-        if not self._scan_timer_active:
+        mono = (time.monotonic() - self._scan_elapsed_start) if self._scan_timer_active else 0.0
+        eng = float(getattr(self, "_last_progress_elapsed_seconds", 0.0) or 0.0)
+        if mono <= 0.0 and eng <= 0.0 and not self._scan_timer_active:
             return "0:00"
-        elapsed = time.monotonic() - self._scan_elapsed_start
-        return DashboardPage._fmt_elapsed_compact(elapsed)
+        return DashboardPage._fmt_elapsed_compact(max(0.0, mono, eng))
 
     async def _async_tick_scan_elapsed(self) -> None:
         """Flet ``run_task`` path when ``run_thread`` is unavailable."""
@@ -2609,10 +2638,10 @@ class DashboardPage(ft.Column):
             _log.debug("scan elapsed tick update failed", exc_info=True)
 
     def _build_scan_timer_line(self) -> str:
-        """Pace / ETA / phase hints — elapsed lives on ``_scan_elapsed_clock``."""
-        if not self._scan_timer_active:
-            return ""
-        elapsed = time.monotonic() - self._scan_elapsed_start
+        """Pace / ETA / phase hints — elapsed blends UI timer + engine wall clock."""
+        mono = (time.monotonic() - self._scan_elapsed_start) if self._scan_timer_active else 0.0
+        eng = float(getattr(self, "_last_progress_elapsed_seconds", 0.0) or 0.0)
+        elapsed = max(0.0, mono, eng)
         snap = self._scan_hud_snap or {}
         st = str(snap.get("stage") or "")
 
@@ -2868,10 +2897,12 @@ class DashboardPage(ft.Column):
         return f"{m}:{sec:02d}"
 
     def _on_scan_complete(self, results: list, mode: str) -> None:
+        self._scan_accept_progress = False
         self._cancel_watchdog_token += 1
         self._pause_scan_btn.visible = False
+        eng_wall = float(getattr(self, "_last_progress_elapsed_seconds", 0.0) or 0.0)
         frozen_scan_elapsed = DashboardPage._fmt_elapsed_compact(
-            max(0.0, time.monotonic() - self._scan_elapsed_start)
+            max(0.0, time.monotonic() - self._scan_elapsed_start, eng_wall)
         )
         self._stop_scan_elapsed_timer()
         # If cancel was clicked, the backend still calls on_complete with partial
@@ -2880,6 +2911,13 @@ class DashboardPage(ft.Column):
             self._finalize_cancel_choice_with_results(list(results), mode)
             if not results:
                 self._ring_phase_label.value = "No duplicate groups could be found before cancellation."
+            # Do not leave the hashing headline / path up — cancel return used to skip these.
+            self._ring_label.value = "Scan cancelled"
+            self._ring_path.value = ""
+            try:
+                self._scan_elapsed_clock.value = frozen_scan_elapsed
+            except Exception:
+                pass
             DashboardPage._safe_update(self)
             return
 
@@ -2931,8 +2969,26 @@ class DashboardPage(ft.Column):
                 success=True,
             )
         self._bridge.play_sound("success")
+        # Global listeners (store, navigation, child pages) run during dispatch; re-latch terminal
+        # copy so a queued progress tick or side effect cannot leave "Comparing…" + a live path up.
+        self._ring_label.value = (
+            f"Scan complete — {ng:,} duplicate group(s) found." if ng > 0 else "Scan complete — no duplicates found."
+        )
+        self._ring_phase_label.value = (
+            "Assembling duplicate groups from hash results." if ng else "Finished — nothing to compare."
+        )
+        self._ring_path.value = ""
+        try:
+            self._scan_elapsed_clock.value = frozen_scan_elapsed
+        except Exception:
+            pass
+        DashboardPage._safe_update(self._ring_label)
+        DashboardPage._safe_update(self._ring_phase_label)
+        DashboardPage._safe_update(self._ring_path)
+        DashboardPage._safe_update(self._scan_elapsed_clock)
 
     def _on_scan_error(self, msg: str) -> None:
+        self._scan_accept_progress = False
         self._cancel_watchdog_token += 1
         if "network path unreachable:" in str(msg or "").lower():
             root = self._extract_unreachable_root(str(msg))
@@ -3403,7 +3459,9 @@ class DashboardPage(ft.Column):
             is_scanning = bool(self._bridge.backend.is_scanning)
         except Exception:
             is_scanning = False
-        if self._scan_view.visible and not is_scanning:
+        # ``is_scanning`` can briefly disagree with the HUD; if the chunk bar already latched
+        # complete, treat the run as finished so Home does not resurrect a zombie scan surface.
+        if self._scan_view.visible and (not is_scanning or self._bar_is_complete):
             self._pause_scan_btn.visible = False
             self._scan_view.visible = False
             for p in self._main_panels:

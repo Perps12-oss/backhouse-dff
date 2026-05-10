@@ -964,13 +964,17 @@ class TurboScanner:
             # Load pending files first, then also load completed files from checkpoint
             # so size-grouping can detect cross-pairs across both sets.
             logger.info("[Turbo] Resume mode: loading pending files from checkpoint (skipping os.walk)")
+            # Row cursor counts checkpoint rows validated during reload (not os.walk).
+            # Start at 0 so UI can climb monotonically; hashing still uses engine-side
+            # checkpoint_completed_offset from TurboFileEngine.
             _emit(
                 ScanStage.DISCOVERING,
-                _ckpt_completed_at_start,
+                0,
                 _ckpt_total,
+                "Resuming: reading checkpoint (no disk walk yet)…",
                 metrics={
                     "total_files_in_scope": _ckpt_total,
-                    "files_processed": _ckpt_completed_at_start,
+                    "files_processed": 0,
                     "candidates_found": 0,
                     "checkpoint_resume": True,
                     "checkpoint_completed_offset": _ckpt_completed_at_start,
@@ -979,6 +983,34 @@ class TurboScanner:
             discovered_files: List[Tuple[Path, int, float]] = []
             _resume_ce = self.config.cancel_event
             _resume_checked = 0
+            _resume_emit_every = 2048
+            _t_last_resume_emit = time.perf_counter()
+
+            def _emit_resume_row_progress() -> None:
+                nonlocal _t_last_resume_emit
+                now = time.perf_counter()
+                if _resume_checked > 1:
+                    if (
+                        _resume_checked % _resume_emit_every != 0
+                        and (now - _t_last_resume_emit) < 0.35
+                    ):
+                        return
+                _t_last_resume_emit = now
+                row_n = min(_ckpt_total, _resume_checked)
+                _emit(
+                    ScanStage.DISCOVERING,
+                    row_n,
+                    _ckpt_total,
+                    f"Resuming: validating paths from checkpoint ({row_n:,} / {_ckpt_total:,})…",
+                    metrics={
+                        "total_files_in_scope": _ckpt_total,
+                        "files_processed": row_n,
+                        "candidates_found": 0,
+                        "checkpoint_resume": True,
+                        "checkpoint_completed_offset": _ckpt_completed_at_start,
+                    },
+                )
+
             for batch in ckpt.iter_pending_files(scan_id):
                 if _resume_ce is not None and _resume_ce.is_set():
                     logger.info(
@@ -995,12 +1027,14 @@ class TurboScanner:
                             len(discovered_files),
                         )
                         return
+                    _emit_resume_row_progress()
                     p = Path(path_str)
-                    if not p.exists():
+                    try:
+                        st = p.stat()
+                    except OSError:
                         ckpt.enqueue_hash_result(scan_id, path_str, None, None, "error")
                         continue
-                    st_mtime = p.stat().st_mtime if p.exists() else mtime
-                    discovered_files.append((p, size, st_mtime))
+                    discovered_files.append((p, size, float(st.st_mtime)))
             _pending_count = len(discovered_files)
             # Load completed files so size-grouping catches cross-pairs between
             # already-hashed and pending files (hash_cache will serve them instantly).
@@ -1021,9 +1055,27 @@ class TurboScanner:
                             len(discovered_files),
                         )
                         return
+                    _emit_resume_row_progress()
                     p = Path(path_str)
-                    if p.exists():
-                        discovered_files.append((p, int(size), float(mtime)))
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    discovered_files.append((p, int(size), float(st.st_mtime)))
+            row_final = min(_ckpt_total, _resume_checked)
+            _emit(
+                ScanStage.DISCOVERING,
+                row_final,
+                _ckpt_total,
+                f"Resuming: checkpoint reload done ({row_final:,} / {_ckpt_total:,} rows)…",
+                metrics={
+                    "total_files_in_scope": _ckpt_total,
+                    "files_processed": row_final,
+                    "candidates_found": 0,
+                    "checkpoint_resume": True,
+                    "checkpoint_completed_offset": _ckpt_completed_at_start,
+                },
+            )
             logger.info("[Turbo] Resume: %d pending + %d completed = %d total files",
                         _pending_count, len(discovered_files) - _pending_count, len(discovered_files))
         else:

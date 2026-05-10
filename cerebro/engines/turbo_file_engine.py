@@ -612,12 +612,20 @@ class TurboFileEngine(BaseEngine):
             scanned = processed  # may be non-zero if resuming
             ft = total if total > 0 else 0
         elif entering_hashing:
-            # Phase handoff: start from offset so bar doesn't reset to 0% on resume.
-            scanned = offset
-            ft = total_scope if total_scope > 0 else total
+            # Phase handoff: checkpoint resume seeds from completed offset; fresh scans
+            # carry discovery's files_scanned (offset is 0 but prev is non-zero).
+            scanned = offset if offset > 0 else prev.files_scanned
+            # Prefer live work-unit total from the scanner over checkpoint file counts.
+            ft = total if total > 0 else (total_scope if total_scope > 0 else 0)
+            ft = max(ft, scanned, prev.files_total or 0, prev.files_scanned or 0)
         elif is_hashing:
             scanned = processed + offset
-            ft = total_scope if total_scope > 0 else (total if total > 0 else (prev.files_total or 0))
+            # ``total`` from TurboScanner is hash *work units* (e.g. 2× files when cache-prep
+            # is counted). ``_ckpt_total`` is checkpoint row counts — same scale as *files*, not
+            # work units — so prefer the live ``total`` from the callback. Always keep the
+            # denominator >= numerator so the HUD never shows 11450 / 10572 style regressions.
+            ft = total if total > 0 else (total_scope if total_scope > 0 else (prev.files_total or 0))
+            ft = max(ft, scanned, prev.files_total or 0, prev.files_scanned or 0)
         else:
             scanned = max(processed + offset, prev.files_scanned)
             ft = total if total > 0 else (prev.files_total or 0)

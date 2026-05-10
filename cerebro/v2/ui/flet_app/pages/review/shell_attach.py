@@ -45,19 +45,8 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
             for val, label in RULE_LABELS
         ],
     )
-    page._smart_apply_all_btn = ft.FilledButton(
-        "Apply Rule to Visible",
-        icon=ft.icons.Icons.AUTO_FIX_HIGH,
-        on_click=page._apply_smart_select_review,
-        style=pill_filled_accent(
-            t,
-            padding=ft.padding.symmetric(horizontal=16, vertical=10),
-            text_size=12,
-            weight=ft.FontWeight.W_700,
-        ),
-    )
     page._smart_row = ft.Row(
-        [page._smart_seg, page._grid_view.zoom_row, page._smart_apply_all_btn],
+        [page._smart_seg, page._grid_view.zoom_row],
         spacing=t.spacing.sm,
         visible=False,
         wrap=True,
@@ -80,6 +69,18 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         on_click=lambda e: bridge.navigate("dashboard"),
         style=pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700),
     )
+    page._empty_title_lbl = ft.Text(
+        "Nothing to review yet",
+        size=t.typography.size_lg,
+        weight=ft.FontWeight.W_600,
+        color=t.colors.fg,
+    )
+    page._empty_body_lbl = ft.Text(
+        "Run a scan first, then come here to visually triage duplicates.",
+        size=t.typography.size_base,
+        color=t.colors.fg_muted,
+        text_align=ft.TextAlign.CENTER,
+    )
     page._empty_state = ft.Container(
         content=ft.Column(
             [
@@ -89,18 +90,8 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
                     border_radius=16,
                     padding=20,
                 ),
-                ft.Text(
-                    "Nothing to review yet",
-                    size=t.typography.size_lg,
-                    weight=ft.FontWeight.W_600,
-                    color=t.colors.fg,
-                ),
-                ft.Text(
-                    "Run a scan first, then come here to visually triage duplicates.",
-                    size=t.typography.size_base,
-                    color=t.colors.fg_muted,
-                    text_align=ft.TextAlign.CENTER,
-                ),
+                page._empty_title_lbl,
+                page._empty_body_lbl,
                 page._empty_go_home_btn,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -126,17 +117,22 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
 
 
 def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
-    page._groups_overview = ft.ListView(
+    # Use a scrollable Column instead of ListView: nested ListView(expand=True) inside
+    # Column(expand=True) often resolves to zero height on Flet desktop (blank Workspace).
+    page._groups_overview = ft.Column(
+        expand=True,
+        scroll=ft.ScrollMode.AUTO,
         spacing=8,
-        padding=ft.padding.all(16),
     )
     page._btn_view_groups = ft.TextButton(
-        "Groups",
+        "Details",
+        tooltip="List duplicate sets with sizes (Explorer-style Details).",
         on_click=lambda e: page._enter_mode("groups"),
         style=pill_text_button_style(t, variant="primary"),
     )
     page._btn_view_tiles = ft.TextButton(
         "Tiles",
+        tooltip="Thumbnail grid for visual triage (Explorer-style Tiles / Large icons).",
         on_click=lambda e: page._enter_mode("grid"),
         style=pill_text_button_style(t, variant="muted"),
     )
@@ -145,13 +141,14 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
         spacing=t.spacing.sm,
         visible=False,
     )
-    page._group_sort_key = "reclaimable_desc"
+    # Default: most copies per group first — strongest signal for "where is the mess".
+    page._group_sort_key = "files_desc"
     page._group_sort_dd = ft.Dropdown(
         width=240,
         value=page._group_sort_key,
         options=[
+            ft.dropdown.Option("files_desc", "Most copies in group"),
             ft.dropdown.Option("reclaimable_desc", "Highest reclaimable"),
-            ft.dropdown.Option("files_desc", "Most copies"),
             ft.dropdown.Option("path_asc", "Folder A-Z"),
         ],
         on_select=page._on_group_sort_changed,

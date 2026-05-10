@@ -20,7 +20,7 @@ class StatsHeader(ft.Container):
         self._t = t
         self._title_lbl = ft.Text(
             "Review Workspace",
-            size=t.typography.size_lg,
+            size=t.typography.size_xl,
             weight=ft.FontWeight.BOLD,
             color=t.colors.fg,
         )
@@ -81,14 +81,14 @@ class StatsHeader(ft.Container):
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Text(label, size=10, color=t.colors.fg_muted, weight=ft.FontWeight.W_500),
-                    ft.Text(value, size=11, weight=ft.FontWeight.W_700, color=accent),
+                    ft.Text(label, size=11, color=t.colors.fg_muted, weight=ft.FontWeight.W_600),
+                    ft.Text(value, size=14, weight=ft.FontWeight.W_800, color=accent),
                 ],
-                spacing=4,
+                spacing=6,
                 tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.BASELINE,
             ),
-            padding=ft.padding.symmetric(horizontal=7, vertical=4),
+            padding=ft.padding.symmetric(horizontal=10, vertical=6),
             bgcolor=ft.Colors.with_opacity(0.14, t.colors.glass_bg),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.glass_border)),
             border_radius=999,
@@ -108,7 +108,7 @@ class StatsHeader(ft.Container):
     ) -> None:
         """Recompute and update all child controls. Called by ReviewPage after any state change."""
         self._t = t
-        self._title_lbl.size = t.typography.size_lg
+        self._title_lbl.size = t.typography.size_xl
         self._title_lbl.color = t.colors.fg
         self._summary_lbl.size = t.typography.size_sm
         self._summary_lbl.color = t.colors.fg2
@@ -121,7 +121,10 @@ class StatsHeader(ft.Container):
 
         selected_files = filter_counts.get(filter_key, 0)
         selected_groups = filter_group_counts.get(filter_key, 0)
-        reclaimable = fmt_size(filter_sizes.get(filter_key, 0))
+        on_disk_here = int(filter_sizes.get(filter_key, 0) or 0)
+        total_reclaimable = int(
+            sum(int(getattr(g, "reclaimable", 0) or 0) for g in groups)
+        )
         reviewed_in_filter = sum(1 for g in groups if g.group_id in reviewed_ids)
         total_filtered = len(groups)
         remaining_reclaimable = int(
@@ -129,8 +132,8 @@ class StatsHeader(ft.Container):
         )
         mode_label_map = {
             "compare": "Compare",
-            "grid": "Grid",
-            "groups": "Groups",
+            "grid": "Tiles",
+            "groups": "Details",
             "loading": "Loading",
             "empty": "Empty",
         }
@@ -138,22 +141,32 @@ class StatsHeader(ft.Container):
         self._summary_lbl.value = f"Filter: {filter_label} · Mode: {mode_label}"
         if mode == "compare":
             self._summary_lbl.value += " · Back returns to the group list"
-        self._stats_row.controls = [
+        # ``filter_sizes`` = sum of on-disk bytes for every file row in duplicate groups for this filter
+        # (all copies counted). ``total_reclaimable`` = space you can free by deleting redundant copies
+        # (engine-computed per group). Not the same as "whole disk scanned" — that scope is not on Review.
+        chips: list = [
             self._metric_chip("Groups", f"{selected_groups:,}", RC.side_b),
-            self._metric_chip("Files", f"{selected_files:,}", RC.stats_chip_files),
-            self._metric_chip("Total Size", reclaimable, RC.success),
+            self._metric_chip("Files (all copies)", f"{selected_files:,}", RC.stats_chip_files),
+            self._metric_chip("On disk in groups", fmt_size(on_disk_here), RC.success),
+            self._metric_chip("Recoverable total", fmt_size(total_reclaimable), RC.info),
             self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", RC.stats_chip_reviewed),
-            self._metric_chip("Remaining", fmt_size(remaining_reclaimable), RC.stats_chip_remaining),
         ]
+        if reviewed_in_filter > 0 and remaining_reclaimable != total_reclaimable:
+            chips.append(
+                self._metric_chip("Recoverable left", fmt_size(remaining_reclaimable), RC.stats_chip_remaining)
+            )
+        self._stats_row.controls = chips
         if mode == "compare":
             self._workflow_lbl.value = (
-                "Shortcuts: arrows change group; 1 or K deletes side A; 2 or D deletes side B; "
-                "Enter next group; Space opens delete for extras the smart rule would remove."
+                "Shortcuts: arrows change group; Enter next group; Space re-applies smart marks for this group; "
+                "Delete/Backspace opens delete for all marked files when any are marked."
             )
         elif groups:
-            self._workflow_lbl.value = f"Progress: {reviewed_in_filter:,}/{total_filtered:,} groups reviewed"
+            self._workflow_lbl.value = (
+                "On disk counts every listed copy; recoverable is surplus you can delete per group."
+            )
         else:
-            self._workflow_lbl.value = "Progress: no groups in current filter"
+            self._workflow_lbl.value = "No groups match this filter."
         StatsHeader._safe_update(self._title_lbl)
         StatsHeader._safe_update(self._summary_lbl)
         StatsHeader._safe_update(self._stats_row)

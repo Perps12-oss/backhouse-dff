@@ -1,4 +1,4 @@
-"""Grid mode: tile grid, async thumbnails, zoom pills, rendering badge."""
+"""Grid mode: tile grid, async thumbnails, Explorer-style icon size, rendering badge."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache
-from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_selected, pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
@@ -26,9 +25,17 @@ _GRID_FIRST_SYNC_FILES = 20
 _GRID_ASYNC_BATCH = 30
 _UI_SLOW_MS = 80.0
 
+# Grid tile max_extent (Flet GridView) — aligned with Explorer-style icon size names.
+_ICON_SIZE_PRESETS: tuple[tuple[int, str], ...] = (
+    (280, "Extra large icons"),
+    (210, "Large icons"),
+    (160, "Medium icons"),
+    (120, "Small icons"),
+)
+
 
 class ReviewGridView(ft.Stack):
-    """Tile grid with async thumbnail loading, zoom controls, and rendering badge."""
+    """Tile grid with async thumbnail loading, icon-size control, and rendering badge."""
 
     def __init__(
         self,
@@ -48,7 +55,9 @@ class ReviewGridView(ft.Stack):
         self._on_toggle_mark = on_toggle_mark
         self._is_grid_mode = is_grid_mode
 
-        self._grid_extent = initial_extent
+        self._grid_extent = ReviewGridView._nearest_preset_extent(initial_extent)
+        self._last_files: List[DuplicateFile] = []
+        self._last_marked: Set[str] = set()
         self._tile_cache: Dict[str, ft.Container] = {}
         self._thumb_slots: Dict[str, ft.Container] = {}
         self._mark_checkboxes: Dict[str, ft.Checkbox] = {}
@@ -84,10 +93,8 @@ class ReviewGridView(ft.Stack):
             ),
         )
 
-        self._zoom_btn_s: ft.TextButton | None = None
-        self._zoom_btn_m: ft.TextButton | None = None
-        self._zoom_btn_l: ft.TextButton | None = None
-        self._zoom_row = self._build_zoom_row()
+        self._icon_size_dd: ft.Dropdown | None = None
+        self._zoom_row = self._build_icon_size_row()
 
         super().__init__(
             [
@@ -117,58 +124,117 @@ class ReviewGridView(ft.Stack):
         self._grid.spacing = t.spacing.sm
         self._grid.run_spacing = t.spacing.sm
         self._grid.padding = t.spacing.lg
+        self.sync_zoom_pill_styles(t)
 
     def clear_tile_caches(self) -> None:
         self._tile_cache.clear()
         self._thumb_slots.clear()
         self._mark_checkboxes.clear()
+        self._last_files.clear()
+        self._last_marked.clear()
 
     def bump_thumb_generation(self) -> None:
         self._thumb_load_generation += 1
 
-    def on_zoom_size_click(self, extent: int, _e: ft.ControlEvent | None = None) -> None:
-        self._grid_extent = extent
-        self._grid.max_extent = extent
+    @staticmethod
+    def _nearest_preset_extent(extent: int) -> int:
+        allowed = [p[0] for p in _ICON_SIZE_PRESETS]
+        return min(allowed, key=lambda x: abs(x - extent))
+
+    def _thumb_decode_max_edge(self) -> int:
+        """JPEG decode size tier for current tile extent."""
+        e = self._grid_extent
+        if e <= 130:
+            return 128
+        if e <= 185:
+            return 176
+        if e <= 245:
+            return 256
+        return 360
+
+    def set_grid_extent(self, extent: int, *, reload_thumbs: bool = True) -> None:
+        new_e = self._nearest_preset_extent(int(extent))
+        prev_e = self._grid_extent
+        self._grid_extent = new_e
+        self._grid.max_extent = new_e
+        if self._icon_size_dd is not None:
+            self._icon_size_dd.value = str(new_e)
         self.sync_zoom_pill_styles(self._t)
         ReviewGridView._safe_update(self._grid)
+        if self._icon_size_dd is not None:
+            ReviewGridView._safe_update(self._icon_size_dd)
+        if reload_thumbs and self._last_files and new_e != prev_e:
+            self._reload_thumbnails_after_resize()
+
+    def on_zoom_size_click(self, extent: int, _e: ft.ControlEvent | None = None) -> None:
+        """Kept for tests / legacy callers."""
+        self.set_grid_extent(extent, reload_thumbs=True)
+
+    def _reload_thumbnails_after_resize(self) -> None:
+        self.bump_thumb_generation()
+        gen = self._thumb_load_generation
+        for slot in self._thumb_slots.values():
+            slot.content = self._make_thumb_placeholder_inner()
+        ReviewGridView._safe_update(self._grid)
+        page = self._bridge.flet_page
+        if hasattr(page, "run_task"):
+            page.run_task(self._load_thumbnails_async, list(self._last_files), gen)
 
     def sync_zoom_pill_styles(self, t: ThemeTokens) -> None:
-        for extent, btn in (
-            (120, self._zoom_btn_s),
-            (160, self._zoom_btn_m),
-            (210, self._zoom_btn_l),
-        ):
-            if btn is None:
-                continue
-            btn.style = pill_text_button_selected(t) if self._grid_extent == extent else pill_text_button_style(t, variant="muted")
-            ReviewGridView._safe_update(btn)
+        """Keep name for ReviewPage theme sync — updates icon-size dropdown."""
+        dd = self._icon_size_dd
+        if dd is None:
+            return
+        dd.value = str(self._nearest_preset_extent(self._grid_extent))
+        dd.border_color = t.colors.border
+        dd.bgcolor = t.colors.bg2
+        dd.label_style = ft.TextStyle(color=t.colors.fg_muted, size=10, weight=ft.FontWeight.W_600)
+        ReviewGridView._safe_update(dd)
 
-    def _build_zoom_row(self) -> ft.Row:
+    def _on_icon_size_changed(self, e: ft.ControlEvent) -> None:
+        dd = e.control
+        if not isinstance(dd, ft.Dropdown) or not dd.value:
+            return
+        try:
+            ext = int(dd.value)
+        except (TypeError, ValueError):
+            return
+        self.set_grid_extent(ext, reload_thumbs=True)
+
+    def _build_icon_size_row(self) -> ft.Row:
         t = self._t
-        self._zoom_btn_s = ft.TextButton(
-            "S",
-            on_click=lambda e: self.on_zoom_size_click(120, e),
-            style=pill_text_button_selected(t) if self._grid_extent == 120 else pill_text_button_style(t, variant="muted"),
-        )
-        self._zoom_btn_m = ft.TextButton(
-            "M",
-            on_click=lambda e: self.on_zoom_size_click(160, e),
-            style=pill_text_button_selected(t) if self._grid_extent == 160 else pill_text_button_style(t, variant="muted"),
-        )
-        self._zoom_btn_l = ft.TextButton(
-            "L",
-            on_click=lambda e: self.on_zoom_size_click(210, e),
-            style=pill_text_button_selected(t) if self._grid_extent == 210 else pill_text_button_style(t, variant="muted"),
+        cur = str(self._nearest_preset_extent(self._grid_extent))
+        self._icon_size_dd = ft.Dropdown(
+            label="Icon size",
+            width=220,
+            dense=True,
+            value=cur,
+            options=[ft.dropdown.Option(str(ext), lbl) for ext, lbl in _ICON_SIZE_PRESETS],
+            on_select=self._on_icon_size_changed,
+            text_size=11,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            border_color=t.colors.border,
+            bgcolor=t.colors.bg2,
+            label_style=ft.TextStyle(color=t.colors.fg_muted, size=10, weight=ft.FontWeight.W_600),
+            tooltip="Same idea as File Explorer icon sizes (tile grid on this page).",
         )
         return ft.Row(
-            [
-                ft.Text("Size:", size=9, color=self._t.colors.fg_muted),
-                self._zoom_btn_s,
-                self._zoom_btn_m,
-                self._zoom_btn_l,
-            ],
+            [self._icon_size_dd],
             spacing=4,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _make_thumb_placeholder_inner(self) -> ft.Container:
+        icon_px = max(28, min(88, int(self._grid_extent * 0.28)))
+        return ft.Container(
+            content=ft.Icon(
+                ft.icons.Icons.INSERT_DRIVE_FILE,
+                size=icon_px,
+                color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE),
+            ),
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
         )
 
     @staticmethod
@@ -212,6 +278,8 @@ class ReviewGridView(ft.Stack):
 
     def refresh(self, files: List[DuplicateFile], marked_paths: Set[str]) -> None:
         _t0 = time.perf_counter()
+        self._last_files = list(files)
+        self._last_marked = set(marked_paths)
         self.bump_thumb_generation()
         load_gen = self._thumb_load_generation
         n = len(files)
@@ -304,13 +372,11 @@ class ReviewGridView(ft.Stack):
         key = str(getattr(f, "path", ""))
         info_bar = self._tile_info_footer(f, p, t)
 
-        placeholder = ft.Container(
-            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=48, color=ft.Colors.with_opacity(0.3, ft.Colors.WHITE)),
+        thumb_slot = ft.Container(
+            content=self._make_thumb_placeholder_inner(),
             expand=True,
-            alignment=ft.Alignment(0, 0),
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
-        thumb_slot = ft.Container(content=placeholder, expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
         cb = ft.Checkbox(
             value=key in marked_paths,
@@ -357,8 +423,18 @@ class ReviewGridView(ft.Stack):
         self._tile_cache[key] = tile
         return tile
 
+    def _thumb_image_control(self, thumb_b64: str) -> ft.Image:
+        """Fill the tile slot; decoded JPEG resolution follows ``_thumb_decode_max_edge``."""
+        return ft.Image(
+            src=f"data:image/jpeg;base64,{thumb_b64}",
+            fit=ft.BoxFit.COVER,
+            expand=True,
+            border_radius=8,
+        )
+
     async def _load_thumbnails_async(self, files: List[DuplicateFile], load_gen: int) -> None:
         pending: list[tuple[ft.Container, str]] = []
+        decode_edge = self._thumb_decode_max_edge()
 
         async def _on_ready(path: Path, b64: str | None) -> None:
             if load_gen != self._thumb_load_generation or not self._is_grid_mode():
@@ -375,13 +451,7 @@ class ReviewGridView(ft.Stack):
             if len(pending) >= 8:
                 _apply_t0 = time.perf_counter()
                 for slot, thumb_b64 in pending:
-                    slot.content = ft.Image(
-                        src=f"data:image/jpeg;base64,{thumb_b64}",
-                        width=96,
-                        height=96,
-                        fit=ft.BoxFit.CONTAIN,
-                        border_radius=8,
-                    )
+                    slot.content = self._thumb_image_control(thumb_b64)
                 pending.clear()
                 if load_gen == self._thumb_load_generation and self._is_grid_mode():
                     self._safe_update(self._grid)
@@ -389,19 +459,13 @@ class ReviewGridView(ft.Stack):
                 await asyncio.sleep(0)
 
         paths = [Path(str(f.path)) for f in files]
-        await get_thumbnail_cache().load_batch_async(paths, _on_ready)
+        await get_thumbnail_cache().load_batch_async(paths, _on_ready, max_edge=decode_edge)
         if load_gen != self._thumb_load_generation or not self._is_grid_mode():
             return
         if pending:
             _apply_t0 = time.perf_counter()
             for slot, thumb_b64 in pending:
-                slot.content = ft.Image(
-                    src=f"data:image/jpeg;base64,{thumb_b64}",
-                    width=96,
-                    height=96,
-                    fit=ft.BoxFit.CONTAIN,
-                    border_radius=8,
-                )
+                slot.content = self._thumb_image_control(thumb_b64)
             if load_gen == self._thumb_load_generation and self._is_grid_mode():
                 self._safe_update(self._grid)
             self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)

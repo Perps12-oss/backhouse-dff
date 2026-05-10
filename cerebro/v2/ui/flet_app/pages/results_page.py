@@ -407,10 +407,20 @@ class ResultsPage(ft.Stack):
                     self._hero_primary,
                     ft.Text("can be reclaimed", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
                     self._hero_secondary,
+                    ft.Text(
+                        "Triage, compare, and delete in Workspace — Results stays a summary.",
+                        size=t.typography.size_sm,
+                        color=t.colors.fg_muted,
+                    ),
                     ft.FilledButton(
-                        "Review duplicates →",
+                        "Open Workspace (Review) →",
                         on_click=lambda e: self._bridge.navigate("review"),
-                        style=ft.ButtonStyle(bgcolor="#22D3EE", color="#0B1220"),
+                        style=ft.ButtonStyle(
+                            bgcolor="#22D3EE",
+                            color="#0B1220",
+                            padding=ft.padding.symmetric(horizontal=24, vertical=16),
+                            text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
+                        ),
                     ),
                 ],
                 spacing=t.spacing.sm,
@@ -1515,141 +1525,82 @@ class ResultsPage(ft.Stack):
         ext = sample_path.suffix if sample else ""
         icon_name, accent = self._file_type_icon(ext)
 
-        # Build heavy duplicate rows lazily on first expand to avoid long filter/render stalls.
-        file_checks = ft.Column([], spacing=2, visible=False)
-        details_built = {"value": False}
-
-        def _toggle_expand(e=None):
-            if not details_built["value"]:
-                file_checks.controls = [
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Text(
-                                    str(Path(str(f.path)).name),
-                                    size=t.typography.size_base,
-                                    color=t.colors.fg,
-                                    weight=ft.FontWeight.W_500,
-                                    expand=True,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
-                                ),
-                                ft.Text(
-                                    fmt_size(f.size),
-                                    size=t.typography.size_sm,
-                                    color=t.colors.fg2,
-                                    weight=ft.FontWeight.W_500,
-                                ),
-                            ],
-                            spacing=t.spacing.sm,
-                        ),
-                        padding=ft.padding.only(left=t.spacing.xl, top=2, bottom=2),
-                        border=ft.border.only(left=ft.BorderSide(2, ft.Colors.with_opacity(0.3, accent))),
-                    )
-                    for f in group.files
-                ]
-                details_built["value"] = True
-            file_checks.visible = not file_checks.visible
-            ResultsPage._safe_update(file_checks)
-            expand_btn.text = "Collapse" if file_checks.visible else "Expand"
-            ResultsPage._safe_update(expand_btn)
-            self._safe_update(self._scroll_col)
-
-        expand_btn = ft.TextButton(
-            "Expand",
-            on_click=_toggle_expand,
-            style=ft.ButtonStyle(
-                color=t.colors.fg2,
-                text_style=ft.TextStyle(size=t.typography.size_sm, weight=ft.FontWeight.W_600),
-            ),
-        )
-
         card = ft.Container(
-            content=ft.Column(
+            content=ft.Row(
                 [
-                    ft.Row(
+                    ft.Container(
+                        content=ft.Icon(icon_name, size=18, color=accent),
+                        bgcolor=ft.Colors.with_opacity(0.12, accent),
+                        border_radius=8,
+                        padding=8,
+                    ),
+                    ft.Column(
                         [
-                            ft.Container(
-                                content=ft.Icon(icon_name, size=18, color=accent),
-                                bgcolor=ft.Colors.with_opacity(0.12, accent),
-                                border_radius=8,
-                                padding=8,
+                            ft.Text(
+                                f"Folder: {parent_leaf}" if machine_name and parent_leaf else name,
+                                weight=ft.FontWeight.W_700 if machine_name else ft.FontWeight.W_600,
+                                color="#E2F3FF" if machine_name else t.colors.fg,
+                                size=t.typography.size_md,
+                                no_wrap=True,
+                                overflow=ft.TextOverflow.ELLIPSIS,
                             ),
-                            ft.Column(
+                            ft.Text(
+                                name if machine_name else parent,
+                                size=t.typography.size_sm,
+                                color=t.colors.fg_muted,
+                                no_wrap=True,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                visible=bool(machine_name or parent),
+                            ),
+                            ft.Row(
                                 [
                                     ft.Text(
-                                        f"Folder: {parent_leaf}" if machine_name and parent_leaf else name,
-                                        weight=ft.FontWeight.W_700 if machine_name else ft.FontWeight.W_600,
-                                        color="#E2F3FF" if machine_name else t.colors.fg,
-                                        size=t.typography.size_md,
+                                        f"{len(group.files)} files",
+                                        size=t.typography.size_sm,
+                                        color="#7DD3FC",
+                                        weight=ft.FontWeight.W_500,
+                                    ),
+                                    ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
+                                    ft.Text(
+                                        fmt_size(group.total_size),
+                                        size=t.typography.size_sm,
+                                        color="#A78BFA",
+                                        weight=ft.FontWeight.W_500,
+                                    ),
+                                    ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
+                                    ft.Text(
+                                        parent,
+                                        size=t.typography.size_sm,
+                                        color="#93C5FD",
                                         no_wrap=True,
                                         overflow=ft.TextOverflow.ELLIPSIS,
+                                        expand=True,
                                     ),
                                     ft.Text(
-                                        name if machine_name else parent,
+                                        extra_badge or "",
                                         size=t.typography.size_sm,
-                                        color=t.colors.fg_muted,
-                                        no_wrap=True,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                        visible=bool(machine_name or parent),
-                                    ),
-                                    ft.Row(
-                                        [
-                                            ft.Text(
-                                                f"{len(group.files)} files",
-                                                size=t.typography.size_sm,
-                                                color="#7DD3FC",
-                                                weight=ft.FontWeight.W_500,
-                                            ),
-                                            ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
-                                            ft.Text(
-                                                fmt_size(group.total_size),
-                                                size=t.typography.size_sm,
-                                                color="#A78BFA",
-                                                weight=ft.FontWeight.W_500,
-                                            ),
-                                            ft.Text("·", size=t.typography.size_sm, color=t.colors.fg_muted),
-                                            ft.Text(
-                                                parent,
-                                                size=t.typography.size_sm,
-                                                color="#93C5FD",
-                                                no_wrap=True,
-                                                overflow=ft.TextOverflow.ELLIPSIS,
-                                                expand=True,
-                                            ),
-                                            ft.Text(
-                                                extra_badge or "",
-                                                size=t.typography.size_sm,
-                                                color="#FBBF24",
-                                                visible=bool(extra_badge),
-                                            ),
-                                        ],
-                                        spacing=4,
+                                        color="#FBBF24",
+                                        visible=bool(extra_badge),
                                     ),
                                 ],
-                                spacing=3,
-                                expand=True,
-                            ),
-                            ft.Text(fmt_size(group.reclaimable), weight=ft.FontWeight.BOLD, color="#22D3EE", size=t.typography.size_md),
-                            expand_btn,
-                            ft.IconButton(
-                                icon=ft.icons.Icons.VISIBILITY,
-                                tooltip="Open group in Review",
-                                icon_color=t.colors.fg2,
-                                on_click=lambda e, g=group: self._open_group(g),
+                                spacing=4,
                             ),
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=3,
+                        expand=True,
                     ),
-                    file_checks,
+                    ft.Text(
+                        fmt_size(group.reclaimable),
+                        weight=ft.FontWeight.BOLD,
+                        color="#22D3EE",
+                        size=t.typography.size_md,
+                    ),
                 ],
-                spacing=t.spacing.xs,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=t.spacing.md,
             **self._get_glass_style(0.06),
-            on_click=lambda e: _toggle_expand(),
-            ink=True,
         )
         return card
 
@@ -2075,10 +2026,6 @@ class ResultsPage(ft.Stack):
                 col.controls[1].weight = ft.FontWeight.W_700 if is_active else ft.FontWeight.W_600
                 col.controls[2].value = fmt_size(size_n)
                 col.controls[2].color = "#7D8EAB" if files_n == 0 else ("#B7C6E6" if is_active else "#9FB0D0")
-
-    def _open_group(self, group: DuplicateGroup) -> None:
-        self._bridge.coordinator.review_open_group(group.group_id, self._groups)
-        self._bridge.navigate("review")
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
