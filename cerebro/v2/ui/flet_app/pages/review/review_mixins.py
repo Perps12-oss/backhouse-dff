@@ -243,7 +243,6 @@ class ReviewPageGroupsGridMixin:
             idx,
             total_reclaim_scan,
             self._reviewed_group_ids,
-            on_open_group=self._enter_compare,
             get_glass_style=self._get_glass_style,
         )
 

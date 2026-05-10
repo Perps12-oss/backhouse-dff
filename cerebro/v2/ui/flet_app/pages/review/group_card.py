@@ -11,7 +11,6 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
-from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
@@ -75,7 +74,6 @@ def build_group_card(
     total_reclaim_scan: int,
     reviewed_ids: Set[int],
     *,
-    on_open_group: Callable[[int], None],
     get_glass_style: Callable[[float], dict],
 ) -> ft.Container:
     reclaim = int(getattr(g, "reclaimable", 0) or 0)
@@ -92,10 +90,7 @@ def build_group_card(
     thin = ft.BorderSide(1, edge)
     return ft.Container(
         padding=ft.padding.only(left=10, right=16, top=12, bottom=12),
-        ink=True,
         border=ft.Border(left=ft.BorderSide(4, stripe), top=thin, right=thin, bottom=thin),
-        tooltip='Open compare for this group (tap row or "Review").',
-        on_click=lambda _e, gid=g.group_id: on_open_group(gid),
         content=ft.Row(
             [
                 ft.Icon(ft.icons.Icons.LAYERS_OUTLINED, size=18, color=stripe),
@@ -123,12 +118,6 @@ def build_group_card(
                     ],
                     spacing=4,
                     expand=True,
-                ),
-                ft.TextButton(
-                    "Review",
-                    icon=ft.icons.Icons.CHEVRON_RIGHT,
-                    style=pill_text_button_style(t, variant="primary"),
-                    on_click=lambda _e, gid=g.group_id: on_open_group(gid),
                 ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
