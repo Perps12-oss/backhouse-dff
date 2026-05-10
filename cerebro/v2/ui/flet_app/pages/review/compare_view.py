@@ -542,12 +542,12 @@ class ReviewCompareView:
         thumb_inner = ft.Container(
             content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
             expand=True,
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.Alignment(0, 0),
         )
         thumb_slot = ft.Container(
             content=thumb_inner,
             expand=True,
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.Alignment(0, 0),
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             border_radius=8,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
@@ -641,7 +641,7 @@ class ReviewCompareView:
         slot.content = ft.Container(
             content=img,
             expand=True,
-            alignment=ft.Alignment.CENTER,
+            alignment=ft.Alignment(0, 0),
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
         # Update the mounted parent panel, not just the slot. slot.page may be

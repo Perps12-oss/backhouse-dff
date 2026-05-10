@@ -52,7 +52,7 @@ class ReviewActionBar(ft.Container):
                     ft.Container(content=self._summary, expand=True),
                     ft.Container(
                         content=self._trust,
-                        alignment=ft.alignment.center,
+                        alignment=ft.Alignment(0, 0),
                         expand=2,
                     ),
                     ft.Row(
