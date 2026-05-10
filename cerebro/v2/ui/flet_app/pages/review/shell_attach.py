@@ -9,10 +9,12 @@ import flet as ft
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
-from cerebro.v2.ui.flet_app.pages.review.filter_bar import FilterBar
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
+from cerebro.v2.ui.flet_app.pages.review.inspector_panel import ReviewInspectorPanel
+from cerebro.v2.ui.flet_app.pages.review.review_action_bar import ReviewActionBar
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
+from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkstationSidebar
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
@@ -24,7 +26,6 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
         style=pill_text_button_style(t, variant="primary"),
         tooltip="Group list when reviewing groups; returns here from Compare or Grid.",
     )
-    page._stats_header = StatsHeader(bridge, t, back_btn=page._btn_back)
 
     page._grid_view = ReviewGridView(
         bridge,
@@ -54,11 +55,10 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
     )
 
 
-def _attach_compare_and_filter(page: Any, t: ThemeTokens, bridge: Any) -> None:
+def _attach_compare_and_content(page: Any, t: ThemeTokens, bridge: Any) -> None:
     page._compare_ui = ReviewCompareView(ReviewCompareDelegateAdapter(page), bridge, t)
     page._cmp_bar = page._compare_ui.cmp_bar
     page._compare_view = page._compare_ui.body
-    page._filter_bar = FilterBar(t, on_change=page._on_filter_changed)
     page._content = ft.Column(expand=True)
 
 
@@ -116,9 +116,7 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
     )
 
 
-def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
-    # Use a scrollable Column instead of ListView: nested ListView(expand=True) inside
-    # Column(expand=True) often resolves to zero height on Flet desktop (blank Workspace).
+def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: Any) -> None:
     page._groups_overview = ft.Column(
         expand=True,
         scroll=ft.ScrollMode.AUTO,
@@ -141,10 +139,9 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
         spacing=t.spacing.sm,
         visible=False,
     )
-    # Default: most copies per group first — strongest signal for "where is the mess".
     page._group_sort_key = "files_desc"
     page._group_sort_dd = ft.Dropdown(
-        width=240,
+        width=200,
         value=page._group_sort_key,
         options=[
             ft.dropdown.Option("files_desc", "Most copies in group"),
@@ -159,7 +156,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
     page._group_sort_row = ft.Row(
         [
             ft.Text(
-                "Sort groups:",
+                "Sort:",
                 size=t.typography.size_sm,
                 color=t.colors.fg_muted,
                 weight=ft.FontWeight.W_600,
@@ -171,31 +168,74 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens) -> None:
         visible=False,
     )
 
+    def _search_soon(_e):
+        bridge.show_snackbar("Search is coming soon.", info=True)
+
+    page._btn_toolbar_search = ft.IconButton(
+        ft.icons.Icons.SEARCH,
+        icon_size=20,
+        tooltip="Search (coming soon)",
+        on_click=_search_soon,
+    )
+
+    right_tools = ft.Row(
+        [
+            page._view_toggle_row,
+            page._group_sort_row,
+            page._btn_toolbar_search,
+        ],
+        spacing=t.spacing.sm,
+        tight=True,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    page._stats_header = StatsHeader(bridge, t, back_btn=page._btn_back, right_tools=right_tools)
+
+    page._workstation_sidebar = ReviewWorkstationSidebar(bridge, t, on_category_change=page._on_filter_changed)
+    page._inspector_panel = ReviewInspectorPanel(bridge, t)
+    page._review_action_bar = ReviewActionBar(
+        bridge,
+        t,
+        on_apply=page._delete_marked_files,
+        on_undo=page._undo_last_trash_delete,
+    )
+
     strip_pad = ft.padding.symmetric(horizontal=t.spacing.lg)
     hwrap = page._hwrap_strip
-    page.controls = [
-        page._stats_header,
-        ft.Container(content=hwrap(page._view_toggle_row), padding=strip_pad),
-        ft.Container(
-            content=hwrap(page._group_sort_row),
-            padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.xs),
-        ),
-        ft.Container(content=hwrap(page._smart_row), padding=strip_pad),
-        ft.Container(
-            content=hwrap(page._cmp_bar),
-            padding=ft.padding.symmetric(horizontal=t.spacing.lg),
-        ),
-        page._filter_bar,
-        page._content,
-    ]
+    center_column = ft.Column(
+        [
+            page._stats_header,
+            ft.Container(content=hwrap(page._smart_row), padding=strip_pad),
+            ft.Container(
+                content=hwrap(page._cmp_bar),
+                padding=ft.padding.symmetric(horizontal=t.spacing.lg),
+            ),
+            ft.Container(content=page._content, expand=True),
+            page._review_action_bar,
+        ],
+        expand=True,
+        spacing=0,
+    )
+
+    page._main_workstation_row = ft.Row(
+        [
+            page._workstation_sidebar,
+            center_column,
+            page._inspector_panel,
+        ],
+        expand=True,
+        spacing=0,
+    )
+
+    page.controls = [page._main_workstation_row]
 
 
 def attach_review_shell(page: Any) -> None:
-    """Populate ``page`` with stats header, grid, compare, filters, empty/loading states, and layout."""
+    """Populate ``page`` with workstation layout, grid, compare, and empty/loading states."""
     t: ThemeTokens = page._t
     bridge = page._bridge
     _attach_header_grid_smart(page, t, bridge)
-    _attach_compare_and_filter(page, t, bridge)
+    _attach_compare_and_content(page, t, bridge)
     _attach_empty_and_loading(page, t, bridge)
-    _attach_group_overview_and_page_controls(page, t)
+    _attach_group_overview_and_page_controls(page, t, bridge)
     page._apply_pill_chrome()

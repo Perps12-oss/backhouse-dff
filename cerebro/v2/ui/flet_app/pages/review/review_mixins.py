@@ -12,7 +12,7 @@ import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
-from cerebro.v2.ui.flet_app.pages.review.filter_bar import _FILTER_TABS
+from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
@@ -137,11 +137,11 @@ class ReviewPageModeMixin:
         safe_update(body)
 
     _MODE_VISIBILITY: Dict[str, Dict[str, bool]] = {
-        "empty": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
-        "loading": {"filter": False, "cmp_bar": False, "smart": False, "toggle": False, "sort": False},
-        "groups": {"filter": True, "cmp_bar": False, "smart": False, "toggle": True, "sort": True},
-        "grid": {"filter": True, "cmp_bar": False, "smart": True, "toggle": True, "sort": False},
-        "compare": {"filter": False, "cmp_bar": True, "smart": False, "toggle": False, "sort": False},
+        "empty": {"cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "loading": {"cmp_bar": False, "smart": False, "toggle": False, "sort": False},
+        "groups": {"cmp_bar": False, "smart": False, "toggle": True, "sort": True},
+        "grid": {"cmp_bar": False, "smart": True, "toggle": True, "sort": False},
+        "compare": {"cmp_bar": True, "smart": False, "toggle": False, "sort": False},
     }
 
     @staticmethod
@@ -172,11 +172,11 @@ class ReviewPageModeMixin:
         self._compare_view.visible = mode == "compare"
 
         vis = self._MODE_VISIBILITY[mode]
-        self._filter_bar.visible = vis["filter"]
         self._cmp_bar.visible = vis["cmp_bar"]
         self._smart_row.visible = vis["smart"]
         self._view_toggle_row.visible = vis["toggle"]
         self._group_sort_row.visible = vis["sort"]
+        self._workstation_sidebar.set_compare_mode(mode == "compare")
 
         if mode == "empty":
             self._content.controls.append(self._empty_state)
@@ -199,12 +199,13 @@ class ReviewPageModeMixin:
             self._bind_keys()
 
         safe_update(self._content)
-        safe_update(self._filter_bar)
         safe_update(self._cmp_bar)
         safe_update(self._smart_row)
         safe_update(self._view_toggle_row)
         safe_update(self._group_sort_row)
+        safe_update(self._workstation_sidebar)
         self._refresh_stats_header()
+        self._refresh_action_bar()
         self._apply_pill_chrome()
         # Ensure the shell repaints after swapping the body subtree (Flet desktop can skip
         # partial updates when only nested controls changed).
@@ -329,6 +330,8 @@ class ReviewPageSmartMixin:
             self._update_compare_panels()
             self._refresh_grid()
             self._update_progress_and_marked_bar()
+        self._refresh_stats_header()
+        self._refresh_action_bar()
 
     def _sync_compare_group_marks_to_rule(self, gid: Optional[int] = None) -> None:
         """Reset marks for files in this group to match the grid smart rule (per-group)."""
@@ -560,6 +563,8 @@ class ReviewPageCompareNavMixin:
                 if str(f.path) in self._marked_paths:
                     total += int(getattr(f, "size", 0) or 0)
         self._marked_bytes = total
+        self._refresh_action_bar()
+        self._refresh_stats_header()
 
     def _update_progress_and_marked_bar(self) -> None:
         self._compare_ui.update_progress_and_marked_bar()
@@ -603,9 +608,9 @@ class ReviewPageFilterMixin:
 
     def _rebuild_filter_index(self) -> None:
         self._grid_view.clear_tile_caches()
-        by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
-        group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        file_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        by_filter: Dict[str, List[DuplicateFile]] = {k: [] for k, _ in FILTER_TABS}
+        group_counts: Dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
+        file_sizes: Dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
         for g in self._groups:
             group_counts["all"] += 1
             seen_group_kinds: set[str] = set()
@@ -630,11 +635,11 @@ class ReviewPageFilterMixin:
         self._refresh_filter_labels()
 
     def _refresh_filter_labels(self) -> None:
-        self._filter_bar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
+        self._workstation_sidebar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
         self._refresh_stats_header()
 
     def _refresh_stats_header(self) -> None:
-        fl = next((lab for k, lab in _FILTER_TABS if k == self._filter_key), self._filter_key.title())
+        fl = next((lab for k, lab in FILTER_TABS if k == self._filter_key), self._filter_key.title())
         self._stats_header.refresh(
             self._mode,
             fl,
@@ -645,6 +650,18 @@ class ReviewPageFilterMixin:
             self._reviewed_group_ids,
             self._sorted_groups_for_current_filter(),
             self._t,
+            marked_count=len(self._marked_paths),
+            marked_bytes=self._marked_bytes,
+        )
+
+    def _refresh_action_bar(self) -> None:
+        rule = normalized_rule(getattr(self, "_smart_rule", "keep_largest"))
+        rule_lbl = next((lbl for k, lbl in RULE_LABELS if k == rule), rule)
+        self._review_action_bar.refresh(
+            self._mode,
+            len(self._marked_paths),
+            self._marked_bytes,
+            f"Keeping per rule: {rule_lbl}",
         )
 
 
@@ -696,8 +713,11 @@ class ReviewPageNavThemeMixin:
 
         g04 = self._get_glass_style(0.04)
         self._stats_header.bgcolor = g04.get("bgcolor")
-        self._stats_header.border = g04.get("border")
-        self._filter_bar.sync_theme(self._t)
+        edge_h = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE)
+        self._stats_header.border = ft.border.only(bottom=ft.BorderSide(1, edge_h))
+        self._workstation_sidebar.sync_theme(self._t)
+        self._inspector_panel.sync_theme(self._t)
+        self._review_action_bar.sync_theme(self._t)
         self._refresh_filter_labels()
 
         self._compare_ui.apply_cmp_bar_glass()

@@ -14,56 +14,81 @@ if TYPE_CHECKING:
 
 
 class StatsHeader(ft.Container):
-    """Top bar: title, summary, workflow hint, metric chips."""
+    """Compact workstation toolbar: title, reclaim-focused chips, utility cluster on the right."""
 
-    def __init__(self, bridge: "StateBridge", t, back_btn: ft.TextButton) -> None:
+    def __init__(
+        self,
+        bridge: "StateBridge",
+        t: ThemeTokens,
+        back_btn: ft.TextButton,
+        *,
+        right_tools: ft.Row,
+    ) -> None:
         self._t = t
+        self._right_tools = right_tools
         self._title_lbl = ft.Text(
             "Review Workspace",
-            size=t.typography.size_xl,
-            weight=ft.FontWeight.BOLD,
+            size=t.typography.size_base,
+            weight=ft.FontWeight.W_700,
             color=t.colors.fg,
         )
-        self._summary_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg2)
-        self._workflow_lbl = ft.Text(
-            "",
-            size=t.typography.size_sm,
-            color=t.colors.fg_muted,
-            italic=True,
-            text_align=ft.TextAlign.CENTER,
+        self._subtext_lbl = ft.Text("", size=t.typography.size_sm, color=t.colors.fg_muted)
+        left_block = ft.Row(
+            [
+                back_btn,
+                ft.Column(
+                    [self._title_lbl, self._subtext_lbl],
+                    spacing=2,
+                    tight=True,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+            ],
+            spacing=t.spacing.sm,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._stats_row = ft.Row(
-            spacing=t.spacing.xs,
+            spacing=t.spacing.sm,
             tight=True,
             scroll=ft.ScrollMode.AUTO,
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-        stats_row_wrap = ft.Row(
-            [ft.Container(expand=True), self._stats_row, ft.Container(expand=True)],
+        chips_wrap = ft.Row(
+            [
+                ft.Container(expand=True),
+                self._stats_row,
+                ft.Container(expand=True),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self._compare_hint = ft.Text(
+            "",
+            size=11,
+            color=t.colors.fg_muted,
+            visible=False,
+            italic=True,
+        )
+        main_row = ft.Row(
+            [
+                left_block,
+                ft.Container(expand=True, content=chips_wrap),
+                self._right_tools,
+            ],
+            alignment=ft.MainAxisAlignment.START,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         is_light = app_theme_is_light(bridge)
         bg = ft.Colors.with_opacity(0.04, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
-        border_color = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
+        border_color = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         super().__init__(
             content=ft.Column(
-                [
-                    ft.Row(
-                        [back_btn, self._title_lbl, self._summary_lbl],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        wrap=True,
-                    ),
-                    stats_row_wrap,
-                    self._workflow_lbl,
-                ],
-                spacing=t.spacing.xs,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                [main_row, self._compare_hint],
+                spacing=6,
+                tight=True,
             ),
-            padding=t.spacing.lg,
+            padding=ft.padding.symmetric(horizontal=14, vertical=10),
             bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(12),
+            border=ft.border.only(bottom=ft.BorderSide(1, border_color)),
         )
 
     @staticmethod
@@ -81,16 +106,15 @@ class StatsHeader(ft.Container):
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Text(label, size=11, color=t.colors.fg_muted, weight=ft.FontWeight.W_600),
-                    ft.Text(value, size=14, weight=ft.FontWeight.W_800, color=accent),
+                    ft.Text(label, size=10, color=t.colors.fg_muted, weight=ft.FontWeight.W_500),
+                    ft.Text(value, size=11, weight=ft.FontWeight.W_700, color=accent),
                 ],
-                spacing=6,
+                spacing=4,
                 tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.BASELINE,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            bgcolor=ft.Colors.with_opacity(0.14, t.colors.glass_bg),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.glass_border)),
+            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+            bgcolor=ft.Colors.with_opacity(0.1, t.colors.glass_bg),
             border_radius=999,
         )
 
@@ -105,28 +129,25 @@ class StatsHeader(ft.Container):
         reviewed_ids: Set[int],
         groups: List[DuplicateGroup],
         t: ThemeTokens,
+        *,
+        marked_count: int = 0,
+        marked_bytes: int = 0,
     ) -> None:
-        """Recompute and update all child controls. Called by ReviewPage after any state change."""
         self._t = t
-        self._title_lbl.size = t.typography.size_xl
+        self._title_lbl.size = t.typography.size_base
         self._title_lbl.color = t.colors.fg
-        self._summary_lbl.size = t.typography.size_sm
-        self._summary_lbl.color = t.colors.fg2
-        self._workflow_lbl.size = t.typography.size_sm
-        self._workflow_lbl.color = t.colors.fg_muted
+        self._subtext_lbl.size = t.typography.size_sm
+        self._subtext_lbl.color = t.colors.fg_muted
+        self._compare_hint.size = 11
+        self._compare_hint.color = t.colors.fg_muted
         root = self.content
         if isinstance(root, ft.Column):
-            root.spacing = t.spacing.xs
-        self.padding = t.spacing.lg
+            root.spacing = 6
+        self.padding = ft.padding.symmetric(horizontal=14, vertical=10)
 
-        selected_files = filter_counts.get(filter_key, 0)
-        selected_groups = filter_group_counts.get(filter_key, 0)
-        on_disk_here = int(filter_sizes.get(filter_key, 0) or 0)
-        total_reclaimable = int(
-            sum(int(getattr(g, "reclaimable", 0) or 0) for g in groups)
-        )
         reviewed_in_filter = sum(1 for g in groups if g.group_id in reviewed_ids)
         total_filtered = len(groups)
+        groups_left = max(0, total_filtered - reviewed_in_filter)
         remaining_reclaimable = int(
             sum(int(getattr(g, "reclaimable", 0) or 0) for g in groups if g.group_id not in reviewed_ids)
         )
@@ -137,38 +158,35 @@ class StatsHeader(ft.Container):
             "loading": "Loading",
             "empty": "Empty",
         }
-        mode_label = mode_label_map.get(mode, "Grid")
-        self._summary_lbl.value = f"Filter: {filter_label} · Mode: {mode_label}"
+        mode_label = mode_label_map.get(mode, mode)
+        self._subtext_lbl.value = (
+            f"{filter_label} · {mode_label} · {reviewed_in_filter}/{total_filtered} reviewed"
+        )
         if mode == "compare":
-            self._summary_lbl.value += " · Back returns to the group list"
-        # ``filter_sizes`` = sum of on-disk bytes for every file row in duplicate groups for this filter
-        # (all copies counted). ``total_reclaimable`` = space you can free by deleting redundant copies
-        # (engine-computed per group). Not the same as "whole disk scanned" — that scope is not on Review.
-        chips: list = [
-            self._metric_chip("Groups", f"{selected_groups:,}", RC.side_b),
-            self._metric_chip("Files (all copies)", f"{selected_files:,}", RC.stats_chip_files),
-            self._metric_chip("On disk in groups", fmt_size(on_disk_here), RC.success),
-            self._metric_chip("Recoverable total", fmt_size(total_reclaimable), RC.info),
-            self._metric_chip("Reviewed", f"{reviewed_in_filter:,}/{total_filtered:,}", RC.stats_chip_reviewed),
+            self._subtext_lbl.value += " · Back returns to the group list"
+
+        self._stats_row.controls = [
+            self._metric_chip("Reclaimable", fmt_size(remaining_reclaimable), RC.success),
+            self._metric_chip("Groups left", f"{groups_left:,}", RC.side_b),
+            self._metric_chip(
+                "Marked",
+                f"{marked_count:,} · {fmt_size(marked_bytes)}",
+                RC.stats_chip_files,
+            ),
         ]
-        if reviewed_in_filter > 0 and remaining_reclaimable != total_reclaimable:
-            chips.append(
-                self._metric_chip("Recoverable left", fmt_size(remaining_reclaimable), RC.stats_chip_remaining)
-            )
-        self._stats_row.controls = chips
+
         if mode == "compare":
-            self._workflow_lbl.value = (
-                "Shortcuts: arrows change group; Enter next group; Space re-applies smart marks for this group; "
-                "Delete/Backspace opens delete for all marked files when any are marked."
-            )
-        elif groups:
-            self._workflow_lbl.value = (
-                "On disk counts every listed copy; recoverable is surplus you can delete per group."
+            self._compare_hint.visible = True
+            self._compare_hint.value = (
+                "Shortcuts: arrows change group; 1/K and 2/D mark sides; Enter next; "
+                "Space applies smart rule to extras."
             )
         else:
-            self._workflow_lbl.value = "No groups match this filter."
+            self._compare_hint.visible = False
+            self._compare_hint.value = ""
+
         StatsHeader._safe_update(self._title_lbl)
-        StatsHeader._safe_update(self._summary_lbl)
+        StatsHeader._safe_update(self._subtext_lbl)
         StatsHeader._safe_update(self._stats_row)
-        StatsHeader._safe_update(self._workflow_lbl)
+        StatsHeader._safe_update(self._compare_hint)
         StatsHeader._safe_update(self)

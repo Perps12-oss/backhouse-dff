@@ -86,11 +86,11 @@ def build_group_card(
     line_path = group_path_hint(list(g.files))
     glass = get_glass_style(0.05)
     is_light = app_theme_is_light(bridge)
-    edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
+    edge = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
     thin = ft.BorderSide(1, edge)
     return ft.Container(
-        padding=ft.padding.only(left=10, right=16, top=12, bottom=12),
-        border=ft.Border(left=ft.BorderSide(4, stripe), top=thin, right=thin, bottom=thin),
+        padding=ft.padding.only(left=8, right=12, top=8, bottom=8),
+        border=ft.Border(left=ft.BorderSide(2, stripe), top=thin, right=thin, bottom=thin),
         content=ft.Row(
             [
                 ft.Icon(ft.icons.Icons.LAYERS_OUTLINED, size=18, color=stripe),

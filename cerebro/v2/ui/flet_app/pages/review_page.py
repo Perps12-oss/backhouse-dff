@@ -12,8 +12,11 @@ from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
-from cerebro.v2.ui.flet_app.pages.review.filter_bar import FilterBar, _FILTER_TABS
+from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
+from cerebro.v2.ui.flet_app.pages.review.inspector_panel import ReviewInspectorPanel
+from cerebro.v2.ui.flet_app.pages.review.review_action_bar import ReviewActionBar
+from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkstationSidebar
 from cerebro.v2.ui.flet_app.pages.review.review_mixins import (
     ReviewPageChromeMixin,
     ReviewPageCompareNavMixin,
@@ -70,11 +73,11 @@ class ReviewPage(
         self._reviewed_group_ids: set[int] = set()
         self._smart_rule = "keep_largest"
         self._loading = False
-        self._files_by_filter: dict[str, List[DuplicateFile]] = {k: [] for k, _ in _FILTER_TABS}
+        self._files_by_filter: dict[str, List[DuplicateFile]] = {k: [] for k, _ in FILTER_TABS}
         self._glass_cache: dict = {}
-        self._filter_counts: dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        self._filter_sizes: dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        self._filter_group_counts: dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
+        self._filter_counts: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
+        self._filter_sizes: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
+        self._filter_group_counts: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
         self._pending_deferred_render: bool = False
         self._cmp_smart_rule: str = "keep_largest"
         self._compare_nav_in_flight = False
@@ -85,7 +88,10 @@ class ReviewPage(
         self._grid_view: ReviewGridView
         self._compare_ui: ReviewCompareView
         self._cmp_bar: ft.Container
-        self._filter_bar: FilterBar
+        self._workstation_sidebar: ReviewWorkstationSidebar
+        self._inspector_panel: ReviewInspectorPanel
+        self._review_action_bar: ReviewActionBar
+        self._main_workstation_row: ft.Row
         self._content: ft.Column
         self._empty_state: ft.Container
         self._empty_title_lbl: ft.Text

@@ -233,7 +233,10 @@ def _main(page: ft.Page) -> None:
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
             "ReviewNavigate": [getattr(review_page, "_compare_view", None), getattr(review_page, "_cmp_bar", None)],
-            "ReviewViewFilterChanged": [getattr(review_page, "_filter_bar", None), getattr(review_page, "_grid", None)],
+            "ReviewViewFilterChanged": [
+                getattr(review_page, "_workstation_sidebar", None),
+                getattr(review_page, "_grid", None),
+            ],
             "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
             "ScanEnded": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
         }.items():
@@ -628,6 +631,11 @@ def _main(page: ft.Page) -> None:
 
     page.on_route_change = _on_route_change
     page.route = default_route()
+    # Some Flet builds do not fire on_route_change for initial route assignment.
+    # Force initial mount so the content host is never left blank on startup.
+    layout.navigate_to(key_for_route(page.route or default_route()))
+    if bool(store.get_state().groups):
+        layout.navigate_to("review")
 
     def _sync_groups_from_state(s: AppState) -> None:
         groups = list(s.groups)
@@ -654,37 +662,17 @@ def _main(page: ft.Page) -> None:
         # Only tab-changing actions should drive the shell; other dispatches still
         # carry active_tab (e.g. duplicates) and would otherwise yank the user back
         # from Review/Settings while the rail already matched the new selection.
-        # ScanCompleted: mount Review first, hydrate groups from state, then on_show.
-        # navigate_to(..., run_on_show=False) avoids on_show running with stale empty
-        # ReviewPage._groups (store already has groups; singleton list is filled in _sync).
-        if isinstance(action, ScanCompleted):
-            scan_nav = bool(
-                tab and tab in builders and tab != layout.current_key
-            )
-            if scan_nav:
-                layout.navigate_to(tab, run_on_show=False)
-            _sync_groups_from_state(new_state)
-            if layout.current_key == "review":
-                try:
-                    review_page.on_show()
-                except Exception:
-                    _log.exception("ReviewPage.on_show after ScanCompleted failed")
-                try:
-                    page.update()
-                except Exception:
-                    _log.exception("page.update after ScanCompleted review refresh failed")
-            bridge.invalidate_stats_cache()
-        elif isinstance(action, (ResultsFilesRemoved, GroupsPruned)):
-            _sync_groups_from_state(new_state)
-            bridge.invalidate_stats_cache()
         take_nav = (
             tab
             and tab in builders
             and tab != layout.current_key
-            and isinstance(action, SetActiveTab)
+            and isinstance(action, (SetActiveTab, ScanCompleted))
         )
         if take_nav:
             layout.navigate_to(tab)
+        if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
+            _sync_groups_from_state(new_state)
+            bridge.invalidate_stats_cache()
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
@@ -692,18 +680,6 @@ def _main(page: ft.Page) -> None:
 
     bridge.set_on_state_change(_on_state_change)
     bridge.subscribe()
-    # Some Flet builds do not fire on_route_change for initial route assignment.
-    layout.navigate_to(key_for_route(page.route or default_route()))
-    if bool(store.get_state().groups):
-        if layout.current_key != "review":
-            layout.navigate_to("review")
-        else:
-            try:
-                review_page.on_show()
-            except Exception:
-                _log.exception("ReviewPage.on_show failed after startup hydrate")
-    # After at least one tab is mounted — _sync must not call _enter_mode on a detached ReviewPage.
-    _sync_groups_from_state(store.get_state())
 
     def _on_theme_change(mode: str) -> None:
         try:

@@ -17,6 +17,9 @@ _FILTER_TABS = [
     ("other", "Other"),
 ]
 
+# Public alias for review workstation and other callers.
+FILTER_TABS = _FILTER_TABS
+
 class FilterBar(ft.Container):
     """Segmented filter bar with per-tab file count and size labels."""
 
