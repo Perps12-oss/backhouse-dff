@@ -308,7 +308,13 @@ class ReviewPage(ft.Column):
             ReviewPage._safe_update(b)
 
     def _apply_pill_chrome(self) -> None:
-        """Reapply nav-matched pill styles (call after theme change or mode switch)."""
+        """Reapply nav-matched pill styles (call after theme change or mode switch).
+
+        Bisect / partial checkout: after Review splits into compare_view + review_mixins
+        (+ shell_attach), do not mix an old mixin with a new compare chrome (or vice versa):
+        delete_btn/keep_btn vs hero_delete_marked_btn drift causes AttributeError — keep those
+        files on one ref together (same lesson applies to grid_view vs mixins).
+        """
         t = self._t
         self._btn_back.style = pill_text_button_style(t, variant="primary")
         self._smart_apply_all_btn.style = pill_filled_accent(
