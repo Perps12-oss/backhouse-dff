@@ -26,7 +26,6 @@ def _section_header(label: str, t: ThemeTokens) -> ft.Row:
                 size=t.typography.size_xs,
                 weight=ft.FontWeight.W_700,
                 color=t.colors.fg_muted,
-                letter_spacing=0.8,
             ),
         ],
         spacing=6,
