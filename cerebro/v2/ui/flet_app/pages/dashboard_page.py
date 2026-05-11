@@ -267,9 +267,8 @@ class DashboardPage(ft.Column):
 
         # Stat cards
         self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.md)
-        self._update_stats_ui()
 
-        # Phase 1 — operational presence: last analysis + rolling 7-day summary
+        # Phase 1 — operational presence (must exist before first _update_stats_ui → _refresh_presence_ui)
         self._presence_title = ft.Text(
             "",
             size=t.typography.size_sm,
@@ -311,6 +310,8 @@ class DashboardPage(ft.Column):
                 tight=True,
             ),
         )
+
+        self._update_stats_ui()
 
         # Scan mode selector
         self._mode_label = ft.Text(
@@ -1127,6 +1128,8 @@ class DashboardPage(ft.Column):
 
     def _maybe_refresh_presence_ui(self, *, force: bool = False) -> None:
         """Rebuild presence strip unless refreshed recently (reduces chip churn)."""
+        if not hasattr(self, "_presence_title"):
+            return
         now = time.monotonic()
         if (
             not force
@@ -1227,6 +1230,8 @@ class DashboardPage(ft.Column):
 
     def _refresh_presence_ui(self) -> None:
         """Show last recorded scan, 7-day rollups, and last saved session rollups."""
+        if not hasattr(self, "_presence_title"):
+            return
         from cerebro.v2.core.index_presence import format_relative_past, latest_scan_entry
         from cerebro.v2.core.scan_history_db import get_scan_history_db
         from cerebro.v2.persistence.scan_snapshot import load_last_scan_summary
