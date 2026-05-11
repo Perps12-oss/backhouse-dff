@@ -82,6 +82,27 @@ class ScanHistoryDB:
             )
             self._conn.commit()
 
+    def aggregate_since(self, since_ts: float) -> tuple[int, int, int, int]:
+        """Aggregate rows with ``timestamp >= since_ts``.
+
+        Returns ``(scan_count, sum_groups_found, sum_files_found, sum_bytes_reclaimable)``.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*),
+                       COALESCE(SUM(groups_found), 0),
+                       COALESCE(SUM(files_found), 0),
+                       COALESCE(SUM(bytes_reclaimable), 0)
+                FROM scan_history
+                WHERE timestamp >= ?
+                """,
+                (float(since_ts),),
+            ).fetchone()
+        if not row:
+            return 0, 0, 0, 0
+        return int(row[0]), int(row[1]), int(row[2]), int(row[3])
+
     def get_recent(self, limit: int = 100) -> list[ScanHistoryEntry]:
         with self._lock:
             rows = self._conn.execute(

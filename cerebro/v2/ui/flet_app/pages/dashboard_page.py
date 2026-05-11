@@ -263,6 +263,49 @@ class DashboardPage(ft.Column):
         self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.md)
         self._update_stats_ui()
 
+        # Phase 1 — operational presence: last analysis + rolling 7-day summary
+        self._presence_title = ft.Text(
+            "",
+            size=t.typography.size_sm,
+            weight=ft.FontWeight.W_700,
+            color=t.colors.fg,
+        )
+        self._presence_body = ft.Text(
+            "",
+            size=t.typography.size_xs,
+            color=t.colors.fg2,
+        )
+        self._presence_mtime = ft.Text(
+            "",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            italic=True,
+        )
+        self._insights_row = ft.Row(
+            [],
+            spacing=s.sm,
+            tight=True,
+            wrap=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+        )
+        self._presence_row = ft.Container(
+            visible=False,
+            width=620,
+            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            **self._get_glass_style(0.05),
+            content=ft.Column(
+                [
+                    self._presence_title,
+                    self._presence_body,
+                    self._presence_mtime,
+                    ft.Container(height=6),
+                    self._insights_row,
+                ],
+                spacing=2,
+                tight=True,
+            ),
+        )
+
         # Scan mode selector
         self._mode_label = ft.Text(
             "Scan mode",
@@ -928,6 +971,7 @@ class DashboardPage(ft.Column):
                     ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.sm)),
                     ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.sm)),
                     ft.Container(content=self._stats_row, width=360, padding=ft.padding.only(top=s.sm)),
+                    ft.Container(content=self._presence_row, width=620, padding=ft.padding.only(top=s.xs)),
                 ],
                 spacing=s.xs,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1005,6 +1049,8 @@ class DashboardPage(ft.Column):
         except Exception:
             _log.error("Failed to fetch dashboard data", exc_info=True)
         self._update_stats_ui()
+        self._refresh_presence_ui()
+        self._presence_mtime.value = ""
 
     async def _fetch_dashboard_data_async(self, gen: int) -> None:
         import asyncio
@@ -1019,6 +1065,51 @@ class DashboardPage(ft.Column):
         except Exception:
             _log.error("Failed to fetch dashboard data", exc_info=True)
         self._update_stats_ui()
+        self._refresh_presence_ui()
+        try:
+            from cerebro.v2.core.index_presence import (
+                count_files_newer_than,
+                latest_scan_entry,
+            )
+
+            entry = latest_scan_entry()
+            if entry and gen == self._stats_fetch_generation:
+                self._presence_mtime.value = "Checking folders for files modified since then…"
+                DashboardPage._safe_update(self._presence_mtime)
+
+                def _mtime_job():
+                    return count_files_newer_than(
+                        entry.folders,
+                        entry.timestamp,
+                        budget_seconds=2.0,
+                        max_files=200_000,
+                    )
+
+                count, truncated = await loop.run_in_executor(None, _mtime_job)
+                if gen != self._stats_fetch_generation:
+                    return
+                if truncated:
+                    self._presence_mtime.value = (
+                        f"≥{count:,}+ paths look newer than your last analysis "
+                        "(quick check stopped early for responsiveness)."
+                    )
+                elif count == 0:
+                    self._presence_mtime.value = (
+                        "No newer files spotted under the last scanned paths — "
+                        "a rescan should mostly hit the hash cache."
+                    )
+                else:
+                    self._presence_mtime.value = (
+                        f"{count:,} files have a newer modified time since that run — "
+                        "start a scan to refresh duplicate groups."
+                    )
+                DashboardPage._safe_update(self._presence_mtime)
+                DashboardPage._safe_update(self._presence_row)
+        except Exception:
+            _log.debug("Presence mtime check failed", exc_info=True)
+            if gen == self._stats_fetch_generation:
+                self._presence_mtime.value = ""
+                DashboardPage._safe_update(self._presence_mtime)
 
     def _update_stats_ui(self):
         t = self._t
@@ -1079,6 +1170,66 @@ class DashboardPage(ft.Column):
             )
         self._stats_row.controls = controls
         DashboardPage._safe_update(self._stats_row)
+
+    @staticmethod
+    def _insight_chip(t, label: str, value: str, accent: str) -> ft.Container:
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(label, size=10, color=t.colors.fg_muted, weight=ft.FontWeight.W_500),
+                    ft.Text(value, size=11, weight=ft.FontWeight.W_700, color=accent),
+                ],
+                tight=True,
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            border_radius=999,
+            bgcolor=ft.Colors.with_opacity(0.1, accent),
+        )
+
+    def _refresh_presence_ui(self) -> None:
+        """Show last recorded scan + 7-day rollups when history exists."""
+        from cerebro.v2.core.index_presence import format_relative_past, latest_scan_entry
+        from cerebro.v2.core.scan_history_db import get_scan_history_db
+
+        t = self._t
+        entry = latest_scan_entry()
+        if not entry:
+            self._presence_row.visible = False
+            self._insights_row.controls = []
+            DashboardPage._safe_update(self._presence_row)
+            return
+
+        rel = format_relative_past(entry.timestamp)
+        mode_lbl = str(entry.mode or "files").replace("+", " + ")
+        self._presence_title.value = f"Last analysis · {rel}"
+        self._presence_body.value = (
+            f"{entry.groups_found:,} groups · {entry.files_found:,} duplicate paths · "
+            f"{fmt_size(entry.bytes_reclaimable)} reclaimable · {mode_lbl}. "
+            "Hash index on disk makes the next run faster when files are unchanged."
+        )
+        self._presence_title.color = t.colors.fg
+        self._presence_body.color = t.colors.fg2
+        self._presence_mtime.color = t.colors.fg_muted
+
+        since_7d = time.time() - 7 * 24 * 3600
+        n_scans, g_sum, f_sum, b_sum = get_scan_history_db().aggregate_since(since_7d)
+        self._insights_row.controls = [
+            self._insight_chip(t, "7-day scans", f"{n_scans}", "#22D3EE"),
+            self._insight_chip(t, "7-day duplicate paths (total)", f"{f_sum:,}", "#A78BFA"),
+            self._insight_chip(t, "7-day reclaimable (total)", fmt_size(int(b_sum)), "#34D399"),
+            self._insight_chip(t, "7-day groups (total)", f"{g_sum:,}", "#F472B6"),
+        ]
+        ps = self._get_glass_style(0.05)
+        self._presence_row.bgcolor = ps.get("bgcolor")
+        self._presence_row.border = ps.get("border")
+        self._presence_row.visible = True
+        DashboardPage._safe_update(self._presence_title)
+        DashboardPage._safe_update(self._presence_body)
+        DashboardPage._safe_update(self._presence_mtime)
+        DashboardPage._safe_update(self._insights_row)
+        DashboardPage._safe_update(self._presence_row)
 
     def _update_modes_ui(self) -> None:
         t = self._t
@@ -3513,6 +3664,7 @@ class DashboardPage(ft.Column):
         self._scan_elapsed_timer_icon.color = self._t.colors.accent
         self._ring_counter_tip.icon_color = self._t.colors.fg_muted
         self._update_stats_ui()
+        self._refresh_presence_ui()
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
         self._apply_dashboard_pill_chrome()
