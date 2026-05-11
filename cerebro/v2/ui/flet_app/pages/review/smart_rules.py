@@ -17,11 +17,18 @@ def _mtime(f: DuplicateFile) -> float:
     return 0.0
 
 
+def _keep_first(files: List[DuplicateFile]) -> DuplicateFile:
+    if not files:
+        raise ValueError("keep_first requires at least one file")
+    return files[0]
+
+
 _RULES = {
     "keep_largest":  lambda files: max(files, key=lambda f: f.size),
     "keep_smallest": lambda files: min(files, key=lambda f: f.size),
     "keep_newest":   lambda files: max(files, key=_mtime),
     "keep_oldest":   lambda files: min(files, key=_mtime),
+    "keep_first":    _keep_first,
 }
 
 KNOWN_RULES = frozenset(_RULES.keys())
@@ -38,6 +45,9 @@ RULE_LABELS = [
     ("keep_newest",   "Keep Newest"),
     ("keep_oldest",   "Keep Oldest"),
 ]
+
+# Deletion settings auto-mark: same four rules plus list-order keeper (not shown on Review segmented control).
+AUTO_MARK_RULE_OPTIONS = [*RULE_LABELS, ("keep_first", "Keep First")]
 
 
 def apply_rule(rule: str, files: List[DuplicateFile]) -> DuplicateFile:

@@ -45,6 +45,7 @@ def test_normalized_rule_unknown() -> None:
     assert normalized_rule("") == "keep_largest"
     assert normalized_rule("nope") == "keep_largest"
     assert normalized_rule("keep_smallest") == "keep_smallest"
+    assert normalized_rule("keep_first") == "keep_first"
 
 
 def test_apply_rule_unknown_raises() -> None:
@@ -52,3 +53,12 @@ def test_apply_rule_unknown_raises() -> None:
     b = _f("/x/b", size=2, modified=0.0)
     with pytest.raises(ValueError, match="Unknown smart rule"):
         apply_rule("not_a_rule", [a, b])
+
+
+def test_keep_first() -> None:
+    a = _f("first.txt", size=5, modified=1.0)
+    b = _f("second.txt", size=10, modified=99.0)
+    files = [a, b]
+    assert apply_rule("keep_first", files) is a
+    rm = paths_to_delete("keep_first", files)
+    assert len(rm) == 1 and Path(rm[0]) == b.path

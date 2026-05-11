@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
@@ -23,14 +24,8 @@ _DELETE_METHODS = [
     ("move_to_folder", "Move to Folder"),
 ]
 
-# Auto‑mark rules
-_AUTO_MARK_RULES = [
-    ("keep_largest", "Keep Largest"),
-    ("keep_smallest", "Keep Smallest"),
-    ("keep_newest", "Keep Newest"),
-    ("keep_oldest", "Keep Oldest"),
-    ("keep_first", "Keep First"),
-]
+# Auto‑mark rules (aligned with :mod:`review.smart_rules` + ``keep_first`` for deletion settings)
+_AUTO_MARK_RULES = AUTO_MARK_RULE_OPTIONS
 
 # Scan mode options (matching old dialog)
 _SCAN_MODES = [
