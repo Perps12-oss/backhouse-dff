@@ -275,7 +275,7 @@ def _main(page: ft.Page) -> None:
         content=ft.Container(
             height=36,
             bgcolor=ft.Colors.SURFACE,
-            padding=ft.padding.symmetric(horizontal=8),
+            padding=ft.Padding.symmetric(horizontal=8),
             content=ft.Row(
                 [
                     ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
@@ -376,7 +376,7 @@ def _main(page: ft.Page) -> None:
             autofocus=True,
             text_size=13,
             border_radius=8,
-            content_padding=ft.padding.symmetric(horizontal=10, vertical=8),
+            content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
         )
         list_view = ft.ListView(expand=True, spacing=4, padding=0, height=260)
 
@@ -456,7 +456,7 @@ def _main(page: ft.Page) -> None:
             bgcolor=ft.Colors.with_opacity(0.14, "#22D3EE"),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#22D3EE")),
             border_radius=999,
-            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
         )
         title_text = ft.Text(
             steps[0][0],

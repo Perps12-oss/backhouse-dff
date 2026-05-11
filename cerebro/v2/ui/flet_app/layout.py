@@ -77,7 +77,7 @@ class AppLayout(ft.Column):
             label = ft.Text(route.label, size=11, weight=ft.FontWeight.W_600)
             pill = ft.Container(
                 border_radius=999,
-                padding=ft.padding.symmetric(horizontal=12, vertical=7),
+                padding=ft.Padding.symmetric(horizontal=12, vertical=7),
                 ink=True,
                 animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
                 content=ft.Row(
@@ -95,7 +95,7 @@ class AppLayout(ft.Column):
             nav_button_row.controls.append(pill)
 
         self._top_nav = ft.Container(
-            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
             content=ft.Row(
                 [

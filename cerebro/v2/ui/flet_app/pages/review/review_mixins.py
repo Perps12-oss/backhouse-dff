@@ -102,7 +102,7 @@ class ReviewPageChromeMixin:
             color="#FFFFFF",
             icon_color="#FFFFFF",
             overlay_color=ft.Colors.with_opacity(0.22, t.colors.danger_hover),
-            padding=ft.padding.symmetric(horizontal=28, vertical=16),
+            padding=ft.Padding.symmetric(horizontal=28, vertical=16),
             shape=ft.RoundedRectangleBorder(radius=12),
             text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
         )

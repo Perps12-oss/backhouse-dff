@@ -46,7 +46,7 @@ def _status_badge(label: str, color: str, bg: str) -> ft.Container:
         content=ft.Text(label, size=9, weight=ft.FontWeight.W_800, color=color),
         bgcolor=bg,
         border_radius=4,
-        padding=ft.padding.symmetric(horizontal=7, vertical=3),
+        padding=ft.Padding.symmetric(horizontal=7, vertical=3),
     )
 
 
@@ -188,7 +188,7 @@ class ReviewInspectorPanel(ft.Container):
                         content=ft.Text(sim_type, size=9, weight=ft.FontWeight.W_700, color=RC.info),
                         bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.BLUE),
                         border_radius=4,
-                        padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                     ),
                     ft.Text(
                         f"{n} files",
@@ -286,7 +286,7 @@ class ReviewInspectorPanel(ft.Container):
                         spacing=6,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=ft.padding.symmetric(vertical=4),
+                    padding=ft.Padding.symmetric(vertical=4),
                 )
             )
 
@@ -416,7 +416,7 @@ class ReviewInspectorPanel(ft.Container):
                     style=ft.ButtonStyle(
                         color=RC.side_a,
                         side=ft.BorderSide(1, ft.Colors.with_opacity(0.4, RC.side_a)),
-                        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
                         shape=ft.RoundedRectangleBorder(radius=8),
                     ),
                 ),

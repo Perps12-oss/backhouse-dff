@@ -165,7 +165,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         on_select=page._on_group_sort_changed,
         text_size=12,
         dense=True,
-        content_padding=ft.padding.symmetric(horizontal=10, vertical=8),
+        content_padding=ft.Padding.symmetric(horizontal=10, vertical=8),
     )
     page._group_sort_row = ft.Row(
         [
@@ -187,7 +187,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         width=220,
         height=36,
         text_size=12,
-        content_padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
         border_radius=8,
         visible=False,
         on_change=page._on_search_changed,
@@ -242,7 +242,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         on_undo=page._undo_last_trash_delete,
     )
 
-    strip_pad = ft.padding.symmetric(horizontal=t.spacing.lg)
+    strip_pad = ft.Padding.symmetric(horizontal=t.spacing.lg)
     hwrap = page._hwrap_strip
     center_column = ft.Column(
         [
@@ -250,7 +250,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
             ft.Container(content=hwrap(page._smart_row), padding=strip_pad),
             ft.Container(
                 content=hwrap(page._cmp_bar),
-                padding=ft.padding.symmetric(horizontal=t.spacing.lg),
+                padding=ft.Padding.symmetric(horizontal=t.spacing.lg),
             ),
             ft.Container(content=page._content, expand=True),
             page._review_action_bar,

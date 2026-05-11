@@ -249,7 +249,7 @@ class GroupCardWidget(ft.Container):
                             ),
                             bgcolor=badge_bg,
                             border_radius=3,
-                            padding=ft.padding.symmetric(horizontal=5, vertical=2),
+                            padding=ft.Padding.symmetric(horizontal=5, vertical=2),
                         ),
                         ft.Column(
                             [

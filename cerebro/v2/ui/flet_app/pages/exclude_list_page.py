@@ -102,7 +102,7 @@ class ExcludeListPage(ft.Column):
         self._list_col = ft.Column(spacing=t.spacing.sm)
         self._list_container = ft.Container(
             content=self._list_col,
-            padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
             visible=False,
         )
 
@@ -162,7 +162,7 @@ class ExcludeListPage(ft.Column):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
-            padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
             **self._get_glass_style(0.05),
         )
 

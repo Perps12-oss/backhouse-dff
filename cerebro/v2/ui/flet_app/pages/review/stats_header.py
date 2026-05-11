@@ -86,7 +86,7 @@ class StatsHeader(ft.Container):
                 spacing=6,
                 tight=True,
             ),
-            padding=ft.padding.symmetric(horizontal=14, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
             bgcolor=bg,
             border=ft.border.only(bottom=ft.BorderSide(1, border_color)),
         )
@@ -113,7 +113,7 @@ class StatsHeader(ft.Container):
                 tight=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
             bgcolor=ft.Colors.with_opacity(0.1, t.colors.glass_bg),
             border_radius=999,
         )
@@ -143,7 +143,7 @@ class StatsHeader(ft.Container):
         root = self.content
         if isinstance(root, ft.Column):
             root.spacing = 6
-        self.padding = ft.padding.symmetric(horizontal=14, vertical=10)
+        self.padding = ft.Padding.symmetric(horizontal=14, vertical=10)
 
         reviewed_in_filter = sum(1 for g in groups if g.group_id in reviewed_ids)
         total_filtered = len(groups)

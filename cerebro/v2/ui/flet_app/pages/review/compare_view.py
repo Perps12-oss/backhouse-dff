@@ -49,7 +49,7 @@ class ReviewCompareView:
                 color="#FFFFFF",
                 icon_color="#FFFFFF",
                 overlay_color=ft.Colors.with_opacity(0.22, t.colors.danger_hover),
-                padding=ft.padding.symmetric(horizontal=28, vertical=16),
+                padding=ft.Padding.symmetric(horizontal=28, vertical=16),
                 shape=ft.RoundedRectangleBorder(radius=12),
                 text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
             ),
@@ -87,7 +87,7 @@ class ReviewCompareView:
                 ft.Container(content=self._compare_main_row, expand=True),
                 ft.Container(
                     content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6),
-                    padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                    padding=ft.Padding.symmetric(horizontal=t.spacing.sm),
                 ),
                 self._marked_bar,
             ],
@@ -149,7 +149,7 @@ class ReviewCompareView:
         )
         self._file_selector_container = ft.Container(
             content=self._file_selector_row,
-            padding=ft.padding.symmetric(vertical=6, horizontal=4),
+            padding=ft.Padding.symmetric(vertical=6, horizontal=4),
             visible=False,
             border=ft.border.only(
                 bottom=ft.BorderSide(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE))
@@ -161,7 +161,7 @@ class ReviewCompareView:
                 self._compare_panel_a,
                 ft.Container(
                     content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
-                    padding=ft.padding.symmetric(horizontal=t.spacing.sm),
+                    padding=ft.Padding.symmetric(horizontal=t.spacing.sm),
                 ),
                 self._compare_panel_b,
             ],
@@ -185,7 +185,7 @@ class ReviewCompareView:
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
-            padding=ft.padding.symmetric(vertical=8, horizontal=8),
+            padding=ft.Padding.symmetric(vertical=8, horizontal=8),
             border=ft.border.only(
                 top=ft.BorderSide(1, ft.Colors.with_opacity(0.08, ft.Colors.WHITE))
             ),
@@ -218,7 +218,7 @@ class ReviewCompareView:
         )
         self._marked_bar = ft.Container(
             visible=False,
-            padding=ft.padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
             bgcolor=ft.Colors.with_opacity(0.95, RC.marked_bar_bg),
             border=ft.border.only(top=ft.BorderSide(1, RC.danger)),
             content=ft.Column(
@@ -350,7 +350,7 @@ class ReviewCompareView:
                         content=ft.Text(side_lbl, size=8, weight=ft.FontWeight.W_800, color=accent),
                         bgcolor=ft.Colors.with_opacity(0.18, accent),
                         border_radius=3,
-                        padding=ft.padding.symmetric(horizontal=4, vertical=1),
+                        padding=ft.Padding.symmetric(horizontal=4, vertical=1),
                     )
                 )
 
@@ -363,7 +363,7 @@ class ReviewCompareView:
                     bgcolor=bg,
                     border=ft.border.all(1, border_color),
                     border_radius=6,
-                    padding=ft.padding.symmetric(horizontal=8, vertical=5),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=5),
                     ink=True,
                     on_click=_make_click(f),
                     tooltip=f"Set as Side A: {p.name}",
@@ -501,7 +501,7 @@ class ReviewCompareView:
                 color=t.colors.fg_muted,
                 text_align=ft.TextAlign.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
         )
 
     def _slim_path_size_under_thumb(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> ft.Column:
@@ -563,7 +563,7 @@ class ReviewCompareView:
             bgcolor=ft.Colors.with_opacity(0.12, label_color),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, label_color)),
             border_radius=6,
-            padding=ft.padding.symmetric(horizontal=10, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
         )
 
         slim_meta = self._slim_path_size_under_thumb(f, p, t)

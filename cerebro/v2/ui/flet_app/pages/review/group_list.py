@@ -63,7 +63,7 @@ class GroupListPanel:
             for i, g in enumerate(groups):
                 active = g.group_id == compare_gid
                 row = ft.Container(
-                    padding=ft.padding.symmetric(horizontal=10, vertical=8),
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=8),
                     border_radius=8,
                     ink=True,
                     on_click=lambda _e, gid=g.group_id: on_pick(gid),

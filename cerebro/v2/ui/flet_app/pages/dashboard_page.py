@@ -260,7 +260,7 @@ class DashboardPage(ft.Column):
                 spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
             width=860,
             **self._get_glass_style(opacity=0.04),
         )
@@ -296,7 +296,7 @@ class DashboardPage(ft.Column):
         self._presence_row = ft.Container(
             visible=False,
             width=620,
-            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
             **self._get_glass_style(0.05),
             content=ft.Column(
                 [
@@ -387,7 +387,7 @@ class DashboardPage(ft.Column):
             on_click=self._start_scan,
             style=pill_filled_accent(
                 t,
-                padding=ft.padding.symmetric(horizontal=56, vertical=28),
+                padding=ft.Padding.symmetric(horizontal=56, vertical=28),
                 text_size=t.typography.size_xl,
                 weight=ft.FontWeight.W_800,
                 border_radius=14,
@@ -578,7 +578,7 @@ class DashboardPage(ft.Column):
             content=self._ring_path,
             height=48,
             width=600,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
             border_radius=8,
             border=ft.border.all(1, ft.Colors.with_opacity(0.28, t.colors.border)),
             bgcolor=ft.Colors.with_opacity(0.14, t.colors.bg3),
@@ -685,7 +685,7 @@ class DashboardPage(ft.Column):
                 tight=True,
             ),
             width=620,
-            padding=ft.padding.symmetric(horizontal=s.lg, vertical=s.lg + 4),
+            padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.lg + 4),
             border_radius=16,
             border=ft.border.all(2, ft.Colors.with_opacity(0.65, t.colors.warning)),
             bgcolor=ft.Colors.with_opacity(0.14, t.colors.warning),
@@ -777,7 +777,7 @@ class DashboardPage(ft.Column):
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#F59E0B")),
             border_radius=10,
             bgcolor=ft.Colors.with_opacity(0.08, "#F59E0B"),
@@ -885,7 +885,7 @@ class DashboardPage(ft.Column):
                 spacing=4,
                 tight=True,
             ),
-            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
         )
         self._scan_options_toggle_btn = ft.OutlinedButton(
             "Advanced scan settings",
@@ -925,7 +925,7 @@ class DashboardPage(ft.Column):
 
         workflow_stack = ft.Container(
             width=840,
-            padding=ft.padding.symmetric(horizontal=s.lg, vertical=s.md),
+            padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.md),
             content=ft.Column(
                 [
                     self._hero,
@@ -967,7 +967,7 @@ class DashboardPage(ft.Column):
                 spacing=s.xs,
             ),
             width=620,
-            padding=ft.padding.symmetric(horizontal=s.md, vertical=s.sm),
+            padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
             border_radius=10,
             border=ft.border.all(1, ft.Colors.with_opacity(0.4, t.colors.warning)),
             bgcolor=ft.Colors.with_opacity(0.07, t.colors.warning),
@@ -1043,7 +1043,7 @@ class DashboardPage(ft.Column):
             color=t.colors.fg,
             overlay_color=ft.Colors.with_opacity(0.3, t.colors.primary),
             shape=ft.RoundedRectangleBorder(radius=12),
-            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
         )
 
     # ------------------------------------------------------------------
@@ -1188,7 +1188,7 @@ class DashboardPage(ft.Column):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=10,
                 ),
-                padding=ft.padding.symmetric(horizontal=14, vertical=10),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
                 **self._get_glass_style(0.06),
                 ink=True,
             )
@@ -1216,7 +1216,7 @@ class DashboardPage(ft.Column):
                 spacing=4,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             border_radius=999,
             bgcolor=ft.Colors.with_opacity(0.1, accent),
         )
@@ -1603,7 +1603,7 @@ class DashboardPage(ft.Column):
                 ft.Container(
                     border=ft.border.all(1, ft.Colors.with_opacity(0.52, t.colors.border)),
                     border_radius=10,
-                    padding=ft.padding.symmetric(horizontal=12, vertical=14),
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=14),
                     bgcolor=ft.Colors.with_opacity(0.07, t.colors.primary),
                     content=ft.Column(
                         [
@@ -1656,7 +1656,7 @@ class DashboardPage(ft.Column):
         self._start_btn.disabled = False
         self._start_btn.style = pill_filled_accent(
             self._t,
-            padding=ft.padding.symmetric(horizontal=56, vertical=28),
+            padding=ft.Padding.symmetric(horizontal=56, vertical=28),
             text_size=self._t.typography.size_xl,
             weight=ft.FontWeight.W_800,
             border_radius=14,
@@ -2025,7 +2025,7 @@ class DashboardPage(ft.Column):
                     spacing=s.md,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.padding.symmetric(horizontal=s.sm, vertical=s.xs),
+                padding=ft.Padding.symmetric(horizontal=s.sm, vertical=s.xs),
                 border_radius=8,
                 bgcolor=ft.Colors.with_opacity(0.06, t.colors.fg),
             )
@@ -2391,7 +2391,7 @@ class DashboardPage(ft.Column):
                 pass
             self._view_partial_btn.style = pill_filled_accent(
                 t,
-                padding=ft.padding.symmetric(horizontal=22, vertical=12),
+                padding=ft.Padding.symmetric(horizontal=22, vertical=12),
                 text_size=t.typography.size_md,
                 weight=ft.FontWeight.W_700,
                 border_radius=999,

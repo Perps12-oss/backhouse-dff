@@ -193,7 +193,7 @@ class SettingsPage(ft.Column):
         # Assemble layout
         self.controls = [
             self._header,
-            ft.Container(content=self._tabs, padding=ft.padding.symmetric(horizontal=t.spacing.xl)),
+            ft.Container(content=self._tabs, padding=ft.Padding.symmetric(horizontal=t.spacing.xl)),
             ft.Container(
                 content=ft.Column([
                     self._tab_contents["general"],
@@ -202,7 +202,7 @@ class SettingsPage(ft.Column):
                     self._tab_contents["deletion"],
                     self._tab_contents["about"],
                 ]),
-                padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+                padding=ft.Padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
             ),
             ft.Container(content=self._button_row, padding=ft.padding.only(right=t.spacing.xl, bottom=t.spacing.xl)),
         ]
@@ -633,13 +633,13 @@ class SettingsPage(ft.Column):
                             content=ft.Text("v2.0.0", size=9, color="#22D3EE", weight=ft.FontWeight.W_600),
                             bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
                             border_radius=4,
-                            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),
                         ft.Container(
                             content=ft.Text("Flet + Flutter", size=9, color="#A78BFA", weight=ft.FontWeight.W_600),
                             bgcolor=ft.Colors.with_opacity(0.12, "#A78BFA"),
                             border_radius=4,
-                            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,

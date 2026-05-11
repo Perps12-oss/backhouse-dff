@@ -416,7 +416,7 @@ class ResultsPage(ft.Stack):
                         style=ft.ButtonStyle(
                             bgcolor="#22D3EE",
                             color="#0B1220",
-                            padding=ft.padding.symmetric(horizontal=24, vertical=16),
+                            padding=ft.Padding.symmetric(horizontal=24, vertical=16),
                             text_style=ft.TextStyle(size=15, weight=ft.FontWeight.W_800),
                         ),
                     ),
@@ -504,7 +504,7 @@ class ResultsPage(ft.Stack):
                 bgcolor=ft.Colors.with_opacity(0.82, "#09111D"),
                 border=ft.border.all(1, ft.Colors.with_opacity(0.25, "#22D3EE")),
                 border_radius=999,
-                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             ),
         )
 
@@ -557,7 +557,7 @@ class ResultsPage(ft.Stack):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
-            padding=ft.padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.xl, vertical=t.spacing.md),
             bgcolor=ft.Colors.with_opacity(0.97, "#0D0505"),
             border=ft.border.only(top=ft.BorderSide(2, "#EF4444")),
             visible=False,
@@ -580,7 +580,7 @@ class ResultsPage(ft.Stack):
                 padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
                 **self._get_glass_style(0.04),
             ),
-            ft.Container(content=self._dashboard, padding=ft.padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.md)),
+            ft.Container(content=self._dashboard, padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.md)),
             self._results_filters_bar,
             self._empty,
         ]
@@ -1453,7 +1453,7 @@ class ResultsPage(ft.Stack):
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=12),
             border_radius=8,
             bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
             margin=ft.margin.only(top=8, bottom=16),
@@ -1820,7 +1820,7 @@ class ResultsPage(ft.Stack):
                 text_align=ft.TextAlign.CENTER,
             ),
             bgcolor=ft.Colors.with_opacity(0.72, "#0A0E14"),
-            padding=ft.padding.symmetric(horizontal=4, vertical=3),
+            padding=ft.Padding.symmetric(horizontal=4, vertical=3),
             alignment=ft.Alignment(0, 0),
         )
 
@@ -1852,7 +1852,7 @@ class ResultsPage(ft.Stack):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             bgcolor=ft.Colors.with_opacity(0.82, "#0A0E14"),
-            padding=ft.padding.symmetric(horizontal=4, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=4, vertical=4),
         )
         stack = ft.Stack(
             [
@@ -1891,7 +1891,7 @@ class ResultsPage(ft.Stack):
                     ),
                     bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
                     border_radius=4,
-                    padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                 ),
                 ft.Text(
                     f"{len(group.files)} files · {fmt_size(group.reclaimable)} reclaimable",

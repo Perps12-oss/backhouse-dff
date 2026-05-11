@@ -46,7 +46,7 @@ class ReviewActionBar(ft.Container):
             animate_opacity=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
             bgcolor=bg,
             border=ft.border.only(top=ft.BorderSide(1, edge)),
-            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
             content=ft.Row(
                 [
                     ft.Container(content=self._summary, expand=True),

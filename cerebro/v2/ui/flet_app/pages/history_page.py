@@ -205,7 +205,7 @@ class HistoryPage(ft.Column):
                     ft.Text(f"{row.get('groups_found', 0):,} groups", size=t.typography.size_xs, color=t.colors.fg_muted),
                     ft.Text(fmt_size(row.get("bytes_reclaimable", 0)), size=t.typography.size_xs, color="#34D399"),
                 ], spacing=8),
-                padding=ft.padding.symmetric(vertical=2),
+                padding=ft.Padding.symmetric(vertical=2),
             ))
         self._recent_strip.controls = items
         self._recent_strip_container.visible = True
@@ -295,7 +295,7 @@ class HistoryPage(ft.Column):
                             content=ft.Text(mode, size=9, color=mode_color, weight=ft.FontWeight.W_600),
                             bgcolor=ft.Colors.with_opacity(0.12, mode_color),
                             border_radius=4,
-                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         )
                     ),
                     ft.DataCell(ft.Text(str(row.get("folder", "")), size=t.typography.size_sm, color=t.colors.fg2, overflow=ft.TextOverflow.ELLIPSIS)),
@@ -316,7 +316,7 @@ class HistoryPage(ft.Column):
                             content=ft.Text(policy, size=9, color=policy_color, weight=ft.FontWeight.W_600),
                             bgcolor=ft.Colors.with_opacity(0.12, policy_color),
                             border_radius=4,
-                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         )
                     ),
                     ft.DataCell(ft.Text(str(row.get("count", 0)), size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)),

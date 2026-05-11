@@ -91,7 +91,7 @@ class ReviewGridView(ft.Stack):
                 bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
                 border=ft.border.all(1, ft.Colors.with_opacity(0.25, RC.side_a)),
                 border_radius=999,
-                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             ),
         )
 
@@ -216,7 +216,7 @@ class ReviewGridView(ft.Stack):
             options=[ft.dropdown.Option(str(ext), lbl) for ext, lbl in _ICON_SIZE_PRESETS],
             on_select=self._on_icon_size_changed,
             text_size=11,
-            content_padding=ft.padding.symmetric(horizontal=10, vertical=6),
+            content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             border_color=t.colors.border,
             bgcolor=t.colors.bg2,
             label_style=ft.TextStyle(color=t.colors.fg_muted, size=10, weight=ft.FontWeight.W_600),
@@ -394,7 +394,7 @@ class ReviewGridView(ft.Stack):
                 spacing=2,
             ),
             bgcolor=ft.Colors.with_opacity(0.72, RC.tile_bg),
-            padding=ft.padding.symmetric(horizontal=6, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
             animate_opacity=(None if self._reduce_motion else ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT)),
             opacity=0,
         )
@@ -428,7 +428,7 @@ class ReviewGridView(ft.Stack):
         self._sync_badge_label(key, badge_txt, marked_paths, keep_paths)
         badge = ft.Container(
             content=badge_txt,
-            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
             bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, RC.grid_badge_text)),
             border_radius=4,
@@ -467,7 +467,7 @@ class ReviewGridView(ft.Stack):
             bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
             border=ft.border.all(1, ft.Colors.with_opacity(0.45, RC.side_a)),
             border_radius=4,
-            padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
             visible=False,
         )
 

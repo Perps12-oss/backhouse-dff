@@ -67,7 +67,7 @@ class ReviewWorkstationSidebar(ft.Container):
                     style=ft.ButtonStyle(
                         color=t.colors.fg2 if i > 0 else t.colors.fg,
                         text_style=ft.TextStyle(size=12),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
                     ),
                 )
             )
@@ -89,7 +89,7 @@ class ReviewWorkstationSidebar(ft.Container):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 style=ft.ButtonStyle(
-                    padding=ft.padding.symmetric(horizontal=8, vertical=6),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=6),
                     shape=ft.RoundedRectangleBorder(radius=8),
                 ),
                 on_click=lambda e, k=key: self._on_category_pick(k),
