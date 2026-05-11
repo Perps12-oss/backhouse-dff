@@ -15,6 +15,12 @@ import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateGroup
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
+    RULE_LABELS,
+    apply_rule,
+    normalized_rule,
+    paths_to_delete,
+)
 from cerebro.v2.ui.flet_app.theme import (
     FILTER_EXTS, classify_file, fmt_size, theme_for_mode,
 )
@@ -58,14 +64,6 @@ _UI_SLOW_MS = 80.0
 # Groups are already sorted by reclaimable desc so the top _MAX_RENDERED_GROUPS
 # are always the most impactful ones. A banner is shown when the cap is active.
 _MAX_RENDERED_GROUPS = 1_000
-
-_SMART_SELECT_OPTIONS = [
-    ("keep_largest", "Keep Largest"),
-    ("keep_smallest", "Keep Smallest"),
-    ("keep_newest", "Keep Newest"),
-    ("keep_oldest", "Keep Oldest"),
-]
-
 
 class ResultsPage(ft.Stack):
     """Duplicate group listing with type filters, smart selection, and delete."""
@@ -229,7 +227,7 @@ class ResultsPage(ft.Stack):
             on_change=self._on_smart_seg_change,
             segments=[
                 ft.Segment(value=val, label=ft.Text(label, size=11))
-                for val, label in _SMART_SELECT_OPTIONS
+                for val, label in RULE_LABELS
             ],
         )
         self._auto_mark_btn = ft.OutlinedButton(
@@ -751,22 +749,18 @@ class ResultsPage(ft.Stack):
     def _on_smart_seg_change(self, e: ft.ControlEvent) -> None:
         sel = getattr(e.control, "selected", None) or {"keep_largest"}
         self._smart_rule = next(iter(sel), "keep_largest")
-        label = dict(_SMART_SELECT_OPTIONS).get(self._smart_rule, "Keep Largest")
+        label = dict(RULE_LABELS).get(self._smart_rule, "Keep Largest")
         self._rule_label.value = f"Active rule: {label}"
         ResultsPage._safe_update(self._rule_label)
 
     def _pick_keeper(self, group: DuplicateGroup):
         if not group.files:
             return None
-        if self._smart_rule == "keep_largest":
-            return max(group.files, key=lambda f: f.size)
-        if self._smart_rule == "keep_smallest":
-            return min(group.files, key=lambda f: f.size)
-        if self._smart_rule == "keep_newest":
-            return max(group.files, key=lambda f: getattr(f, "mtime", 0) or 0)
-        if self._smart_rule == "keep_oldest":
-            return min(group.files, key=lambda f: getattr(f, "mtime", 0) or 0)
-        return max(group.files, key=lambda f: f.size)
+        r = normalized_rule(self._smart_rule)
+        try:
+            return apply_rule(r, list(group.files))
+        except ValueError:
+            return None
 
     def _unmark_all(self, e=None) -> None:
         self._selected_paths.clear()
@@ -774,23 +768,10 @@ class ResultsPage(ft.Stack):
 
     def _apply_smart_select(self, e=None) -> None:
         self._selected_paths.clear()
+        r = normalized_rule(self._smart_rule)
         for g in self._filtered_groups():
-            if len(g.files) < 2:
-                continue
-            # Determine the file to keep based on rule
-            if self._smart_rule == "keep_largest":
-                keep = max(g.files, key=lambda f: f.size)
-            elif self._smart_rule == "keep_smallest":
-                keep = min(g.files, key=lambda f: f.size)
-            elif self._smart_rule == "keep_newest":
-                keep = max(g.files, key=lambda f: getattr(f, "mtime", 0) or 0)
-            elif self._smart_rule == "keep_oldest":
-                keep = min(g.files, key=lambda f: getattr(f, "mtime", 0) or 0)
-            else:
-                keep = max(g.files, key=lambda f: f.size)  # fallback
-            for f in g.files:
-                if f is not keep:
-                    self._selected_paths.add(str(f.path))
+            for p in paths_to_delete(r, list(g.files)):
+                self._selected_paths.add(p)
         self._refresh()
 
     def _apply_group_selection_to_set(self, group: DuplicateGroup, selected: bool) -> None:
