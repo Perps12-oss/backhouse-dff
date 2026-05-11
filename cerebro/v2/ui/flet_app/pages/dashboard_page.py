@@ -89,6 +89,7 @@ class DashboardPage(ft.Column):
         self._phase_hash_title: ft.Text
         self._phase_hash_bar: ft.ProgressBar
         self._phase_hash_caption: ft.Text
+        self._autosave_hint: ft.Text
         self._scan_phase_card: ft.Container
         self._status_metric_row: ft.Row
         self._progress_detail: ft.Text
@@ -434,6 +435,14 @@ class DashboardPage(ft.Column):
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
         )
+        self._autosave_hint = ft.Text(
+            "Interrupted scans checkpoint about every 15s while work is in flight — "
+            "you can close the app and resume from Home.",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+            italic=True,
+            width=_phase_track_w,
+        )
         self._scan_phase_card = ft.Container(
             content=ft.Column(
                 [
@@ -442,6 +451,8 @@ class DashboardPage(ft.Column):
                     self._phase_hash_title,
                     self._phase_hash_bar,
                     self._phase_hash_caption,
+                    ft.Container(height=s.xs),
+                    self._autosave_hint,
                 ],
                 spacing=s.xs,
                 tight=True,
@@ -1188,39 +1199,86 @@ class DashboardPage(ft.Column):
             bgcolor=ft.Colors.with_opacity(0.1, accent),
         )
 
+    @staticmethod
+    def _short_folder_label(path: str, max_len: int = 40) -> str:
+        s = str(path).replace("\\", "/")
+        if len(s) <= max_len:
+            return s
+        return "…" + s[-(max_len - 1) :]
+
     def _refresh_presence_ui(self) -> None:
-        """Show last recorded scan + 7-day rollups when history exists."""
+        """Show last recorded scan, 7-day rollups, and last saved session rollups."""
         from cerebro.v2.core.index_presence import format_relative_past, latest_scan_entry
         from cerebro.v2.core.scan_history_db import get_scan_history_db
+        from cerebro.v2.persistence.scan_snapshot import load_last_scan_summary
 
         t = self._t
         entry = latest_scan_entry()
-        if not entry:
+        summary = load_last_scan_summary()
+
+        if not entry and not summary:
             self._presence_row.visible = False
             self._insights_row.controls = []
             DashboardPage._safe_update(self._presence_row)
             return
 
-        rel = format_relative_past(entry.timestamp)
-        mode_lbl = str(entry.mode or "files").replace("+", " + ")
-        self._presence_title.value = f"Last analysis · {rel}"
-        self._presence_body.value = (
-            f"{entry.groups_found:,} groups · {entry.files_found:,} duplicate paths · "
-            f"{fmt_size(entry.bytes_reclaimable)} reclaimable · {mode_lbl}. "
-            "Hash index on disk makes the next run faster when files are unchanged."
-        )
+        if entry:
+            rel = format_relative_past(entry.timestamp)
+            mode_lbl = str(entry.mode or "files").replace("+", " + ")
+            self._presence_title.value = f"Last analysis · {rel}"
+            self._presence_body.value = (
+                f"{entry.groups_found:,} groups · {entry.files_found:,} duplicate paths · "
+                f"{fmt_size(entry.bytes_reclaimable)} reclaimable · {mode_lbl}. "
+                "Hash index on disk makes the next run faster when files are unchanged."
+            )
+        else:
+            gc = int((summary or {}).get("groups_count", 0) or 0)
+            sm = str((summary or {}).get("scan_mode", "files") or "files")
+            self._presence_title.value = "Saved duplicate summary"
+            self._presence_body.value = (
+                f"{gc:,} groups on disk · mode {sm.replace('+', ' + ')} — "
+                "run a scan to refresh history totals."
+            )
+
         self._presence_title.color = t.colors.fg
         self._presence_body.color = t.colors.fg2
         self._presence_mtime.color = t.colors.fg_muted
 
         since_7d = time.time() - 7 * 24 * 3600
         n_scans, g_sum, f_sum, b_sum = get_scan_history_db().aggregate_since(since_7d)
-        self._insights_row.controls = [
+        chips: list[ft.Control] = [
             self._insight_chip(t, "7-day scans", f"{n_scans}", "#22D3EE"),
             self._insight_chip(t, "7-day duplicate paths (total)", f"{f_sum:,}", "#A78BFA"),
             self._insight_chip(t, "7-day reclaimable (total)", fmt_size(int(b_sum)), "#34D399"),
             self._insight_chip(t, "7-day groups (total)", f"{g_sum:,}", "#F472B6"),
         ]
+
+        if summary:
+            hist_ts = float(entry.timestamp) if entry else 0.0
+            sum_ts = float(summary.get("session_ts", 0.0) or 0.0)
+            aligned = (not hist_ts) or abs(sum_ts - hist_ts) < 300.0
+            prefix = "Last run" if aligned else "Saved session"
+            b = summary.get("age_buckets") or {}
+            chips.extend(
+                [
+                    self._insight_chip(t, f"{prefix} · <7d files", fmt_size(int(b.get("under_7d", 0))), "#F97316"),
+                    self._insight_chip(t, f"{prefix} · 7–30d", fmt_size(int(b.get("d7_to_30", 0))), "#EAB308"),
+                    self._insight_chip(t, f"{prefix} · 30d+", fmt_size(int(b.get("over_30d", 0))), "#94A3B8"),
+                ]
+            )
+            for row in (summary.get("top_folders") or [])[:2]:
+                pth = str(row.get("path", ""))
+                br = int(row.get("reclaimable", 0) or 0)
+                chips.append(
+                    self._insight_chip(
+                        t,
+                        f"{prefix} · {DashboardPage._short_folder_label(pth, 36)}",
+                        fmt_size(br),
+                        "#0EA5E9",
+                    )
+                )
+
+        self._insights_row.controls = chips
         ps = self._get_glass_style(0.05)
         self._presence_row.bgcolor = ps.get("bgcolor")
         self._presence_row.border = ps.get("border")
@@ -3663,6 +3721,8 @@ class DashboardPage(ft.Column):
         self._scan_elapsed_clock.color = self._t.colors.fg
         self._scan_elapsed_timer_icon.color = self._t.colors.accent
         self._ring_counter_tip.icon_color = self._t.colors.fg_muted
+        self._phase_hash_caption.color = self._t.colors.fg_muted
+        self._autosave_hint.color = self._t.colors.fg_muted
         self._update_stats_ui()
         self._refresh_presence_ui()
         self._update_modes_ui()

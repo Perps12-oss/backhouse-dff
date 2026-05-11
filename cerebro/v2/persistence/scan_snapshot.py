@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,12 +16,75 @@ _log = logging.getLogger(__name__)
 
 _VERSION = 1
 _LAST_NAME = "last.json"
+_SUMMARY_NAME = "last_summary.json"
+_SUMMARY_VERSION = 1
 
 
 def _snap_dir() -> Path:
     p = cerebro_user_root() / "scan_snapshots"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _top_folders_by_reclaim(groups: List[DuplicateGroup], top_n: int = 5) -> List[Dict[str, Any]]:
+    """Credit each group's reclaimable to the parent folder with the most files in that group."""
+    acc: dict[str, int] = defaultdict(int)
+    for g in groups:
+        if not g.files:
+            continue
+        counts: dict[str, int] = defaultdict(int)
+        for f in g.files:
+            counts[str(Path(str(f.path)).parent)] += 1
+        winner = max(counts, key=lambda k: counts[k])
+        acc[winner] += int(g.reclaimable or 0)
+    ranked = sorted(acc.items(), key=lambda x: -x[1])[: int(top_n)]
+    return [{"path": p, "reclaimable": int(b)} for p, b in ranked]
+
+
+def _age_bucket_reclaim_bytes(groups: List[DuplicateGroup]) -> Dict[str, int]:
+    """Bucket reclaimable bytes by newest mtime in each group (fresh vs stale clutter)."""
+    now = time.time()
+    out = {"under_7d": 0, "d7_to_30": 0, "over_30d": 0}
+    for g in groups:
+        if not g.files:
+            continue
+        try:
+            latest_mtime = max(float(f.modified) for f in g.files)
+        except (TypeError, ValueError):
+            continue
+        age_sec = now - latest_mtime
+        rec = int(g.reclaimable or 0)
+        if age_sec < 7 * 86400:
+            out["under_7d"] += rec
+        elif age_sec < 30 * 86400:
+            out["d7_to_30"] += rec
+        else:
+            out["over_30d"] += rec
+    return out
+
+
+def _write_last_scan_summary(
+    groups: List[DuplicateGroup],
+    scan_mode: str,
+    session_ts: float,
+) -> None:
+    """Small sidecar for dashboard rollups (avoids re-parsing full ``last.json``)."""
+    try:
+        payload: Dict[str, Any] = {
+            "version": _SUMMARY_VERSION,
+            "session_ts": float(session_ts),
+            "scan_mode": str(scan_mode or "files"),
+            "top_folders": _top_folders_by_reclaim(groups, top_n=5),
+            "age_buckets": _age_bucket_reclaim_bytes(groups),
+            "groups_count": len(groups),
+        }
+        d = _snap_dir()
+        (d / _SUMMARY_NAME).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=0),
+            encoding="utf-8",
+        )
+    except (OSError, TypeError, ValueError, AttributeError) as e:
+        _log.warning("write last_summary: %s", e)
 
 
 def _file_to_dict(f: DuplicateFile) -> Dict[str, Any]:
@@ -85,6 +150,11 @@ def save_scan_results_snapshot(
         (d / f"scan_{key}.json").write_text(data, encoding="utf-8")
     except (OSError, TypeError, ValueError, AttributeError) as e:
         _log.warning("save_scan_results_snapshot: %s", e)
+        return
+    try:
+        _write_last_scan_summary(groups, scan_mode, float(session_ts))
+    except (OSError, TypeError, ValueError, AttributeError) as e:
+        _log.warning("save_scan_results_snapshot summary: %s", e)
 
 
 def _read_payload(path: Path) -> Optional[Dict[str, Any]]:
@@ -168,3 +238,14 @@ def load_scan_results_for_session_timestamp(
     if best is not None and best[0] <= tolerance * 2:
         return best[1], best[2]
     return None
+
+
+def load_last_scan_summary() -> Optional[Dict[str, Any]]:
+    """Return parsed ``last_summary.json`` if present and valid."""
+    p = _snap_dir() / _SUMMARY_NAME
+    if not p.is_file():
+        return None
+    pl = _read_payload(p)
+    if not pl or int(pl.get("version", 0) or 0) < 1:
+        return None
+    return pl

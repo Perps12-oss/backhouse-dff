@@ -272,6 +272,14 @@ class StateBridge:
     ) -> None:
         self._coordinator.scan_completed(groups, mode)
         self._persist_scan_history(groups, mode or "files")
+        try:
+            import time as _t
+
+            from cerebro.v2.persistence.scan_snapshot import save_scan_results_snapshot
+
+            save_scan_results_snapshot(list(groups), mode or "files", _t.time())
+        except Exception:
+            _log.exception("Persist scan snapshot failed")
         self._scan_session = {}
 
     def _persist_scan_history(self, groups: List[DuplicateGroup], mode: str) -> None:

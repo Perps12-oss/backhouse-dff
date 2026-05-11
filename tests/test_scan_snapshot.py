@@ -41,3 +41,21 @@ def test_save_load_roundtrip(tmp_path, monkeypatch) -> None:
     by_ts = load_scan_results_for_session_timestamp(ts)
     assert by_ts is not None
     assert len(by_ts[0]) == 1
+
+
+def test_save_snapshot_writes_summary(tmp_path, monkeypatch) -> None:
+    import cerebro.v2.persistence.scan_snapshot as mod
+
+    monkeypatch.setattr(mod, "cerebro_user_root", lambda: tmp_path)
+    from cerebro.v2.persistence.scan_snapshot import load_last_scan_summary, save_scan_results_snapshot
+
+    g = _one_group()
+    ts = 1_700_000_000.456
+    save_scan_results_snapshot([g], "files", ts)
+    summary_path = tmp_path / "scan_snapshots" / "last_summary.json"
+    assert summary_path.is_file()
+    s = load_last_scan_summary()
+    assert s is not None
+    assert int(s.get("groups_count", 0)) == 1
+    assert isinstance(s.get("top_folders"), list)
+    assert "age_buckets" in s
