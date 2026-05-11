@@ -47,6 +47,9 @@ _SCAN_MODE_ICON_MAP = {
 class DashboardPage(ft.Column):
     """Home page with scan configuration, stats, and quick-start."""
 
+    # Coalesce rapid Home refreshes (on_show + theme + async stats) without starving updates.
+    _PRESENCE_REFRESH_MIN_S: float = 1.25
+
     def __init__(self, bridge: "StateBridge", folder_picker: ft.FilePicker):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
@@ -65,6 +68,8 @@ class DashboardPage(ft.Column):
         self._initial_load_done = False
         self._stats_fetch_generation = 0
         self._last_on_show_ts = 0.0
+        self._presence_refresh_last_mon: float = 0.0
+        self._stats_row_signature: tuple[int, int, int] | None = None
         # Initial Theme Load
         self._t = theme_for_mode("dark")
         self._glass_cache: dict = {}
@@ -1060,7 +1065,6 @@ class DashboardPage(ft.Column):
         except Exception:
             _log.error("Failed to fetch dashboard data", exc_info=True)
         self._update_stats_ui()
-        self._refresh_presence_ui()
         self._presence_mtime.value = ""
 
     async def _fetch_dashboard_data_async(self, gen: int) -> None:
@@ -1076,7 +1080,6 @@ class DashboardPage(ft.Column):
         except Exception:
             _log.error("Failed to fetch dashboard data", exc_info=True)
         self._update_stats_ui()
-        self._refresh_presence_ui()
         try:
             from cerebro.v2.core.index_presence import (
                 count_files_newer_than,
@@ -1122,11 +1125,26 @@ class DashboardPage(ft.Column):
                 self._presence_mtime.value = ""
                 DashboardPage._safe_update(self._presence_mtime)
 
-    def _update_stats_ui(self):
+    def _maybe_refresh_presence_ui(self, *, force: bool = False) -> None:
+        """Rebuild presence strip unless refreshed recently (reduces chip churn)."""
+        now = time.monotonic()
+        if (
+            not force
+            and (now - float(getattr(self, "_presence_refresh_last_mon", 0.0) or 0.0))
+            < float(DashboardPage._PRESENCE_REFRESH_MIN_S)
+        ):
+            return
+        self._presence_refresh_last_mon = now
+        self._refresh_presence_ui()
+
+    def _update_stats_ui(self, *, refresh_presence_force: bool = False) -> None:
         t = self._t
         scans_n = int(self._stats.get("scans", 0) or 0)
         dupes_n = int(self._stats.get("dupes", 0) or 0)
         bytes_n = int(self._stats.get("bytes_reclaimed", 0) or 0)
+        new_sig = (scans_n, dupes_n, bytes_n)
+        sig_changed = self._stats_row_signature != new_sig
+        self._stats_row_signature = new_sig
         self._stats_row.visible = (scans_n > 0) or (dupes_n > 0) or (bytes_n > 0)
         cards = [
             (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", f"{scans_n:,}"),
@@ -1181,6 +1199,7 @@ class DashboardPage(ft.Column):
             )
         self._stats_row.controls = controls
         DashboardPage._safe_update(self._stats_row)
+        self._maybe_refresh_presence_ui(force=bool(refresh_presence_force or sig_changed))
 
     @staticmethod
     def _insight_chip(t, label: str, value: str, accent: str) -> ft.Container:
@@ -3723,8 +3742,7 @@ class DashboardPage(ft.Column):
         self._ring_counter_tip.icon_color = self._t.colors.fg_muted
         self._phase_hash_caption.color = self._t.colors.fg_muted
         self._autosave_hint.color = self._t.colors.fg_muted
-        self._update_stats_ui()
-        self._refresh_presence_ui()
+        self._update_stats_ui(refresh_presence_force=True)
         self._update_modes_ui()
         self._refresh_folder_chips() # Chips have background colors relative to theme
         self._apply_dashboard_pill_chrome()

@@ -366,7 +366,7 @@ class StateBridge:
             get_default_history_manager().clear_history()
 
     def open_last_session(self) -> None:
-        """Restore the last in‑memory scan results, if the backend still holds them."""
+        """Restore the last scan: in-memory backend results, else ``last.json`` on disk."""
         cached = self._backend.get_results()
         if cached:
             mode = self.state.scan_mode or "files"
@@ -374,7 +374,21 @@ class StateBridge:
             self._coordinator.set_active_tab("review")
             self.show_snackbar("Restored the last scan from memory.", success=True)
             return
-        self.show_snackbar("No scan results in memory. Run a new scan from Home.", info=True)
+        try:
+            from cerebro.v2.persistence.scan_snapshot import load_last_scan_snapshot
+
+            snap = load_last_scan_snapshot()
+        except Exception:
+            _log.exception("load_last_scan_snapshot failed")
+            snap = None
+        if snap:
+            groups, mode, _ts = snap
+            if groups:
+                self._coordinator.scan_completed(list(groups), mode or "files")
+                self._coordinator.set_active_tab("review")
+                self.show_snackbar("Restored last saved session from disk (last.json).", success=True)
+                return
+        self.show_snackbar("No scan results in memory or on disk. Run a new scan from Home.", info=True)
 
     def get_settings(self) -> Dict[str, Any]:
         if not _SETTINGS_PATH.exists():
