@@ -10,7 +10,7 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
-_PILL_PAD = ft.padding.symmetric(horizontal=12, vertical=8)
+_PILL_PAD = ft.Padding.symmetric(horizontal=12, vertical=8)
 _PILL_SHAPE = ft.RoundedRectangleBorder(radius=999)
 
 
