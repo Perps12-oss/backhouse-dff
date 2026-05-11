@@ -39,6 +39,10 @@ class TestFormatRelativePast:
         ts = self.NOW - 2 * 86400 - 1  # just over 2 full days
         assert ip.format_relative_past(ts, now=self.NOW) == "2 days ago"
 
+    def test_one_day_ago_singular(self) -> None:
+        ts = self.NOW - 42 * 3600  # between 36h and 48h wall → one calendar-day bucket
+        assert ip.format_relative_past(ts, now=self.NOW) == "1 day ago"
+
     def test_seven_days_ago_is_one_week(self) -> None:
         ts = self.NOW - 7 * 86400
         assert ip.format_relative_past(ts, now=self.NOW) == "1 week ago"
@@ -49,7 +53,11 @@ class TestFormatRelativePast:
 
     def test_fifty_six_days_uses_month_branch(self) -> None:
         ts = self.NOW - 56 * 86400
-        assert ip.format_relative_past(ts, now=self.NOW) == "1 months ago"
+        assert ip.format_relative_past(ts, now=self.NOW) == "1 month ago"
+
+    def test_two_months_plural(self) -> None:
+        ts = self.NOW - 65 * 86400  # weeks >= 8; 65 // 30 == 2
+        assert ip.format_relative_past(ts, now=self.NOW) == "2 months ago"
 
 
 def test_count_files_newer_than_counts_only_matching_files(tmp_path: Path) -> None:

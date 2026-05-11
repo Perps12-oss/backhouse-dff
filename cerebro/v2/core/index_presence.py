@@ -29,13 +29,14 @@ def format_relative_past(ts: float, *, now: float | None = None) -> str:
         return "yesterday"
     days = int(delta // (60 * 60 * 24))
     if days <= 6:
-        return f"{days} days ago"
+        return "1 day ago" if days == 1 else f"{days} days ago"
     if days < 14:
         return "1 week ago"
     weeks = days // 7
     if weeks < 8:
-        return f"{weeks} weeks ago"
-    return f"{days // 30} months ago"
+        return "1 week ago" if weeks == 1 else f"{weeks} weeks ago"
+    months = days // 30
+    return "1 month ago" if months == 1 else f"{months} months ago"
 
 
 def count_files_newer_than(
