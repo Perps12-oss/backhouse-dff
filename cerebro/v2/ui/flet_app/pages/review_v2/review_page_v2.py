@@ -41,6 +41,7 @@ class ReviewPageV2(ft.Column):
         sidebar = ft.Container(
             width=220,
             padding=16,
+            bgcolor=t.colors.bg,
             content=ft.Column(
                 [
                     ft.Text("Sidebar (stub)", size=14, weight=ft.FontWeight.W_700, color=t.colors.fg),
@@ -59,6 +60,8 @@ class ReviewPageV2(ft.Column):
         center = ft.Container(
             expand=True,
             padding=20,
+            bgcolor=t.colors.bg2,
+            alignment=ft.Alignment(-1, -1),
             content=ft.Column(
                 [
                     ft.Text("Review shell v2", size=20, weight=ft.FontWeight.W_800, color=t.colors.fg),
@@ -77,21 +80,34 @@ class ReviewPageV2(ft.Column):
                         color=t.colors.fg_muted,
                     ),
                 ],
-                expand=True,
+                tight=True,
                 spacing=6,
-                alignment=ft.MainAxisAlignment.START,
+                scroll=None,
             ),
         )
         self._shell_row = ft.Row(
             [sidebar, center],
             expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
-        self.controls = [self._shell_row]
+        # Fill the tab viewport; inner Column must not use expand=True without a bounded parent
+        # (Flet desktop can collapse that subtree to an empty grey band).
+        self.controls = [
+            ft.Container(
+                expand=True,
+                bgcolor=t.colors.bg,
+                content=self._shell_row,
+            )
+        ]
 
     def on_show(self) -> None:
         """Layout calls this after mount; no-op until deferred load is implemented."""
         self._pending_deferred_render = False
+        try:
+            if self.page is not None:
+                self.update()
+        except RuntimeError:
+            pass
 
     def apply_theme(self, mode: str) -> None:
         self._t = theme_for_mode(mode)

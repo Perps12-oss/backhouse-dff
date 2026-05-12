@@ -230,15 +230,19 @@ class AppLayout(ft.Column):
         inner = None
         if builder:
             inner = builder()
+            # Review hosts heavy image / compare subtrees; HARD_EDGE on the tab wrapper has
+            # been associated with blank/grey first-paint on some Flet desktop builds.
+            tab_clip = ft.ClipBehavior.NONE if key == "review" else ft.ClipBehavior.HARD_EDGE
             # F2: reuse the same wrapper container per tab to avoid remount overhead.
             if key not in self._tab_containers:
                 self._tab_containers[key] = ft.Container(
                     expand=True,
                     content=inner,
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    clip_behavior=tab_clip,
                 )
             else:
                 tc = self._tab_containers[key]
+                tc.clip_behavior = tab_clip
                 # Flet may skip repainting when `content` is set to the same object instance
                 # again (singleton ReviewPage / DashboardPage). Bounce through None once.
                 if tc.content is inner:
