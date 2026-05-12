@@ -69,6 +69,8 @@ class AppState:
     history_page_size: int = 30
     # Workspace file-type filter (unified, was split across results_file_filter / review_file_filter)
     review_file_filter: str = "all"
+    results_text_filter: str = ""
+    """Name/path substring filter for the duplicate file list (see :class:`ResultsViewTextFilterChanged`)."""
     # Deletion History sub-tab
     history_deletion_rows: List[Dict[str, Any]] = field(default_factory=list)
     # --- Scan profiles (FINAL PLAN §4.3, advanced)

@@ -11,8 +11,6 @@ from cerebro.v2.state import (
     HistorySubTabChanged,
     ResultsFilesRemoved,
     ReviewViewFilterChanged,
-    ResultsGroupGridSortChanged,
-    ResultsViewFilterChanged,
     ResultsViewTextFilterChanged,
     ReviewNavigate,
     ScanCompleted,
@@ -42,12 +40,9 @@ def test_reduce_scan_completed_sets_mode_and_tab() -> None:
     assert s1.mode is AppMode.RESULTS
     assert s1.scan_mode == "photos"
     assert len(s1.groups) == 1
-    assert s1.active_tab == "duplicates"
+    assert s1.active_tab == "review"
     assert s1.selected_group_id is None
     assert s1.review_unlocked is True
-    assert s1.results_file_filter == "all"
-    assert s1.results_group_sort_column == "reclaimable"
-    assert s1.results_group_sort_asc is False
     assert s1.review_file_filter == "all"
     assert s1.results_text_filter == ""
 
@@ -108,20 +103,6 @@ def test_results_files_removed_empty_paths_noop() -> None:
     assert len(s2.groups) == 1
 
 
-def test_results_group_sort_and_filter() -> None:
-    s0 = create_initial_state()
-    s0 = reduce(s0, ScanCompleted([_one_file_group()], "files"))
-    s1 = reduce(s0, ResultsGroupGridSortChanged("files", False))
-    assert s1.results_group_sort_column == "files"
-    assert s1.results_group_sort_asc is False
-    s2 = reduce(s1, ResultsViewFilterChanged("pictures"))
-    assert s2.results_file_filter == "pictures"
-    s3 = reduce(s2, ResultsViewFilterChanged("invalid"))
-    assert s3.results_file_filter == "all"
-    s4 = reduce(s3, ResultsGroupGridSortChanged("bogus", True))
-    assert s4.results_group_sort_column == "reclaimable"
-
-
 def test_deletion_history_data_loaded() -> None:
     s0 = create_initial_state()
     row = {"id": 1, "path": "/x", "size": 1, "deletion_date": "2020-01-01", "mode": "files"}
@@ -151,9 +132,9 @@ def test_set_active_tab() -> None:
     s1 = reduce(s0, SetActiveTab("history"))
     assert s1.active_tab == "history"
     assert s1.mode is AppMode.IDLE
-    s2 = reduce(s1, SetActiveTab("duplicates"))
-    assert s2.active_tab == "duplicates"
-    assert s2.mode is AppMode.RESULTS
+    s2 = reduce(s1, SetActiveTab("review"))
+    assert s2.active_tab == "review"
+    assert s2.mode is AppMode.REVIEW
 
 
 def test_set_active_tab_while_scanning_preserves_mode() -> None:
@@ -182,14 +163,14 @@ def test_scan_lifecycle() -> None:
     assert s4.scan_progress == {}
 
 
-def test_set_active_tab_duplicates_works() -> None:
+def test_set_active_tab_review_works() -> None:
     s0 = create_initial_state()
-    s1 = reduce(s0, SetActiveTab("duplicates"))
-    assert s1.active_tab == "duplicates"
-    assert s1.mode is AppMode.RESULTS
+    s1 = reduce(s0, SetActiveTab("review"))
+    assert s1.active_tab == "review"
+    assert s1.mode is AppMode.REVIEW
     s2 = reduce(s0, ScanCompleted([_one_file_group()], "files"))
-    s3 = reduce(s2, SetActiveTab("duplicates"))
-    assert s3.active_tab == "duplicates"
+    s3 = reduce(s2, SetActiveTab("review"))
+    assert s3.active_tab == "review"
     assert s3.mode is AppMode.RESULTS
 
 
@@ -205,7 +186,7 @@ def test_reduce_review_navigate() -> None:
     s1 = reduce(s0, ReviewNavigate(7, None))
     assert s1.mode is AppMode.REVIEW
     assert s1.selected_group_id == 7
-    assert s1.active_tab == "duplicates"
+    assert s1.active_tab == "review"
 
 
 def test_store_dispatches_to_listeners() -> None:
