@@ -37,6 +37,7 @@ class ReviewCompareView:
         self._t = t
         self._compare_render_generation = 0
         self._compare_thumb_slots: Dict[str, ft.Container] = {}
+        self._compare_mark_checkboxes: Dict[str, ft.Checkbox] = {}
 
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
         self._hero_delete_marked = ft.FilledButton(
@@ -288,6 +289,7 @@ class ReviewCompareView:
         self._compare_render_generation += 1
         gen = self._compare_render_generation
         self._compare_thumb_slots.clear()
+        self._compare_mark_checkboxes.clear()
         self._compare_panel_a.content = self._build_compare_side(self._del.compare_a, "A", gen)
         self._compare_panel_b.content = self._build_compare_side(self._del.compare_b, "B", gen)
         self.apply_compare_panel_tints()
@@ -297,6 +299,16 @@ class ReviewCompareView:
         self._refresh_metadata_strip()
         self.update_progress_and_marked_bar()
         self._log_if_slow("review:compare_panel_update", _t0)
+
+    def refresh_compare_marks(self) -> None:
+        """Update A/B mark checkboxes and progress strip without rebuilding thumbnails."""
+        mp = self._del.marked_paths
+        for path_key, cb in self._compare_mark_checkboxes.items():
+            want = path_key in mp
+            if bool(cb.value) != want:
+                cb.value = want
+                self._safe_update(cb)
+        self.update_progress_and_marked_bar()
 
     def _refresh_file_selector(self) -> None:
         gid = self._del.compare_gid
@@ -451,7 +463,8 @@ class ReviewCompareView:
         total = max(1, len(self._del.groups))
         self._progress_bar.value = min(1.0, reviewed / total)
         marked_bytes = self._del.marked_bytes
-        remaining = max(0, sum(g.reclaimable for g in self._del.groups) - marked_bytes)
+        total_rec = int(self._del.total_reclaimable_scan)
+        remaining = max(0, total_rec - marked_bytes)
         self._progress_lbl.value = (
             f"{reviewed} of {len(self._del.groups)} reviewed · {fmt_size(marked_bytes)} marked · {fmt_size(remaining)} remaining"
         )
@@ -579,18 +592,21 @@ class ReviewCompareView:
         if banner is not None:
             head.append(banner)
 
+        mark_cb = ft.Checkbox(
+            label="Mark for deletion",
+            value=marked,
+            active_color=RC.danger,
+            on_change=lambda e, file=f: self._del.toggle_mark_file(file),
+        )
+        self._compare_mark_checkboxes[str(f.path)] = mark_cb
+
         return ft.Column(
             head
             + [
                 thumb_slot,
                 ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
                 slim_meta,
-                ft.Checkbox(
-                    label="Mark for deletion",
-                    value=marked,
-                    active_color=RC.danger,
-                    on_change=lambda e, file=f: self._del.toggle_mark_file(file),
-                ),
+                mark_cb,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,

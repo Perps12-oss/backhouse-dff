@@ -52,6 +52,9 @@ class ReviewCompareDelegate(Protocol):
     @property
     def mode(self) -> str: ...
 
+    @property
+    def total_reclaimable_scan(self) -> int: ...
+
 
 class ReviewCompareDelegateAdapter:
     """Thin adapter from ``ReviewPage`` to ``ReviewCompareDelegate``."""
@@ -122,3 +125,7 @@ class ReviewCompareDelegateAdapter:
     @property
     def mode(self) -> str:
         return self._page._mode
+
+    @property
+    def total_reclaimable_scan(self) -> int:
+        return self._page._total_reclaimable_scan

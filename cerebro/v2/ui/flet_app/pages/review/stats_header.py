@@ -53,6 +53,12 @@ class StatsHeader(ft.Container):
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+        self._marked_chip_value = ft.Text(
+            f"0 · {fmt_size(0)}",
+            size=11,
+            weight=ft.FontWeight.W_700,
+            color=RC.stats_chip_files,
+        )
         chips_wrap = ft.Row(
             [
                 ft.Container(expand=True),
@@ -118,6 +124,29 @@ class StatsHeader(ft.Container):
             border_radius=999,
         )
 
+    def _metric_chip_row(self, label: str, value_text: ft.Text, accent: str) -> ft.Container:
+        t = self._t
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(label, size=10, color=t.colors.fg_muted, weight=ft.FontWeight.W_500),
+                    value_text,
+                ],
+                spacing=4,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            bgcolor=ft.Colors.with_opacity(0.1, t.colors.glass_bg),
+            border_radius=999,
+        )
+
+    def update_marked_metrics(self, marked_count: int, marked_bytes: int) -> None:
+        """Update only the Marked chip without scanning all groups (hot path for checkbox toggles)."""
+        self._marked_chip_value.value = f"{marked_count:,} · {fmt_size(marked_bytes)}"
+        self._marked_chip_value.color = RC.stats_chip_files
+        StatsHeader._safe_update(self._marked_chip_value)
+
     def refresh(
         self,
         mode: str,
@@ -165,14 +194,12 @@ class StatsHeader(ft.Container):
         if mode == "compare":
             self._subtext_lbl.value += " · Back returns to the group list"
 
+        self._marked_chip_value.value = f"{marked_count:,} · {fmt_size(marked_bytes)}"
+        self._marked_chip_value.color = RC.stats_chip_files
         self._stats_row.controls = [
             self._metric_chip("Reclaimable", fmt_size(remaining_reclaimable), RC.success),
             self._metric_chip("Groups left", f"{groups_left:,}", RC.side_b),
-            self._metric_chip(
-                "Marked",
-                f"{marked_count:,} · {fmt_size(marked_bytes)}",
-                RC.stats_chip_files,
-            ),
+            self._metric_chip_row("Marked", self._marked_chip_value, RC.stats_chip_files),
         ]
 
         if mode == "compare":

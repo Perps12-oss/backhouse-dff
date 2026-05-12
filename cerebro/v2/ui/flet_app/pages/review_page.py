@@ -85,6 +85,8 @@ class ReviewPage(
         self._selected_file: Optional[DuplicateFile] = None
         self._groups_build_generation: int = 0
         self._search_query: str = ""
+        # Sum of group.reclaimable for current result set; invalidated when ``_groups`` is replaced.
+        self._total_reclaimable_scan: int = 0
 
         self._stats_header: StatsHeader
         self._smart_seg: ft.SegmentedButton
@@ -118,9 +120,15 @@ class ReviewPage(
     def _build_ui(self) -> None:
         attach_review_shell(self)
 
+    def _sync_total_reclaimable_cache(self) -> None:
+        self._total_reclaimable_scan = int(
+            sum(int(getattr(g, "reclaimable", 0) or 0) for g in self._groups)
+        )
+
     def load_group(self, groups: List[DuplicateGroup], group_id: int, mode: Optional[str] = None) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._sync_total_reclaimable_cache()
         self._compare_ui.group_list.clear_tracking()
         self._rebuild_group_index()
         self._rebuild_filter_index()
@@ -160,6 +168,7 @@ class ReviewPage(
     ) -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._sync_total_reclaimable_cache()
         self._compare_ui.group_list.clear_tracking()
         self._rebuild_group_index()
         self._rebuild_filter_index()
@@ -186,6 +195,7 @@ class ReviewPage(
         old_ids = {g.group_id for g in self._groups}
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
+        self._sync_total_reclaimable_cache()
         new_ids = {g.group_id for g in self._groups}
         if old_ids != new_ids:
             self._compare_ui.group_list.clear_tracking()

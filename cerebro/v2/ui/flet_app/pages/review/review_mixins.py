@@ -33,6 +33,15 @@ from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, t
 
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
+
+
+def _marked_bytes_total(groups: List[DuplicateGroup], marked_paths: Set[str]) -> int:
+    total = 0
+    for g in groups:
+        for f in g.files:
+            if str(f.path) in marked_paths:
+                total += int(getattr(f, "size", 0) or 0)
+    return total
 _GROUPS_FIRST_SYNC = 40
 _GROUPS_ASYNC_BATCH = 40
 
@@ -538,6 +547,7 @@ class ReviewPageSmartMixin:
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
         self._rebuild_group_index()
         self._rebuild_filter_index()
+        self._sync_total_reclaimable_cache()
         for p in paths:
             self._marked_paths.discard(str(p))
         self._recompute_marked_bytes()
@@ -662,30 +672,30 @@ class ReviewPageCompareNavMixin:
         self._update_compare_panels()
 
     def _toggle_mark_file(self, file: DuplicateFile) -> None:
-        # Full recompute keeps _marked_bytes consistent with _marked_paths (incremental +/- size
-        # drifts if the same path appears more than once across groups or size metadata changes).
+        # Single-path toggle: O(1) bytes delta. Engine output treats each path as belonging to at most one group.
         fp = str(file.path)
+        sz = int(getattr(file, "size", 0) or 0)
         if fp in self._marked_paths:
             self._marked_paths.discard(fp)
+            self._marked_bytes -= sz
         else:
             self._marked_paths.add(fp)
-        self._recompute_marked_bytes()
+            self._marked_bytes += sz
+        if self._marked_bytes < 0:
+            self._marked_bytes = 0
         self._push_marked_paths_to_store()
         if self._mode == "grid":
             self._grid_view.refresh_marks(self._marked_paths, self._keep_paths_for_current_filter())
         elif self._mode == "compare":
-            self._compare_ui.update_compare_panels()
+            self._compare_ui.refresh_compare_marks()
+        self._refresh_action_bar()
+        self._stats_header.update_marked_metrics(len(self._marked_paths), self._marked_bytes)
 
     def _refresh_group_list_panel(self) -> None:
         self._compare_ui.refresh_group_list_panel()
 
     def _recompute_marked_bytes(self) -> None:
-        total = 0
-        for g in self._groups:
-            for f in g.files:
-                if str(f.path) in self._marked_paths:
-                    total += int(getattr(f, "size", 0) or 0)
-        self._marked_bytes = total
+        self._marked_bytes = _marked_bytes_total(self._groups, self._marked_paths)
         self._refresh_action_bar()
         self._refresh_stats_header()
 
