@@ -24,6 +24,7 @@ from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
 from cerebro.v2.ui.flet_app.theme import (
     FILTER_EXTS, classify_file, fmt_size, theme_for_mode,
 )
+from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class ResultsPage(ft.Stack):
         self._filter_key = "all"
         self._scan_mode = "files"
         self._selected_paths: Set[str] = set()
+        self._delete_service = DeleteService()
         self._smart_rule = "keep_largest"
         self._list_build_generation = 0
         self._loading = False
@@ -873,11 +875,9 @@ class ResultsPage(ft.Stack):
         self._execute_delete(policy)
 
     def _execute_delete(self, policy: DeletionPolicy) -> None:
-        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
         paths = list(self._selected_paths)
         if not paths:
             return
-        service = DeleteService()
         progress_text = ft.Text("Preparing deletion...", size=self._t.typography.size_sm)
         progress_bar = ft.ProgressBar(value=0)
         progress_dialog = ft.AlertDialog(
@@ -925,7 +925,7 @@ class ResultsPage(ft.Stack):
             else:
                 _ui_done(new_groups, deleted, failed, bytes_reclaimed, err)
 
-        service.delete_and_prune_async(
+        self._delete_service.delete_and_prune_async(
             paths=paths,
             groups=self._groups,
             policy=policy,
@@ -1009,8 +1009,6 @@ class ResultsPage(ft.Stack):
         self._bridge.show_modal_dialog(modal)
 
     def _undo_last_trash_delete(self) -> None:
-        from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
-
         ok, restored = DeleteService.undo_last_trash_delete()
         if ok and restored > 0:
             self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
