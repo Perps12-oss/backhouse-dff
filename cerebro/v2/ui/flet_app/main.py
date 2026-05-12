@@ -7,6 +7,7 @@ the Flet application with the navigation-rail layout.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Callable, Dict
 
@@ -193,10 +194,21 @@ def _main(page: ft.Page) -> None:
 
     # Singleton pages so scan results / state survive tab switches.
     from cerebro.v2.ui.flet_app.pages.dashboard_page import DashboardPage
-    from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
     from cerebro.v2.ui.flet_app.pages.history_page import HistoryPage
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
+
+    _review_shell = (os.environ.get("CEREBRO_REVIEW_SHELL") or "").strip().lower()
+    _use_review_v2 = _review_shell in ("v2", "2", "true", "yes", "on")
+    if _use_review_v2:
+        from cerebro.v2.ui.flet_app.pages.review_v2.review_page_v2 import ReviewPageV2
+
+        _ReviewTabCls = ReviewPageV2
+        _log.info("init: using ReviewPageV2 (CEREBRO_REVIEW_SHELL=%r)", _review_shell)
+    else:
+        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+
+        _ReviewTabCls = ReviewPage
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -212,7 +224,7 @@ def _main(page: ft.Page) -> None:
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
-    review_page = ReviewPage(bridge)
+    review_page = _ReviewTabCls(bridge)
     _log.info("init: review built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
