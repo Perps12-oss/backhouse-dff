@@ -214,21 +214,18 @@ class ReviewPageModeMixin:
             self._content.controls.append(self._grid_view)
             self._refresh_grid()
         elif mode == "compare":
-            pass
+            self._compare_view.visible = True
+            self._compare_ui.body.visible = True
+            self._content.controls.append(self._compare_view)
 
-        # One workspace child at a time (see shell_attach._workspace_slot): restores
-        # bounded flex like the old content_frame-in-Column path for compare layout.
         slot = getattr(self, "_workspace_slot", None)
         if slot is not None:
-            if mode == "compare":
-                self._compare_view.visible = True
-                slot.content = self._compare_view
-                slot.alignment = ft.Alignment(-1, -1)
-            else:
+            self._content_frame.content = self._content
+            slot.content = self._content_frame
+            slot.alignment = ft.Alignment(0, 0)
+            if mode != "compare":
                 self._compare_view.visible = False
-                self._content_frame.content = self._content
-                slot.content = self._content_frame
-                slot.alignment = ft.Alignment(0, 0)
+                self._compare_ui.body.visible = False
 
         try:
             _log.debug(

@@ -139,7 +139,6 @@ class ReviewCompareView:
                 self._marked_bar,
             ],
             expand=False,
-            visible=False,
             spacing=8,
             scroll=ft.ScrollMode.AUTO,
         )

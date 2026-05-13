@@ -8,6 +8,7 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.components.filters.workspace_filter_stack import WorkspaceFilterStack
 from cerebro.v2.ui.flet_app.components.smart_selection import SmartSelectionRow
+from cerebro.v2.ui.flet_app.components.workspace.compare_workspace import CompareWorkspace
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
@@ -55,7 +56,8 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
 def _attach_compare_and_content(page: Any, t: ThemeTokens, bridge: Any) -> None:
     page._compare_ui = ReviewCompareView(ReviewCompareDelegateAdapter(page), bridge, t)
     page._cmp_bar = page._compare_ui.cmp_bar
-    page._compare_view = page._compare_ui.body
+    page._compare_workspace = CompareWorkspace(page._compare_ui.body, tokens=t)
+    page._compare_view = page._compare_workspace
     page._content = ft.Column(expand=True)
 
 
@@ -254,9 +256,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         padding=ft.Padding.symmetric(horizontal=t.spacing.lg),
     )
     page._content_frame = ft.Container(content=page._content, expand=True)
-    # Single slot: either list/grid (content_frame) or compare body — never Stack both.
-    # Stack + expand children can yield unbounded height on Flet desktop (blank A/B row);
-    # a hidden content layer can also composite incorrectly over compare in some builds.
+    # Compare mounts inside _content like groups/grid; the slot always hosts content_frame.
     page._workspace_slot = ft.Container(expand=True, content=page._content_frame)
     center_column = ft.Column(
         [
