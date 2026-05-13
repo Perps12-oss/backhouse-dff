@@ -42,7 +42,7 @@ class WorkspaceFilterStack(ft.Container):
             on_change=lambda e: on_cross_folder_change(bool(e.control.value)),
         )
         self._view_mode = ft.SegmentedButton(
-            selected={"triage"},
+            selected=["triage"],
             segments=[
                 ft.Segment(value="triage", label=ft.Text("Triage")),
                 ft.Segment(value="dashboard", label=ft.Text("Dashboard")),
@@ -70,8 +70,15 @@ class WorkspaceFilterStack(ft.Container):
         )
 
     def _on_view_mode_segment(self, e: ft.ControlEvent) -> None:
-        selected = next(iter(e.control.selected or {"triage"}), "triage")
-        self._on_view_mode_change(str(selected))
+        ctrl = getattr(e, "control", None) or self._view_mode
+        sel = getattr(ctrl, "selected", None)
+        if isinstance(sel, list):
+            key = str(sel[0]) if sel else "triage"
+        elif isinstance(sel, (set, frozenset)):
+            key = str(next(iter(sel))) if sel else "triage"
+        else:
+            key = "triage"
+        self._on_view_mode_change(key)
 
     @property
     def filter_bar(self) -> FilterBar:
@@ -89,4 +96,4 @@ class WorkspaceFilterStack(ft.Container):
         self._search.value = text_filter
         self._cross_folder.value = cross_folder_only
         mode = view_mode if view_mode in ("triage", "dashboard") else "triage"
-        self._view_mode.selected = {mode}
+        self._view_mode.selected = [mode]
