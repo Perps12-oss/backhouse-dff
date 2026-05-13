@@ -24,6 +24,7 @@ from cerebro.v2.ui.flet_app.pages.review.inspector_panel import ReviewInspectorP
 from cerebro.v2.ui.flet_app.pages.review.review_action_bar import ReviewActionBar
 from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkstationSidebar
 from cerebro.v2.ui.flet_app.pages.review.review_mixins import (
+    ReviewPageBatchMixin,
     ReviewPageChromeMixin,
     ReviewPageCompareNavMixin,
     ReviewPageFilterMixin,
@@ -33,6 +34,7 @@ from cerebro.v2.ui.flet_app.pages.review.review_mixins import (
     ReviewPageNavThemeMixin,
     ReviewPageSmartMixin,
 )
+from cerebro.v2.ui.flet_app.pages.review.review_session_undo import ReviewSessionUndo
 from cerebro.v2.ui.flet_app.pages.review.shell_attach import attach_review_shell
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
@@ -53,6 +55,7 @@ class ReviewPage(
     ReviewPageSmartMixin,
     ReviewPageCompareNavMixin,
     ReviewPageFilterMixin,
+    ReviewPageBatchMixin,
     ReviewPageKeyboardMixin,
     ReviewPageNavThemeMixin,
 ):
@@ -79,6 +82,13 @@ class ReviewPage(
         self._reduce_motion: bool = self._bridge.is_reduce_motion_enabled()
         self._delete_service = DeleteService()
         self._reviewed_group_ids: set[int] = set()
+        self._ignored_group_ids: set[int] = set()
+        self._override_paths: set[str] = set()
+        self._review_scope = "all"
+        self._advanced_path_regex = ""
+        self._advanced_filename_keep_regex = ""
+        self._batch_index = 0
+        self._batch_undo = ReviewSessionUndo()
         self._smart_rule = "keep_largest"
         self._loading = False
         self._files_by_filter: dict[str, List[DuplicateFile]] = {k: [] for k, _ in FILTER_TABS}
@@ -268,6 +278,7 @@ class ReviewPage(
             pass
         self._marked_paths = set(self._bridge.state.selected_files)
         self._recompute_marked_bytes()
+        self._sync_workspace_preferences_from_state()
         # If the store already has scan results but this singleton never received them
         # (missed listener, thread timing, or early navigation), hydrate now.
         st = self._bridge.state

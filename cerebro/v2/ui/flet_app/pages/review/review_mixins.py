@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -16,12 +17,14 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import REVIEW_GROUPS_
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.components.files.group_card import build_group_card
 from cerebro.v2.ui.flet_app.pages.review.compare_flags import COMPARE_SIDE_BY_SIDE_ENABLED
+from cerebro.v2.ui.flet_app.pages.review.review_scope import filter_groups_by_review_scope
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
     RULE_LABELS,
     apply_rule,
+    apply_rule_with_pipeline,
     normalized_rule,
     paths_to_delete,
 )
@@ -136,6 +139,7 @@ class ReviewPageModeMixin:
         "groups": {"cmp_bar": False, "smart": True, "toggle": True, "sort": True},
         "grid": {"cmp_bar": False, "smart": True, "toggle": True, "sort": False},
         "compare": {"cmp_bar": True, "smart": False, "toggle": False, "sort": False},
+        "batch": {"cmp_bar": False, "smart": False, "toggle": False, "sort": False},
     }
 
     @staticmethod
@@ -197,6 +201,9 @@ class ReviewPageModeMixin:
         filter_host = getattr(self, "_filter_stack_host", None)
         if filter_host is not None:
             filter_host.visible = mode in ("groups", "grid")
+        batch_btn = getattr(self, "_btn_batch_review", None)
+        if batch_btn is not None:
+            batch_btn.visible = mode in ("groups", "grid")
 
         if mode == "empty":
             self._content.controls.append(self._empty_state)
@@ -214,6 +221,12 @@ class ReviewPageModeMixin:
         elif mode == "grid":
             self._content.controls.append(self._grid_view)
             self._refresh_grid()
+        elif mode == "batch":
+            self._batch_index = 0
+            self._batch_undo.clear()
+            self._batch_review_view.visible = True
+            self._content.controls.append(self._batch_review_view)
+            self._refresh_batch_review()
         elif mode == "compare":
             self._compare_view.visible = True
             self._compare_ui.body.visible = True
@@ -227,6 +240,8 @@ class ReviewPageModeMixin:
             if mode != "compare":
                 self._compare_view.visible = False
                 self._compare_ui.body.visible = False
+            if mode != "batch":
+                self._batch_review_view.visible = False
 
         try:
             _log.debug(
@@ -332,7 +347,11 @@ class ReviewPageGroupsGridMixin:
             if len(files) < 2:
                 continue
             try:
-                keeper = apply_rule(rule, files)
+                keeper = apply_rule_with_pipeline(
+                    rule,
+                    files,
+                    filename_regex=getattr(self, "_advanced_filename_keep_regex", ""),
+                )
                 kp.add(str(keeper.path))
             except Exception:
                 continue
@@ -351,6 +370,16 @@ class ReviewPageGroupsGridMixin:
                 for g in filtered
                 if len({Path(str(f.path)).parent for f in g.files}) > 1
             ]
+        keep_paths = self._keep_paths_for_current_filter()
+        filtered = filter_groups_by_review_scope(
+            filtered,
+            str(getattr(self, "_review_scope", "all")),
+            reviewed_ids=self._reviewed_group_ids,
+            ignored_ids=getattr(self, "_ignored_group_ids", set()),
+            marked_paths=self._marked_paths,
+            smart_rule=self._smart_rule,
+            keep_paths=keep_paths,
+        )
         key = str(self._group_sort_key or "files_desc")
         if key == "files_desc":
             return sorted(filtered, key=lambda g: len(g.files), reverse=True)
@@ -405,6 +434,14 @@ class ReviewPageGroupsGridMixin:
         self._grid_view.refresh(files, self._marked_paths, self._keep_paths_for_current_filter())
 
     def _passes_filter(self, f: DuplicateFile) -> bool:
+        path_text = str(f.path)
+        regex = str(getattr(self, "_advanced_path_regex", "") or "").strip()
+        if regex:
+            try:
+                if not re.search(regex, path_text, re.IGNORECASE):
+                    return False
+            except re.error:
+                pass
         if self._filter_key == "all":
             return True
         ext = getattr(f, "extension", Path(str(f.path)).suffix.lower())
@@ -802,6 +839,24 @@ class ReviewPageFilterMixin:
         ui = state.ui or {}
         self._cross_folder_only = bool(ui.get("workspace_cross_folder_only", False))
         self._workspace_view_mode = str(ui.get("workspace_view_mode", "triage"))
+        self._review_scope = str(ui.get("workspace_review_scope", "all"))
+        self._reviewed_group_ids = {int(x) for x in ui.get("workspace_reviewed_group_ids", [])}
+        self._ignored_group_ids = {int(x) for x in ui.get("workspace_ignored_group_ids", [])}
+        self._override_paths = {str(x) for x in ui.get("workspace_override_paths", [])}
+        self._advanced_path_regex = str(ui.get("workspace_advanced_path_regex", "") or "")
+        rules = ui.get("advanced_rules") or {}
+        if isinstance(rules, dict):
+            self._advanced_filename_keep_regex = str(rules.get("filename_keep_regex", "") or "")
+        else:
+            self._advanced_filename_keep_regex = ""
+        self._workstation_sidebar.set_review_scope(self._review_scope)
+        drawer = getattr(self, "_advanced_drawer", None)
+        if drawer is not None:
+            drawer.sync_from_state(
+                regex=self._advanced_path_regex,
+                pipeline=self._advanced_filename_keep_regex,
+                advanced_mode=bool(getattr(state, "advanced_mode", False)),
+            )
         stack = getattr(self, "_workspace_filter_stack", None)
         if stack is not None:
             stack.sync_from_state(
@@ -815,6 +870,60 @@ class ReviewPageFilterMixin:
                 self._filter_sizes,
                 self._filter_key,
             )
+
+    def _push_workspace_review_state(self) -> None:
+        try:
+            self._bridge.coordinator.workspace_set_ui_preferences(
+                {
+                    "workspace_review_scope": self._review_scope,
+                    "workspace_reviewed_group_ids": sorted(self._reviewed_group_ids),
+                    "workspace_ignored_group_ids": sorted(self._ignored_group_ids),
+                    "workspace_override_paths": sorted(self._override_paths),
+                    "workspace_advanced_path_regex": self._advanced_path_regex,
+                    "advanced_rules": {"filename_keep_regex": self._advanced_filename_keep_regex},
+                }
+            )
+        except Exception:
+            pass
+
+    def _on_review_scope_changed(self, scope: str) -> None:
+        self._review_scope = scope
+        self._push_workspace_review_state()
+        if self._mode == "groups":
+            self._refresh_groups_overview()
+        elif self._mode == "grid":
+            self._refresh_grid()
+        self._refresh_filter_labels()
+
+    def _on_advanced_regex_changed(self, regex: str) -> None:
+        self._advanced_path_regex = str(regex or "")
+        self._push_workspace_review_state()
+        if self._mode in ("groups", "grid"):
+            if self._mode == "groups":
+                self._refresh_groups_overview()
+            else:
+                self._refresh_grid()
+
+    def _on_advanced_rule_pipeline_changed(self, regex: str) -> None:
+        self._advanced_filename_keep_regex = str(regex or "")
+        self._push_workspace_review_state()
+        if self._mode in ("groups", "grid", "batch"):
+            if self._mode == "groups":
+                self._refresh_groups_overview()
+            elif self._mode == "grid":
+                self._refresh_grid()
+            else:
+                self._refresh_batch_review()
+
+    def _on_export_marked_paths(self) -> None:
+        from cerebro.v2.ui.flet_app.components.workspace.advanced_drawer import AdvancedWorkspaceDrawer
+
+        payload = AdvancedWorkspaceDrawer.export_marked_json(self._marked_paths)
+        try:
+            self._bridge.flet_page.set_clipboard(payload)
+            self._bridge.show_snackbar("Marked paths copied as JSON.", success=True)
+        except Exception:
+            self._bridge.show_snackbar("Could not export marked paths.", info=True)
 
     def _on_filter_changed(self, key: str) -> None:
         self._filter_key = key
@@ -953,6 +1062,118 @@ class ReviewPageFilterMixin:
         )
 
 
+class ReviewPageBatchMixin:
+    def _batch_groups(self) -> List[DuplicateGroup]:
+        return self._sorted_groups_for_current_filter()
+
+    def _current_batch_group(self) -> Optional[DuplicateGroup]:
+        groups = self._batch_groups()
+        idx = int(getattr(self, "_batch_index", 0))
+        if 0 <= idx < len(groups):
+            return groups[idx]
+        return None
+
+    def _record_batch_undo(self) -> None:
+        self._batch_undo.record(
+            marked_paths=self._marked_paths,
+            reviewed_group_ids=self._reviewed_group_ids,
+            ignored_group_ids=self._ignored_group_ids,
+            override_paths=self._override_paths,
+        )
+
+    def _refresh_batch_review(self) -> None:
+        groups = self._batch_groups()
+        idx = min(int(getattr(self, "_batch_index", 0)), max(0, len(groups) - 1))
+        self._batch_index = idx
+        group = self._current_batch_group()
+        self._batch_review_view.refresh(group=group, index=idx, total=max(1, len(groups)))
+        safe_update(self._batch_review_view)
+        self._refresh_stats_header()
+
+    def _enter_batch_review(self, e=None) -> None:
+        if not self._groups:
+            self._bridge.show_snackbar("Nothing to review in this scope.", info=True)
+            return
+        self._enter_mode("batch")
+
+    def _exit_batch_review(self) -> None:
+        self._batch_undo.clear()
+        self._push_workspace_review_state()
+        self._enter_mode("groups")
+
+    def _batch_apply_keep_rule(self) -> None:
+        group = self._current_batch_group()
+        if group is None:
+            return
+        self._record_batch_undo()
+        files = list(group.files)
+        try:
+            keeper = apply_rule_with_pipeline(
+                normalized_rule(self._smart_rule),
+                files,
+                filename_regex=self._advanced_filename_keep_regex,
+            )
+        except Exception:
+            return
+        for f in files:
+            fp = str(f.path)
+            if f is keeper:
+                self._marked_paths.discard(fp)
+            else:
+                self._marked_paths.add(fp)
+        self._reviewed_group_ids.add(int(group.group_id))
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        self._push_workspace_review_state()
+        self._refresh_batch_review()
+
+    def _batch_mark_extras(self) -> None:
+        group = self._current_batch_group()
+        if group is None:
+            return
+        self._record_batch_undo()
+        for fp in paths_to_delete(self._smart_rule, list(group.files)):
+            self._marked_paths.add(fp)
+            self._override_paths.add(fp)
+        self._reviewed_group_ids.add(int(group.group_id))
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        self._push_workspace_review_state()
+        self._refresh_batch_review()
+
+    def _batch_skip_group(self) -> None:
+        group = self._current_batch_group()
+        if group is None:
+            return
+        self._record_batch_undo()
+        self._ignored_group_ids.add(int(group.group_id))
+        self._push_workspace_review_state()
+        self._batch_advance()
+
+    def _batch_advance(self) -> None:
+        self._batch_index = int(getattr(self, "_batch_index", 0)) + 1
+        if self._batch_index >= len(self._batch_groups()):
+            self._bridge.show_snackbar("Batch review finished for this scope.", success=True)
+            self._exit_batch_review()
+            return
+        self._refresh_batch_review()
+
+    def _batch_undo_last(self) -> None:
+        frame = self._batch_undo.pop()
+        if frame is None:
+            self._bridge.show_snackbar("Nothing to undo in this batch session.", info=True)
+            return
+        self._marked_paths = set(frame.marked_paths)
+        self._reviewed_group_ids = set(frame.reviewed_group_ids)
+        self._ignored_group_ids = set(frame.ignored_group_ids)
+        self._override_paths = set(frame.override_paths)
+        self._recompute_marked_bytes()
+        self._push_marked_paths_to_store()
+        self._push_workspace_review_state()
+        self._refresh_batch_review()
+        self._bridge.show_snackbar("Undid the last batch action.", success=True)
+
+
 class ReviewPageKeyboardMixin:
     def _bind_keys(self) -> None:
         self._bridge.flet_page.on_keyboard_event = self._on_key
@@ -981,10 +1202,25 @@ class ReviewPageKeyboardMixin:
         elif self._mode == "grid":
             if k == "g":
                 self._enter_mode("groups")
+        elif self._mode == "batch":
+            ctrl = bool(getattr(e, "ctrl", False))
+            if ctrl and k == "z":
+                self._batch_undo_last()
+            elif k in ("k",):
+                self._batch_apply_keep_rule()
+            elif k in ("d",):
+                self._batch_mark_extras()
+            elif k in ("s",):
+                self._batch_skip_group()
+            elif k == "enter":
+                self._batch_advance()
 
 
 class ReviewPageNavThemeMixin:
     def _go_back(self, e=None) -> None:
+        if self._mode == "batch":
+            self._exit_batch_review()
+            return
         if self._mode in ("compare", "grid"):
             self._enter_mode("groups")
         else:

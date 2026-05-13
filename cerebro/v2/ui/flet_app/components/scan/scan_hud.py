@@ -335,7 +335,7 @@ class ScanHUD(ft.Container):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._view_results_btn = ft.FilledButton(
-            "View Results",
+            "Open Workspace",
             icon=ft.icons.Icons.CHECK_CIRCLE,
             on_click=self._callbacks.on_view_results,
             visible=False,

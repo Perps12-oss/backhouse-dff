@@ -182,6 +182,7 @@ class StatsHeader(ft.Container):
         )
         mode_label_map = {
             "compare": "Compare",
+            "batch": "Batch",
             "grid": "Tiles",
             "groups": "Details",
             "loading": "Loading",

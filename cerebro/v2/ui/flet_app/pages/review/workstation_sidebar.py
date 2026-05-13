@@ -9,6 +9,7 @@ import flet as ft
 from cerebro.v2.ui.flet_app.components.workspace.group_navigator_rail import GroupNavigatorRail
 from cerebro.v2.ui.flet_app.pages.review._types import FILTER_TAB_ACCENTS, RC
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
+from cerebro.v2.ui.flet_app.pages.review.review_scope import REVIEW_SCOPE_LABELS
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -23,14 +24,19 @@ class ReviewWorkstationSidebar(ft.Container):
         on_group_select: Callable[[int], None] | None = None,
         on_group_search: Callable[[], None] | None = None,
         on_show_all_groups: Callable[[], None] | None = None,
+        on_review_scope_change: Callable[[str], None] | None = None,
+        footer: ft.Control | None = None,
     ) -> None:
         self._bridge = bridge
         self._t = t
         self._on_category = on_category_change
+        self._on_review_scope = on_review_scope_change or (lambda _scope: None)
         self._compare_mode = False
         self._active_key = "all"
+        self._review_scope = "all"
         self._category_rows: Dict[str, tuple[ft.Text, ft.Text, ft.Control]] = {}
         self._category_btns: list[ft.TextButton] = []
+        self._review_scope_btns: Dict[str, ft.TextButton] = {}
 
         is_light = app_theme_is_light(bridge)
         edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
@@ -56,26 +62,19 @@ class ReviewWorkstationSidebar(ft.Container):
         review_items: List[ft.Control] = [
             ft.Text("REVIEW STATE", style=header_style),
         ]
-        _review_labels = [
-            ("All groups", "Every duplicate set in this scan"),
-            ("Unreviewed", "Coming soon"),
-            ("Reviewed", "Coming soon"),
-            ("Ignored", "Coming soon"),
-            ("Overrides", "Coming soon"),
-        ]
-        for i, (lbl, tip) in enumerate(_review_labels):
-            review_items.append(
-                ft.TextButton(
-                    lbl,
-                    disabled=i > 0,
-                    tooltip=tip,
-                    style=ft.ButtonStyle(
-                        color=t.colors.fg2 if i > 0 else t.colors.fg,
-                        text_style=ft.TextStyle(size=12),
-                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-                    ),
-                )
+        for scope_key, lbl, tip in REVIEW_SCOPE_LABELS:
+            btn = ft.TextButton(
+                lbl,
+                tooltip=tip,
+                style=ft.ButtonStyle(
+                    color=t.colors.fg,
+                    text_style=ft.TextStyle(size=12),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                ),
+                on_click=lambda e, key=scope_key: self._on_review_scope_pick(key),
             )
+            self._review_scope_btns[scope_key] = btn
+            review_items.append(btn)
 
         cat_header = ft.Text("CATEGORIES", style=header_style)
         cat_list = ft.Column(spacing=2)
@@ -109,17 +108,21 @@ class ReviewWorkstationSidebar(ft.Container):
             on_show_all=on_show_all_groups or (lambda: None),
         )
 
+        body_controls: List[ft.Control] = [
+            workspace_block,
+            ft.Container(height=16),
+            *review_items,
+            ft.Container(height=16),
+            cat_header,
+            cat_list,
+            ft.Container(height=12),
+            self._group_rail,
+        ]
+        if footer is not None:
+            body_controls.append(footer)
+
         body = ft.Column(
-            [
-                workspace_block,
-                ft.Container(height=16),
-                *review_items,
-                ft.Container(height=16),
-                cat_header,
-                cat_list,
-                ft.Container(height=12),
-                self._group_rail,
-            ],
+            body_controls,
             spacing=0,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -139,6 +142,13 @@ class ReviewWorkstationSidebar(ft.Container):
             return
         self._on_category(key)
 
+    def _on_review_scope_pick(self, scope: str) -> None:
+        if self._compare_mode:
+            return
+        self._review_scope = scope
+        self._on_review_scope(scope)
+        self.set_review_scope(scope)
+
     @staticmethod
     def _safe_update(ctrl: ft.Control | None) -> None:
         if ctrl is None:
@@ -153,6 +163,19 @@ class ReviewWorkstationSidebar(ft.Container):
         self._compare_mode = on
         for b in self._category_btns:
             b.disabled = on
+        for b in self._review_scope_btns.values():
+            b.disabled = on
+        ReviewWorkstationSidebar._safe_update(self)
+
+    def set_review_scope(self, scope: str) -> None:
+        self._review_scope = scope
+        for key, btn in self._review_scope_btns.items():
+            active = key == scope
+            btn.style = ft.ButtonStyle(
+                color=self._t.colors.fg if active else self._t.colors.fg2,
+                text_style=ft.TextStyle(size=12, weight=ft.FontWeight.W_700 if active else ft.FontWeight.W_400),
+                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            )
         ReviewWorkstationSidebar._safe_update(self)
 
     def refresh_group_rail(self, groups: List, *, active_group_id: int | None = None) -> None:

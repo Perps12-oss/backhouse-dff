@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import List
 
 from cerebro.engines.base_engine import DuplicateFile
@@ -56,6 +58,33 @@ def apply_rule(rule: str, files: List[DuplicateFile]) -> DuplicateFile:
     if fn is None:
         raise ValueError(f"Unknown smart rule: {rule!r}")
     return fn(files)
+
+
+def keeper_from_filename_regex(regex: str, files: List[DuplicateFile]) -> DuplicateFile | None:
+    pattern = (regex or "").strip()
+    if not pattern:
+        return None
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return None
+    for f in files:
+        if compiled.search(Path(str(f.path)).name):
+            return f
+    return None
+
+
+def apply_rule_with_pipeline(
+    rule: str,
+    files: List[DuplicateFile],
+    *,
+    filename_regex: str = "",
+) -> DuplicateFile:
+    """Apply optional filename regex keeper before attribute smart rules."""
+    pre = keeper_from_filename_regex(filename_regex, files)
+    if pre is not None:
+        return pre
+    return apply_rule(rule, files)
 
 
 def paths_to_delete(rule: str, files: List[DuplicateFile]) -> List[str]:
