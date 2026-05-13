@@ -18,6 +18,7 @@ from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkst
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
 from cerebro.v2.ui.flet_app.design_system.animations import fade_in
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.skeleton import skeleton_card_row
 
 
 def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
@@ -101,6 +102,7 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         [
             ft.ProgressRing(width=28, height=28, stroke_width=3, color=RC.side_a),
             ft.Text("Loading review content...", color=t.colors.fg_muted, size=t.typography.size_sm),
+            skeleton_card_row(t, count=2),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=t.spacing.md,

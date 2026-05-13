@@ -13,7 +13,14 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import (
 )
 from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint
 from cerebro.v2.ui.flet_app.components.files.results_list_card import is_machine_generated_name
+from cerebro.v2.ui.flet_app.components.layout.responsive_grid import (
+    NARROW_BREAKPOINT_PX,
+    inspector_overlay_width,
+    is_narrow_viewport,
+)
+from cerebro.v2.ui.flet_app.design_system.accents import PRIMARY
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.skeleton import skeleton_block
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 import flet as ft
@@ -58,3 +65,21 @@ def test_group_path_hint_same_folder() -> None:
 def test_machine_generated_name_heuristic() -> None:
     assert is_machine_generated_name("short-name.txt") is False
     assert is_machine_generated_name("12345678901234567890123456789012345678901234567890.jpg") is True
+
+
+def test_responsive_breakpoint() -> None:
+    assert is_narrow_viewport(NARROW_BREAKPOINT_PX - 1) is True
+    assert is_narrow_viewport(NARROW_BREAKPOINT_PX) is False
+    assert inspector_overlay_width(800) is None
+    assert inspector_overlay_width(1200) == 336
+
+
+def test_skeleton_block_uses_theme() -> None:
+    t = theme_for_mode("dark")
+    block = skeleton_block(t, width=80, height=20)
+    assert block.height == 20
+    assert block.width == 80
+
+
+def test_accent_primary_token() -> None:
+    assert PRIMARY.startswith("#")
