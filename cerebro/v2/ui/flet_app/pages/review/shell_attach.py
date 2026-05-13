@@ -228,7 +228,14 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     )
     page._filter_stack_host = ft.Container(content=page._workspace_filter_stack)
 
-    page._workstation_sidebar = ReviewWorkstationSidebar(bridge, t, on_category_change=page._on_filter_changed)
+    page._workstation_sidebar = ReviewWorkstationSidebar(
+        bridge,
+        t,
+        on_category_change=page._on_filter_changed,
+        on_group_select=page._on_rail_group_selected,
+        on_group_search=page._on_rail_group_search,
+        on_show_all_groups=page._on_rail_show_all_groups,
+    )
     page._inspector_panel = ReviewInspectorPanel(
         bridge, t, on_compare_file=page._on_inspector_compare_file
     )

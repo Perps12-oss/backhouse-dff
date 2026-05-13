@@ -6,6 +6,7 @@ from typing import Callable, Dict, List
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.components.workspace.group_navigator_rail import GroupNavigatorRail
 from cerebro.v2.ui.flet_app.pages.review._types import FILTER_TAB_ACCENTS, RC
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
@@ -18,6 +19,10 @@ class ReviewWorkstationSidebar(ft.Container):
         bridge,
         t: ThemeTokens,
         on_category_change: Callable[[str], None],
+        *,
+        on_group_select: Callable[[int], None] | None = None,
+        on_group_search: Callable[[], None] | None = None,
+        on_show_all_groups: Callable[[], None] | None = None,
     ) -> None:
         self._bridge = bridge
         self._t = t
@@ -97,6 +102,13 @@ class ReviewWorkstationSidebar(ft.Container):
             self._category_btns.append(btn)
             cat_list.controls.append(ft.Container(content=btn, border_radius=8))
 
+        self._group_rail = GroupNavigatorRail(
+            t,
+            on_group_select=on_group_select or (lambda _gid: None),
+            on_search=on_group_search or (lambda: None),
+            on_show_all=on_show_all_groups or (lambda: None),
+        )
+
         body = ft.Column(
             [
                 workspace_block,
@@ -105,6 +117,8 @@ class ReviewWorkstationSidebar(ft.Container):
                 ft.Container(height=16),
                 cat_header,
                 cat_list,
+                ft.Container(height=12),
+                self._group_rail,
             ],
             spacing=0,
             scroll=ft.ScrollMode.AUTO,
@@ -140,6 +154,9 @@ class ReviewWorkstationSidebar(ft.Container):
         for b in self._category_btns:
             b.disabled = on
         ReviewWorkstationSidebar._safe_update(self)
+
+    def refresh_group_rail(self, groups: List, *, active_group_id: int | None = None) -> None:
+        self._group_rail.refresh(groups, active_group_id=active_group_id)
 
     def sync_theme(self, t: ThemeTokens) -> None:
         self._t = t

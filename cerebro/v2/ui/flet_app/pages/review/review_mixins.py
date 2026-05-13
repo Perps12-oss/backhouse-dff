@@ -818,6 +818,10 @@ class ReviewPageFilterMixin:
         stack = getattr(self, "_workspace_filter_stack", None)
         if stack is not None:
             stack.filter_bar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
+        self._workstation_sidebar.refresh_group_rail(
+            self._sorted_groups_for_current_filter(),
+            active_group_id=self._compare_gid,
+        )
         self._refresh_stats_header()
 
     def _on_workspace_text_filter(self, text: str) -> None:
@@ -843,6 +847,26 @@ class ReviewPageFilterMixin:
             pass
         if self._mode == "groups":
             self._refresh_groups_overview()
+
+    def _on_rail_group_selected(self, group_id: int) -> None:
+        if self._mode == "compare":
+            self._enter_compare(int(group_id))
+            return
+        self._enter_mode("groups")
+        self._refresh_filter_labels()
+
+    def _on_rail_group_search(self) -> None:
+        self._search_field.visible = True
+        try:
+            self._search_field.focus()
+        except Exception:
+            pass
+        safe_update(self._search_field)
+
+    def _on_rail_show_all_groups(self) -> None:
+        self._enter_mode("groups")
+        self._workspace_view_mode = "triage"
+        self._refresh_groups_overview()
 
     def _on_workspace_view_mode_changed(self, mode: str) -> None:
         self._workspace_view_mode = mode if mode in ("triage", "dashboard") else "triage"

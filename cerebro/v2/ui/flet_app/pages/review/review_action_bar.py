@@ -80,7 +80,8 @@ class ReviewActionBar(ft.Container):
         if should_show:
             self.visible = True
             self.opacity = 1.0
-            self._summary.value = f"{marked_n:,} file(s) marked · {fmt_size(marked_bytes)}"
+            self._summary.value = f"{marked_n:,} ready to clean · {fmt_size(marked_bytes)}"
+            self._summary.animate_opacity = ft.Animation(220, ft.AnimationCurve.EASE_OUT)
             self._trust.value = trust_line
         else:
             self.opacity = 0.0
