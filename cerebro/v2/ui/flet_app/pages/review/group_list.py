@@ -8,7 +8,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review._types import RC
-from cerebro.v2.ui.flet_app.pages.review.group_card import group_duplicate_summary, group_path_hint
+from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 

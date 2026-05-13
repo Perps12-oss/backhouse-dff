@@ -6,17 +6,18 @@ from typing import Any
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.components.smart_selection import SmartSelectionRow
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
 from cerebro.v2.ui.flet_app.pages.review.inspector_panel import ReviewInspectorPanel
 from cerebro.v2.ui.flet_app.pages.review.review_action_bar import ReviewActionBar
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
 from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkstationSidebar
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, glass_container
+from cerebro.v2.ui.flet_app.design_system.animations import fade_in
+from cerebro.v2.ui.flet_app.design_system.glass import glass_container
 
 
 def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
@@ -37,36 +38,15 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
     )
     page._grid = page._grid_view.grid
 
-    page._smart_seg = ft.SegmentedButton(
-        selected=["keep_largest"],
-        allow_multiple_selection=False,
-        on_change=page._on_smart_seg_change,
-        segments=[
-            ft.Segment(value=val, label=ft.Text(label, size=12, weight=ft.FontWeight.W_600))
-            for val, label in RULE_LABELS
-        ],
+    page._smart_row = SmartSelectionRow(
+        t,
+        variant="review",
+        on_rule_change=page._on_smart_seg_change,
+        on_apply=page._apply_smart_select_review,
+        on_clear=page._deselect_all,
+        extra_controls=[page._grid_view.zoom_row],
     )
-    page._btn_smart_select_all = ft.TextButton(
-        "Select All per Rule",
-        icon=ft.icons.Icons.CHECK_BOX_OUTLINED,
-        on_click=page._apply_smart_select_review,
-        style=pill_text_button_style(t, variant="muted"),
-        tooltip="Apply the active smart rule to mark files across all groups.",
-    )
-    page._btn_deselect_all = ft.TextButton(
-        "Clear Selection",
-        icon=ft.icons.Icons.CHECK_BOX_OUTLINE_BLANK,
-        on_click=page._deselect_all,
-        style=pill_text_button_style(t, variant="muted"),
-        tooltip="Remove all file selections.",
-    )
-    page._smart_row = ft.Row(
-        [page._smart_seg, page._btn_smart_select_all, page._btn_deselect_all, page._grid_view.zoom_row],
-        spacing=t.spacing.sm,
-        visible=False,
-        wrap=True,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-    )
+    page._smart_seg = page._smart_row.smart_seg
 
 
 def _attach_compare_and_content(page: Any, t: ThemeTokens, bridge: Any) -> None:
@@ -95,35 +75,39 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         color=t.colors.fg_muted,
         text_align=ft.TextAlign.CENTER,
     )
+    empty_column = ft.Column(
+        [
+            ft.Container(
+                content=ft.Icon(ft.icons.Icons.GRID_VIEW, size=44, color=RC.side_a),
+                bgcolor=ft.Colors.with_opacity(0.08, RC.side_a),
+                border_radius=16,
+                padding=20,
+            ),
+            page._empty_title_lbl,
+            page._empty_body_lbl,
+            page._empty_go_home_btn,
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=t.spacing.lg,
+    )
+    fade_in(empty_column)
     page._empty_state = glass_container(
-        content=ft.Column(
-            [
-                ft.Container(
-                    content=ft.Icon(ft.icons.Icons.GRID_VIEW, size=44, color=RC.side_a),
-                    bgcolor=ft.Colors.with_opacity(0.08, RC.side_a),
-                    border_radius=16,
-                    padding=20,
-                ),
-                page._empty_title_lbl,
-                page._empty_body_lbl,
-                page._empty_go_home_btn,
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=t.spacing.lg,
-        ),
+        content=empty_column,
         expand=True,
         alignment=ft.Alignment(0, 0),
         t=t,
     )
+    loading_column = ft.Column(
+        [
+            ft.ProgressRing(width=28, height=28, stroke_width=3, color=RC.side_a),
+            ft.Text("Loading review content...", color=t.colors.fg_muted, size=t.typography.size_sm),
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=t.spacing.md,
+    )
+    fade_in(loading_column)
     page._loading_state = glass_container(
-        content=ft.Column(
-            [
-                ft.ProgressRing(width=28, height=28, stroke_width=3, color=RC.side_a),
-                ft.Text("Loading review content...", color=t.colors.fg_muted, size=t.typography.size_sm),
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=t.spacing.md,
-        ),
+        content=loading_column,
         expand=True,
         alignment=ft.Alignment(0, 0),
         t=t,

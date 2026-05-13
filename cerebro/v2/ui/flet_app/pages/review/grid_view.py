@@ -12,8 +12,13 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Set
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile
+from cerebro.v2.ui.flet_app.components.common.chunked_view import (
+    REVIEW_GRID_FILES_CHUNK,
+    REVIEW_GRID_FILES_CHUNK_CONFIG,
+    ChunkedViewBuilder,
+)
+from cerebro.v2.ui.flet_app.components.common.thumbnail_loader import ThumbnailSlotLoader
 from cerebro.v2.ui.flet_app.pages.review._types import RC
-from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
@@ -21,9 +26,9 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_GRID_BUILD_ASYNC_THRESHOLD = 220
-_GRID_FIRST_SYNC_FILES = 20
-_GRID_ASYNC_BATCH = 30
+_GRID_BUILD_ASYNC_THRESHOLD = REVIEW_GRID_FILES_CHUNK.async_threshold
+_GRID_FIRST_SYNC_FILES = REVIEW_GRID_FILES_CHUNK.first_sync_count
+_GRID_ASYNC_BATCH = REVIEW_GRID_FILES_CHUNK.batch_size
 _UI_SLOW_MS = 80.0
 
 # Grid tile max_extent (Flet GridView) — aligned with Explorer-style icon size names.
@@ -66,6 +71,8 @@ class ReviewGridView(ft.Stack):
         self._last_keep_paths: set[str] = set()
         self._grid_build_generation = 0
         self._thumb_load_generation = 0
+        self._chunked = ChunkedViewBuilder(bridge.flet_page, REVIEW_GRID_FILES_CHUNK_CONFIG)
+        self._thumb_loader = ThumbnailSlotLoader(safe_update=ReviewGridView._safe_update)
 
         self._grid = ft.GridView(
             expand=True,
@@ -322,64 +329,33 @@ class ReviewGridView(ft.Stack):
         self._last_keep_paths = kp
         self.bump_thumb_generation()
         load_gen = self._thumb_load_generation
-        n = len(files)
-        if n <= _GRID_BUILD_ASYNC_THRESHOLD:
-            self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths, kp) for f in files]
-            self.set_rendering(False)
-            self._safe_update(self._grid)
-            page = self._bridge.flet_page
-            if files and hasattr(page, "run_task"):
-                page.run_task(self._load_thumbnails_async, list(files), load_gen)
-            self._log_if_slow("review:grid_refresh", _t0)
-            return
-
-        self.set_rendering(True)
-        gen = self._grid_build_generation
-        head_n = min(_GRID_FIRST_SYNC_FILES, n)
-        head = files[:head_n]
-        tail = files[head_n:]
-        self._grid.controls = [self._tile_for_file_placeholder(f, marked_paths, kp) for f in head]
-        self._safe_update(self._grid)
-        try:
-            self._grid.update()
-        except Exception:
-            pass
+        cfg = REVIEW_GRID_FILES_CHUNK
         page = self._bridge.flet_page
-        if tail and hasattr(page, "run_task"):
-            page.run_task(self._append_grid_tiles_async, tail, gen, list(files), marked_paths, kp)
-        elif tail:
-            self._grid.controls.extend([self._tile_for_file_placeholder(f, marked_paths, kp) for f in tail])
-            self._safe_update(self._grid)
-            self.set_rendering(False)
+
+        def _start_thumbnails() -> None:
             if files and hasattr(page, "run_task"):
                 page.run_task(self._load_thumbnails_async, list(files), load_gen)
-        self._log_if_slow("review:grid_refresh", _t0)
 
-    async def _append_grid_tiles_async(
-        self,
-        tail: List[DuplicateFile],
-        gen: int,
-        all_files: List[DuplicateFile],
-        marked_paths: Set[str],
-        keep_paths: Set[str],
-    ) -> None:
-        for i in range(0, len(tail), _GRID_ASYNC_BATCH):
-            if gen != self._grid_build_generation:
-                return
-            chunk = tail[i : i + _GRID_ASYNC_BATCH]
-            self._grid.controls.extend(
-                [self._tile_for_file_placeholder(f, marked_paths, keep_paths) for f in chunk]
-            )
-            try:
-                self._grid.update()
-            except Exception:
-                pass
-            await asyncio.sleep(0)
-        if gen == self._grid_build_generation:
+        def on_complete() -> None:
             self.set_rendering(False)
-            page = self._bridge.flet_page
-            if all_files and hasattr(page, "run_task"):
-                page.run_task(self._load_thumbnails_async, list(all_files), self._thumb_load_generation)
+            _start_thumbnails()
+
+        def on_abort() -> None:
+            self.set_rendering(False)
+
+        if len(files) > cfg.async_threshold:
+            self.set_rendering(True)
+
+        self._chunked.render(
+            self._grid,
+            files,
+            config=REVIEW_GRID_FILES_CHUNK_CONFIG,
+            card_builder=lambda f, _i: self._tile_for_file_placeholder(f, marked_paths, kp),
+            on_complete=on_complete,
+            on_abort=on_abort,
+            force_sync=len(files) <= cfg.async_threshold,
+        )
+        self._log_if_slow("review:grid_refresh", _t0)
 
     def _tile_info_footer(self, f: DuplicateFile, p: Path, t: ThemeTokens) -> ft.Container:
         return ft.Container(
@@ -521,15 +497,9 @@ class ReviewGridView(ft.Stack):
         )
 
     async def _load_thumbnails_async(self, files: List[DuplicateFile], load_gen: int) -> None:
-        pending: list[tuple[ft.Container, str]] = []
         decode_edge = self._thumb_decode_max_edge()
 
-        async def _on_ready(path: Path, b64: str | None) -> None:
-            if load_gen != self._thumb_load_generation or not self._is_grid_mode():
-                return
-            if not b64:
-                _log.debug("grid thumb: empty payload for %r", ReviewGridView._thumb_slot_key(path))
-                return
+        def _slot_for_path(path: Path) -> ft.Container | None:
             key = ReviewGridView._thumb_slot_key(path)
             if key not in self._tile_cache:
                 _log.debug(
@@ -537,33 +507,19 @@ class ReviewGridView(ft.Stack):
                     key,
                     len(self._tile_cache),
                 )
-                return
-            thumb_slot = self._thumb_slots.get(key)
-            if thumb_slot is None:
-                _log.debug("grid thumb: missing slot for key %r", key)
-                return
-            pending.append((thumb_slot, b64))
-            if len(pending) >= 8:
-                _apply_t0 = time.perf_counter()
-                for slot, thumb_b64 in pending:
-                    slot.content = self._thumb_image_control(thumb_b64)
-                pending.clear()
-                if load_gen == self._thumb_load_generation and self._is_grid_mode():
-                    self._safe_update(self._grid)
-                    self._safe_update(self)
-                self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
-                await asyncio.sleep(0)
+                return None
+            return self._thumb_slots.get(key)
 
-        paths = [Path(str(f.path)) for f in files]
-        await get_thumbnail_cache().load_batch_async(paths, _on_ready, max_edge=decode_edge)
-        if load_gen != self._thumb_load_generation or not self._is_grid_mode():
-            return
-        if pending:
-            _apply_t0 = time.perf_counter()
-            for slot, thumb_b64 in pending:
-                slot.content = self._thumb_image_control(thumb_b64)
-            if load_gen == self._thumb_load_generation and self._is_grid_mode():
-                self._safe_update(self._grid)
-                self._safe_update(self)
-            self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
+        await self._thumb_loader.load_into_slots(
+            slot_for_path=_slot_for_path,
+            paths=[Path(str(f.path)) for f in files],
+            image_for_b64=self._thumb_image_control,
+            is_current=lambda: load_gen == self._thumb_load_generation and self._is_grid_mode(),
+            batch_size=8,
+            hosts=(self._grid, self),
+            max_edge=decode_edge,
+            log_slow=self._log_if_slow,
+            slow_label="review:thumbnail_batch_apply",
+            slow_ms=_UI_SLOW_MS,
+        )
 

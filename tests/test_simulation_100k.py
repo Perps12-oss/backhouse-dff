@@ -100,7 +100,7 @@ class TestSimulation100k:
 
         state = store.get_state()
         assert state.mode == AppMode.RESULTS
-        assert state.active_tab == "duplicates"
+        assert state.active_tab == "review"
         assert len(state.groups) == 100_000
         print(f"\n  ScanCompleted dispatch: {elapsed*1000:.1f}ms")
 

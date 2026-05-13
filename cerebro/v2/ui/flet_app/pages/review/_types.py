@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Literal
 
+from cerebro.v2.ui.flet_app.components.filters.filter_bar import FILTER_TAB_ACCENTS
+
 ReviewMode = Literal["empty", "loading", "groups", "grid", "compare"]
 
 
@@ -36,13 +38,3 @@ class ReviewColors:
 
 
 RC = ReviewColors()
-
-FILTER_TAB_ACCENTS: Dict[str, str] = {
-    "all": RC.filter_all,
-    "pictures": RC.filter_pictures,
-    "music": RC.filter_music,
-    "videos": RC.filter_videos,
-    "documents": RC.filter_documents,
-    "archives": RC.filter_archives,
-    "other": RC.info,
-}

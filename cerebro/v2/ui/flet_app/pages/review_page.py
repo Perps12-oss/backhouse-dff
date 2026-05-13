@@ -1,4 +1,8 @@
-"""Review page — visual grid + side-by-side compare for duplicate groups with glass morphism."""
+"""Review page — visual grid + side-by-side compare for duplicate groups with glass morphism.
+
+Workspace shell is assembled in ``pages/review/shell_attach.py``; behavior lives in
+``pages/review/review_mixins.py`` and subviews (grid, compare, inspector).
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+from cerebro.v2.ui.flet_app.components.common.chunked_view import ChunkedViewBuilder, REVIEW_GROUPS_CHUNK_CONFIG
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
@@ -82,7 +87,7 @@ class ReviewPage(
         self._compare_nav_in_flight = False
         self._selected_group_id: Optional[int] = None
         self._selected_file: Optional[DuplicateFile] = None
-        self._groups_build_generation: int = 0
+        self._groups_chunked = ChunkedViewBuilder(self._bridge.flet_page, REVIEW_GROUPS_CHUNK_CONFIG)
         self._search_query: str = ""
         # Sum of group.reclaimable for current result set; invalidated when ``_groups`` is replaced.
         self._total_reclaimable_scan: int = 0

@@ -8,7 +8,7 @@ from pathlib import Path
 
 def _results_page_ast() -> ast.Module:
     root = Path(__file__).resolve().parent.parent
-    path = root / "cerebro" / "v2" / "ui" / "flet_app" / "pages" / "results_page.py"
+    path = root / "cerebro" / "v2" / "ui" / "flet_app" / "pages" / "legacy" / "results_page.py"
     return ast.parse(path.read_text(encoding="utf-8"))
 
 

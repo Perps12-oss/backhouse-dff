@@ -12,8 +12,9 @@ import flet as ft
 
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.ui.flet_app.components.common.chunked_view import REVIEW_GROUPS_CHUNK_CONFIG
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
-from cerebro.v2.ui.flet_app.pages.review.group_card import build_group_card
+from cerebro.v2.ui.flet_app.components.files.group_card import build_group_card
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
@@ -42,9 +43,6 @@ def _marked_bytes_total(groups: List[DuplicateGroup], marked_paths: Set[str]) ->
             if str(f.path) in marked_paths:
                 total += int(getattr(f, "size", 0) or 0)
     return total
-_GROUPS_FIRST_SYNC = 40
-_GROUPS_ASYNC_BATCH = 40
-
 
 class ReviewPageChromeMixin:
     @staticmethod
@@ -358,8 +356,6 @@ class ReviewPageGroupsGridMixin:
             self._refresh_stats_header()
 
     def _refresh_groups_overview(self) -> None:
-        self._groups_build_generation += 1
-        gen = self._groups_build_generation
         filtered_groups = self._sorted_groups_for_current_filter()
         _log.debug(
             "_refresh_groups_overview: total=%d filtered=%d filter_key=%r",
@@ -368,37 +364,19 @@ class ReviewPageGroupsGridMixin:
             self._filter_key,
         )
         total_r = sum(int(getattr(x, "reclaimable", 0) or 0) for x in self._groups) or 1
-        head = filtered_groups[:_GROUPS_FIRST_SYNC]
-        tail = filtered_groups[_GROUPS_FIRST_SYNC:]
-        cards: list = [self._build_group_card(g, i, total_r) for i, g in enumerate(head)]
-        self._groups_overview.controls = cards
-        safe_update(self._groups_overview)
-        safe_update(self._content)
-        if tail:
-            page = self._bridge.flet_page
-            if hasattr(page, "run_task"):
-                page.run_task(self._append_groups_async, tail, gen, len(head), total_r)
-            else:
-                extra = [self._build_group_card(g, len(head) + i, total_r) for i, g in enumerate(tail)]
-                self._groups_overview.controls.extend(extra)
-                safe_update(self._groups_overview)
 
-    async def _append_groups_async(
-        self, tail: List[DuplicateGroup], gen: int, start_idx: int, total_r: int
-    ) -> None:
-        for i in range(0, len(tail), _GROUPS_ASYNC_BATCH):
-            if gen != self._groups_build_generation:
-                return
-            chunk = tail[i : i + _GROUPS_ASYNC_BATCH]
-            new_cards = [
-                self._build_group_card(g, start_idx + i + j, total_r) for j, g in enumerate(chunk)
-            ]
-            self._groups_overview.controls.extend(new_cards)
-            try:
-                self._groups_overview.update()
-            except Exception:
-                pass
-            await asyncio.sleep(0)
+        def after_chunk() -> None:
+            safe_update(self._groups_overview)
+
+        self._groups_chunked.render(
+            self._groups_overview,
+            filtered_groups,
+            config=REVIEW_GROUPS_CHUNK_CONFIG,
+            card_builder=lambda g, i: self._build_group_card(g, i, total_r),
+            after_chunk=after_chunk,
+            on_complete=after_chunk,
+        )
+        safe_update(self._content)
 
     def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
         self._group_sort_key = str(e.control.value or "files_desc")

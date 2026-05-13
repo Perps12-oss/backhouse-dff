@@ -16,7 +16,8 @@ from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDe
 from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size, glass_container
+from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge

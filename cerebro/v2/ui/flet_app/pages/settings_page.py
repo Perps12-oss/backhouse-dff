@@ -10,7 +10,8 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
-from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode, glass_container
+from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge

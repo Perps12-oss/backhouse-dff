@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.theme import fmt_size as _fmt, theme_for_mode, glass_container
+from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.theme import fmt_size as _fmt, theme_for_mode
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
