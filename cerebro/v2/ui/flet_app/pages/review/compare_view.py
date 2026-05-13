@@ -130,8 +130,7 @@ class ReviewCompareView:
 
         self.body = ft.Column(
             [
-                self._filmstrip,
-                self._ab_row,
+                ft.Container(content=self._ab_row, height=_COMPARE_ROW_HEIGHT),
                 self._metadata_strip,
                 ft.Container(
                     content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6, tight=True),
@@ -139,10 +138,10 @@ class ReviewCompareView:
                 ),
                 self._marked_bar,
             ],
-            expand=True,
+            expand=False,
             visible=False,
             spacing=8,
-            scroll=None,
+            scroll=ft.ScrollMode.AUTO,
         )
 
     def _build_cmp_bar_container(self, t: ThemeTokens) -> ft.Container:

@@ -179,11 +179,13 @@ class ReviewPageModeMixin:
             # Collapse layout + decoration so the Row cannot paint an invisible 336px strip
             # on top of the center column on overflow (Flet desktop compositor quirk).
             self._inspector_panel.width = 0
+            self._inspector_panel.expand = False
             self._inspector_panel.padding = ft.padding.all(0)
             self._inspector_panel.border = None
         else:
             self._inspector_panel.visible = True
             self._inspector_panel.width = 336
+            self._inspector_panel.expand = False
             self._inspector_panel.padding = ft.padding.all(14)
             edge = ft.Colors.with_opacity(
                 0.12, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE
@@ -191,6 +193,9 @@ class ReviewPageModeMixin:
             self._inspector_panel.border = ft.border.only(left=ft.BorderSide(1, edge))
 
         self._smart_host.visible = mode in ("groups", "grid")
+        filter_host = getattr(self, "_filter_stack_host", None)
+        if filter_host is not None:
+            filter_host.visible = mode in ("groups", "grid")
 
         if mode == "empty":
             self._content.controls.append(self._empty_state)
@@ -218,10 +223,12 @@ class ReviewPageModeMixin:
             if mode == "compare":
                 self._compare_view.visible = True
                 slot.content = self._compare_view
+                slot.alignment = ft.Alignment(-1, -1)
             else:
                 self._compare_view.visible = False
                 self._content_frame.content = self._content
                 slot.content = self._content_frame
+                slot.alignment = ft.Alignment(0, 0)
 
         try:
             _log.debug(
@@ -245,6 +252,7 @@ class ReviewPageModeMixin:
         safe_update(self._group_sort_row)
         safe_update(self._workstation_sidebar)
         safe_update(self._inspector_panel)
+        safe_update(getattr(self, "_filter_stack_host", None))
         safe_update(getattr(self, "_workspace_slot", None))
         safe_update(self._center_column)
         self._refresh_stats_header()
