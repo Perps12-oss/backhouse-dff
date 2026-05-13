@@ -253,6 +253,11 @@ class ReviewPage(
     def on_show(self) -> None:
         self._reduce_motion = self._bridge.is_reduce_motion_enabled()
         self._grid_view.set_reduce_motion(self._reduce_motion)
+        try:
+            page_width = getattr(self._bridge.flet_page, "width", None)
+            self._inspector_panel.apply_viewport_width(page_width)
+        except Exception:
+            pass
         self._marked_paths = set(self._bridge.state.selected_files)
         self._recompute_marked_bytes()
         # If the store already has scan results but this singleton never received them

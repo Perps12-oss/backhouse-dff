@@ -404,6 +404,28 @@ class StateBridge:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def add_exclude_path(self, path: str) -> bool:
+        """Append a path to the persisted exclude list and confirm via snackbar."""
+        raw = str(path or "").strip()
+        if not raw:
+            return False
+        try:
+            settings = self.get_settings()
+            if not isinstance(settings, dict):
+                settings = {}
+            general = settings.setdefault("general", {})
+            paths = list(general.get("exclude_list", []))
+            if raw not in paths:
+                paths.append(raw)
+            general["exclude_list"] = paths
+            self.save_settings(settings)
+            self.show_snackbar(f"Added to exclude list: {raw}", success=True)
+            return True
+        except Exception:
+            _log.exception("add_exclude_path failed")
+            self.show_snackbar("Could not update exclude list.", info=True)
+            return False
+
     def is_reduce_motion_enabled(self) -> bool:
         settings = self.get_settings()
         accessibility = settings.get("accessibility") if isinstance(settings, dict) else {}

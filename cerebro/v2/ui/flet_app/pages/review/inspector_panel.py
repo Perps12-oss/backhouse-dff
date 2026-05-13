@@ -9,6 +9,7 @@ from typing import Optional, Set
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.ui.flet_app.components.layout.responsive_grid import inspector_overlay_width
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, apply_rule, normalized_rule
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
@@ -78,7 +79,18 @@ class ReviewInspectorPanel(ft.Container):
             border=ft.border.only(left=ft.BorderSide(1, edge)),
             padding=ft.padding.all(14),
             content=self._scroll_col,
+            animate_offset=ft.Animation(240, ft.AnimationCurve.EASE_OUT),
         )
+
+    def apply_viewport_width(self, page_width: float | int | None) -> None:
+        overlay_width = inspector_overlay_width(page_width, default=336)
+        if overlay_width is None:
+            self.width = None
+            self.expand = True
+        else:
+            self.width = overlay_width
+            self.expand = False
+        ReviewInspectorPanel._safe_update(self)
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -405,6 +417,25 @@ class ReviewInspectorPanel(ft.Container):
                 ),
             ]
 
+        controls += [
+            _divider(is_light),
+            _section_header("Quick actions", t),
+            ft.Row(
+                [
+                    ft.TextButton(
+                        "Add to exclude list",
+                        on_click=lambda _e, path=str(p): self._bridge.add_exclude_path(path),
+                    ),
+                    ft.TextButton(
+                        "Copy path",
+                        on_click=lambda _e, path=str(p): self._copy_path(path),
+                    ),
+                ],
+                wrap=True,
+                spacing=6,
+            ),
+        ]
+
         if self._on_compare_file is not None:
             captured_f = f
 
@@ -437,6 +468,13 @@ class ReviewInspectorPanel(ft.Container):
         self._scroll_col.controls = controls
         self._scroll_col.opacity = 1.0
         self._safe_update()
+
+    def _copy_path(self, path: str) -> None:
+        try:
+            self._bridge.flet_page.set_clipboard(path)
+            self._bridge.show_snackbar("Path copied to clipboard.", success=True)
+        except Exception:
+            self._bridge.show_snackbar("Could not copy path.", info=True)
 
     def _safe_update(self) -> None:
         try:
