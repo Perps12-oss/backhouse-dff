@@ -1,8 +1,7 @@
-"""Compare mode: nav bar, group list, A/B panels, progress and marked summary."""
+"""Compare mode: cmp bar + minimal A/B workspace (fixed layout for Flet desktop)."""
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
 import time
@@ -15,9 +14,9 @@ from cerebro.engines.base_engine import DuplicateFile
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegate
 from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
-from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size, glass_container
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -25,18 +24,20 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
 
-_LEFT_NAV_WIDTH = 236
+# Stripped compare: pixel-sized Row/Column only (no expand-in-AB-row, no glass body).
+_COMPARE_PREVIEW_SLOT_HEIGHT = 300
+_COMPARE_PREVIEW_SLOT_WIDTH = 420
+_COMPARE_ROW_HEIGHT = 360
+_COMPARE_PANEL_W = _COMPARE_PREVIEW_SLOT_WIDTH + 20
 
 
 class ReviewCompareView:
-    """Compare UI: top ``cmp_bar`` plus scrollable body (group list + A/B)."""
+    """Compare UI: ``cmp_bar`` plus a minimal body (A/B row, progress, marked strip)."""
 
     def __init__(self, delegate: ReviewCompareDelegate, bridge: "StateBridge", t: ThemeTokens) -> None:
         self._del = delegate
         self._bridge = bridge
         self._t = t
-        self._compare_render_generation = 0
-        self._compare_thumb_slots: Dict[str, ft.Container] = {}
         self._compare_mark_checkboxes: Dict[str, ft.Checkbox] = {}
 
         self._cmp_title = ft.Text("", size=t.typography.size_sm, color=t.colors.fg, weight=ft.FontWeight.W_600)
@@ -67,37 +68,73 @@ class ReviewCompareView:
 
         self._group_list = GroupListPanel(t)
         self._group_list_panel = self._group_list.list_view
-        self._group_list_scroll_host = ft.Container(
-            content=self._group_list_panel,
-            expand=True,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+
+        edge = ft.border.all(1, t.colors.border3)
+        self._compare_panel_a = ft.Container(
+            content=self._compare_side_empty_column("A", t),
+            width=_COMPARE_PANEL_W,
+            padding=t.spacing.sm,
+            border=edge,
+            bgcolor=None,
         )
-        left_panel = self._build_left_nav_panel(t)
-        self._compare_panel_a = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
-        self._compare_panel_b = ft.Container(expand=True, padding=t.spacing.md, **self._del.get_glass_style(0.04))
-        right_view = self._build_ab_row_container(t)
-        self._init_progress_and_marked_strip(t)
-        self._compare_main_row = ft.Row(
-            [left_panel, right_view],
-            expand=True,
+        self._compare_panel_b = ft.Container(
+            content=self._compare_side_empty_column("B", t),
+            width=_COMPARE_PANEL_W,
+            padding=t.spacing.sm,
+            border=edge,
+            bgcolor=None,
+        )
+        div = ft.Container(
+            content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
+            padding=ft.Padding.symmetric(horizontal=t.spacing.sm),
+        )
+        self._ab_row = ft.Row(
+            [self._compare_panel_a, div, self._compare_panel_b],
+            height=_COMPARE_ROW_HEIGHT,
             vertical_alignment=ft.CrossAxisAlignment.START,
-            spacing=t.spacing.sm,
+            spacing=0,
         )
+        self._init_progress_and_marked_strip(t)
+        # Orphan controls: refresh_* still update them if we re-mount chips/metadata later.
+        self._file_selector_row = ft.Row([], spacing=6, tight=True)
+        self._file_selector_container = ft.Container(content=self._file_selector_row, visible=False)
+        self._meta_col_a = ft.Column([], spacing=3, tight=True)
+        self._meta_col_b = ft.Column([], spacing=3, tight=True)
+        self._metadata_strip = ft.Container(
+            content=ft.Row(
+                [
+                    self._meta_col_a,
+                    ft.Container(
+                        width=1,
+                        bgcolor=ft.Colors.with_opacity(0.2, t.colors.border),
+                        margin=ft.margin.symmetric(horizontal=8),
+                    ),
+                    self._meta_col_b,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.Padding.symmetric(vertical=4, horizontal=4),
+            visible=False,
+        )
+
         self.body = ft.Column(
             [
-                ft.Container(content=self._compare_main_row, expand=True),
+                self._ab_row,
+                self._metadata_strip,
                 ft.Container(
-                    content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6),
-                    padding=ft.Padding.symmetric(horizontal=t.spacing.sm),
+                    content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6, tight=True),
+                    padding=ft.Padding.symmetric(horizontal=8),
                 ),
                 self._marked_bar,
             ],
             expand=True,
             visible=False,
+            spacing=8,
+            scroll=None,
         )
 
     def _build_cmp_bar_container(self, t: ThemeTokens) -> ft.Container:
-        return ft.Container(
+        return glass_container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -119,90 +156,10 @@ class ReviewCompareView:
                 ],
                 spacing=t.spacing.xs,
             ),
+            t=t,
             visible=False,
             padding=t.spacing.sm,
-            **self._del.get_glass_style(0.04),
         )
-
-    def _build_left_nav_panel(self, t: ThemeTokens) -> ft.Container:
-        return ft.Container(
-            width=_LEFT_NAV_WIDTH,
-            padding=t.spacing.sm,
-            content=ft.Column(
-                [
-                    ft.Text("Jump to group", size=t.typography.size_sm, weight=ft.FontWeight.W_700),
-                    self._group_list_scroll_host,
-                ],
-                spacing=t.spacing.xs,
-                expand=True,
-            ),
-            **self._del.get_glass_style(0.04),
-        )
-
-    def _build_ab_row_container(self, t: ThemeTokens) -> ft.Container:
-        # File pair selector — chips for each file in group; visible only for 3+ file groups.
-        self._file_selector_row = ft.Row(
-            [],
-            spacing=6,
-            scroll=ft.ScrollMode.AUTO,
-            wrap=False,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-        self._file_selector_container = ft.Container(
-            content=self._file_selector_row,
-            padding=ft.Padding.symmetric(vertical=6, horizontal=4),
-            visible=False,
-            border=ft.border.only(
-                bottom=ft.BorderSide(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE))
-            ),
-        )
-
-        ab_row = ft.Row(
-            [
-                self._compare_panel_a,
-                ft.Container(
-                    content=ft.VerticalDivider(width=1, color=t.colors.border3, thickness=2),
-                    padding=ft.Padding.symmetric(horizontal=t.spacing.sm),
-                ),
-                self._compare_panel_b,
-            ],
-            expand=True,
-            spacing=0,
-        )
-
-        # Metadata diff strip — side-by-side key attributes for A and B.
-        self._meta_col_a = ft.Column([], spacing=3, expand=True)
-        self._meta_col_b = ft.Column([], spacing=3, expand=True)
-        self._metadata_strip = ft.Container(
-            content=ft.Row(
-                [
-                    self._meta_col_a,
-                    ft.Container(
-                        width=1,
-                        bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
-                        margin=ft.margin.symmetric(horizontal=8),
-                    ),
-                    self._meta_col_b,
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
-            padding=ft.Padding.symmetric(vertical=8, horizontal=8),
-            border=ft.border.only(
-                top=ft.BorderSide(1, ft.Colors.with_opacity(0.08, ft.Colors.WHITE))
-            ),
-            visible=False,
-        )
-
-        self._right_column = ft.Column(
-            [
-                self._file_selector_container,
-                ft.Container(content=ab_row, expand=True),
-                self._metadata_strip,
-            ],
-            expand=True,
-            spacing=0,
-        )
-        return ft.Container(content=self._right_column, expand=True)
 
     def _init_progress_and_marked_strip(self, t: ThemeTokens) -> None:
         self._progress_bar = ft.ProgressBar(
@@ -224,7 +181,7 @@ class ReviewCompareView:
             border=ft.border.only(top=ft.BorderSide(1, RC.danger)),
             content=ft.Column(
                 [
-                    ft.Container(content=self._marked_lbl, expand=True),
+                    self._marked_lbl,
                     self._marked_safety_lbl,
                 ],
                 spacing=t.spacing.xs,
@@ -252,6 +209,40 @@ class ReviewCompareView:
         if elapsed_ms > _UI_SLOW_MS:
             _log.debug("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
 
+    @staticmethod
+    def _page_set(ctrl: ft.Control | None) -> bool:
+        if ctrl is None:
+            return False
+        try:
+            return ctrl.page is not None
+        except RuntimeError:
+            return False
+
+    def _debug_compare_state(self, label: str) -> None:
+        """High-signal diagnostics for blank compare-canvas reports."""
+        try:
+            gid = self._del.compare_gid
+            files = self._del.group_files.get(gid, []) if gid is not None else []
+            a = str(getattr(self._del.compare_a, "path", "")) if self._del.compare_a else None
+            b = str(getattr(self._del.compare_b, "path", "")) if self._del.compare_b else None
+            body_controls = len(getattr(self.body, "controls", []) or [])
+            _log.debug(
+                "[COMPARE_DEBUG] %s gid=%r files=%s body_visible=%s body_page=%s "
+                "body_controls=%s panel_a_page=%s panel_b_page=%s a=%r b=%r",
+                label,
+                gid,
+                len(files),
+                getattr(self.body, "visible", None),
+                self._page_set(self.body),
+                body_controls,
+                self._page_set(self._compare_panel_a),
+                self._page_set(self._compare_panel_b),
+                a,
+                b,
+            )
+        except Exception:
+            _log.debug("[COMPARE_DEBUG] %s failed to collect state", label, exc_info=True)
+
     def sync_theme(self, t: ThemeTokens) -> None:
         self._t = t
         self._group_list.sync_theme(t)
@@ -272,9 +263,8 @@ class ReviewCompareView:
             )
 
     def apply_cmp_bar_glass(self) -> None:
-        g = self._del.get_glass_style(0.04)
-        self.cmp_bar.bgcolor = g.get("bgcolor")
-        self.cmp_bar.border = g.get("border")
+        self.cmp_bar.bgcolor = self._t.colors.glass_bg
+        self.cmp_bar.border = ft.border.all(1, self._t.colors.glass_border)
 
     def refresh_group_list_panel(self) -> None:
         self._group_list.refresh(
@@ -286,18 +276,19 @@ class ReviewCompareView:
 
     def update_compare_panels(self) -> None:
         _t0 = time.perf_counter()
-        self._compare_render_generation += 1
-        gen = self._compare_render_generation
-        self._compare_thumb_slots.clear()
+        self._debug_compare_state("update_compare_panels:start")
         self._compare_mark_checkboxes.clear()
-        self._compare_panel_a.content = self._build_compare_side(self._del.compare_a, "A", gen)
-        self._compare_panel_b.content = self._build_compare_side(self._del.compare_b, "B", gen)
+        self._compare_panel_a.content = self._build_compare_side(self._del.compare_a, "A")
+        self._compare_panel_b.content = self._build_compare_side(self._del.compare_b, "B")
         self.apply_compare_panel_tints()
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
         self._refresh_file_selector()
         self._refresh_metadata_strip()
         self.update_progress_and_marked_bar()
+        self._safe_update(self._ab_row)
+        self._safe_update(self.body)
+        self._debug_compare_state("update_compare_panels:end")
         self._log_if_slow("review:compare_panel_update", _t0)
 
     def refresh_compare_marks(self) -> None:
@@ -321,7 +312,6 @@ class ReviewCompareView:
         else:
             self._file_selector_container.visible = False
         self._safe_update(self._file_selector_container)
-        self._safe_update(self._right_column)
 
     def _build_file_chips(
         self,
@@ -388,13 +378,11 @@ class ReviewCompareView:
         if a is None and b is None:
             self._metadata_strip.visible = False
             self._safe_update(self._metadata_strip)
-            self._safe_update(self._right_column)
             return
         self._meta_col_a.controls = self._build_meta_col_controls(a, RC.side_a)
         self._meta_col_b.controls = self._build_meta_col_controls(b, RC.side_b)
         self._metadata_strip.visible = True
         self._safe_update(self._metadata_strip)
-        self._safe_update(self._right_column)
 
     def _build_meta_col_controls(self, f: Optional[DuplicateFile], accent: str) -> List[ft.Control]:
         t = self._t
@@ -426,17 +414,17 @@ class ReviewCompareView:
         ]
 
     def apply_compare_panel_tints(self) -> None:
-        self._compare_panel_a.bgcolor = ft.Colors.with_opacity(0.10, RC.side_a)
-        self._compare_panel_a.border = ft.border.all(1, ft.Colors.with_opacity(0.38, RC.side_a))
-        self._compare_panel_b.bgcolor = ft.Colors.with_opacity(0.10, RC.side_b)
-        self._compare_panel_b.border = ft.border.all(1, ft.Colors.with_opacity(0.38, RC.side_b))
+        self._compare_panel_a.bgcolor = None
+        self._compare_panel_a.border = ft.border.all(2, ft.Colors.with_opacity(0.55, RC.side_a))
+        self._compare_panel_b.bgcolor = None
+        self._compare_panel_b.border = ft.border.all(2, ft.Colors.with_opacity(0.55, RC.side_b))
 
     def reset_compare_panels_idle_chrome(self) -> None:
-        g = self._del.get_glass_style(0.04)
-        self._compare_panel_a.bgcolor = g.get("bgcolor")
-        self._compare_panel_a.border = g.get("border")
-        self._compare_panel_b.bgcolor = g.get("bgcolor")
-        self._compare_panel_b.border = g.get("border")
+        edge = ft.border.all(1, self._t.colors.border3)
+        self._compare_panel_a.bgcolor = None
+        self._compare_panel_a.border = edge
+        self._compare_panel_b.bgcolor = None
+        self._compare_panel_b.border = edge
 
     def update_compare_chrome(self) -> None:
         gid = self._del.compare_gid
@@ -491,7 +479,6 @@ class ReviewCompareView:
             [ft.Text(f"Side {label}: No peer file", color=t.colors.fg_muted)],
             alignment=ft.MainAxisAlignment.CENTER,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            expand=True,
         )
 
     def _exact_dup_banner_if_needed(self, label: str, t: ThemeTokens) -> ft.Control | None:
@@ -545,7 +532,40 @@ class ReviewCompareView:
             tight=True,
         )
 
-    def _build_compare_side(self, f: Optional[DuplicateFile], label: str, gen: int) -> ft.Column:
+    def _thumb_media_control(self, f: DuplicateFile, p: Path) -> ft.Control:
+        """Synchronous preview: native filesystem path (Flet desktop); avoids data-URI decode."""
+        t = self._t
+        if is_image_path(p):
+            try:
+                ok = p.is_file()
+            except OSError:
+                ok = False
+            if ok:
+                try:
+                    src = str(p.expanduser().resolve(strict=False))
+                except (OSError, RuntimeError):
+                    src = str(p.expanduser())
+                return ft.Image(
+                    src=src,
+                    fit=ft.BoxFit.CONTAIN,
+                    filter_quality=ft.FilterQuality.HIGH,
+                    width=_COMPARE_PREVIEW_SLOT_WIDTH,
+                    height=_COMPARE_PREVIEW_SLOT_HEIGHT,
+                    border_radius=8,
+                    tooltip=str(p),
+                )
+        return ft.Container(
+            content=ft.Icon(
+                ft.icons.Icons.INSERT_DRIVE_FILE,
+                size=56,
+                color=ft.Colors.with_opacity(0.35, t.colors.fg_muted),
+            ),
+            alignment=ft.Alignment(0, 0),
+            width=_COMPARE_PREVIEW_SLOT_WIDTH,
+            height=_COMPARE_PREVIEW_SLOT_HEIGHT,
+        )
+
+    def _build_compare_side(self, f: Optional[DuplicateFile], label: str) -> ft.Column:
         t = self._t
         label_color = RC.side_a if label == "A" else RC.side_b
         if not f:
@@ -553,18 +573,13 @@ class ReviewCompareView:
         p = Path(str(f.path))
         marked = str(f.path) in self._del.marked_paths
         name = p.name
-        thumb_inner = ft.Container(
-            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE, size=56, color=ft.Colors.with_opacity(0.35, ft.Colors.WHITE)),
-            expand=True,
-            alignment=ft.Alignment(0, 0),
-        )
         thumb_slot = ft.Container(
-            content=thumb_inner,
-            expand=True,
+            content=self._thumb_media_control(f, p),
+            width=_COMPARE_PREVIEW_SLOT_WIDTH,
+            height=_COMPARE_PREVIEW_SLOT_HEIGHT,
             alignment=ft.Alignment(0, 0),
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            bgcolor=None,
             border_radius=8,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
         label_badge = ft.Container(
             content=ft.Text(
@@ -580,12 +595,6 @@ class ReviewCompareView:
         )
 
         slim_meta = self._slim_path_size_under_thumb(f, p, t)
-
-        key = f"{label}:{gen}"
-        self._compare_thumb_slots[key] = thumb_slot
-        page = self._bridge.flet_page
-        if hasattr(page, "run_task"):
-            page.run_task(self._populate_compare_media_async, f, p, key, gen)
 
         head: list[ft.Control] = [label_badge]
         banner = self._exact_dup_banner_if_needed(label, t)
@@ -611,62 +620,7 @@ class ReviewCompareView:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=t.spacing.sm,
             alignment=ft.MainAxisAlignment.START,
-            expand=True,
         )
-
-    async def _populate_compare_media_async(self, f: DuplicateFile, p: Path, key: str, gen: int) -> None:
-        loop = asyncio.get_running_loop()
-
-        b64 = None
-        if is_image_path(p):
-            try:
-                b64 = await loop.run_in_executor(
-                    None, lambda: get_thumbnail_cache().get_compare_preview_base64(p)
-                )
-            except Exception:
-                b64 = None
-
-        if not b64:
-            return  # non-image or failed decode — placeholder stays, no dims needed
-
-        def _dims_tooltip() -> str:
-            try:
-                from PIL import Image
-                with Image.open(p) as img:
-                    return f"{img.width} × {img.height}px"
-            except Exception:
-                return ""
-
-        dims_tip = await loop.run_in_executor(None, _dims_tooltip)
-
-        if gen != self._compare_render_generation:
-            return
-        slot = self._compare_thumb_slots.get(key)
-        if slot is None:
-            return
-        tip = f"Pinch or scroll to zoom. Image size: {dims_tip}" if dims_tip else "Pinch or scroll to zoom"
-        img = ft.Image(
-            src=f"data:image/jpeg;base64,{b64}",
-            expand=True,
-            fit=ft.BoxFit.CONTAIN,
-            filter_quality=ft.FilterQuality.HIGH,
-            border_radius=8,
-            cache_width=1600,
-            cache_height=1200,
-            tooltip=tip,
-        )
-        slot.content = ft.Container(
-            content=img,
-            expand=True,
-            alignment=ft.Alignment(0, 0),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        )
-        # Update the mounted parent panel, not just the slot. slot.page may be
-        # None if Flet hasn't propagated the page ref to newly-constructed content
-        # children yet — _safe_update(slot) would silently no-op in that case.
-        # The parent panels are guaranteed mounted before run_task is scheduled.
-        panel = self._compare_panel_a if key.startswith("A:") else self._compare_panel_b
-        self._safe_update(panel)
 
     # --- Pill targets (ReviewPageChromeMixin._apply_pill_chrome) ---
     # Bisect/partial checkout: do not pair this file with an older review_mixins that

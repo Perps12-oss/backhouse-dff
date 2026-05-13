@@ -79,7 +79,6 @@ class GroupCardWidget(ft.Container):
         total_reclaim_scan: int,
         reviewed_ids: Set[int],
         *,
-        get_glass_style: Callable[[float], dict],
         smart_rule: str = "keep_largest",
         on_group_click: Optional[Callable[[DuplicateGroup], None]] = None,
         on_inspector_select: Optional[Callable[[DuplicateGroup], None]] = None,
@@ -114,7 +113,6 @@ class GroupCardWidget(ft.Container):
         is_light = app_theme_is_light(bridge)
         edge = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         thin = ft.BorderSide(1, edge)
-        glass = get_glass_style(0.05)
 
         self._expanded_col = ft.Column([], spacing=0, visible=False)
         self._chevron_icon = ft.Icon(
@@ -197,8 +195,8 @@ class GroupCardWidget(ft.Container):
             padding=ft.padding.only(left=8, right=4, top=8, bottom=8),
             border=ft.Border(left=ft.BorderSide(2, stripe), top=thin, right=thin, bottom=thin),
             content=ft.Column([header_row, self._expanded_col], spacing=0),
-            bgcolor=glass["bgcolor"],
-            border_radius=glass["border_radius"],
+            bgcolor=t.colors.glass_bg,
+            border_radius=12,
         )
 
     def _build_file_rows(
@@ -322,7 +320,6 @@ def build_group_card(
     total_reclaim_scan: int,
     reviewed_ids: Set[int],
     *,
-    get_glass_style: Callable[[float], dict],
     smart_rule: str = "keep_largest",
     on_group_click: Optional[Callable[[DuplicateGroup], None]] = None,
     on_inspector_select: Optional[Callable[[DuplicateGroup], None]] = None,
@@ -335,7 +332,6 @@ def build_group_card(
         idx,
         total_reclaim_scan,
         reviewed_ids,
-        get_glass_style=get_glass_style,
         smart_rule=smart_rule,
         on_group_click=on_group_click,
         on_inspector_select=on_inspector_select,

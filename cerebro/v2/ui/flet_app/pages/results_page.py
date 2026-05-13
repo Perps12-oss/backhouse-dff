@@ -22,7 +22,7 @@ from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
     paths_to_delete,
 )
 from cerebro.v2.ui.flet_app.theme import (
-    FILTER_EXTS, classify_file, fmt_size, theme_for_mode,
+    FILTER_EXTS, classify_file, fmt_size, theme_for_mode, glass_container
 )
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache, is_image_path
@@ -85,7 +85,6 @@ class ResultsPage(ft.Stack):
         self._filter_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_sizes: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
         self._filter_group_counts: Dict[str, int] = {k: 0 for k, _ in _FILTER_TABS}
-        self._glass_cache: dict = {}
         self._view_mode: str = "list"
         self._view_mode_by_filter: Dict[str, str] = {"all": "list"}
         self._grouping_mode: str = "groups"
@@ -142,24 +141,8 @@ class ResultsPage(ft.Stack):
         self._build_ui()
 
     # ------------------------------------------------------------------
-    # Glass helper
+    # Utilities
     # ------------------------------------------------------------------
-    def _get_glass_style(self, opacity: float = 0.06) -> dict:
-        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        cache_key = (opacity, is_light)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        bg = ft.Colors.with_opacity(opacity, bg_base)
-        border_color = ft.Colors.with_opacity(0.12, border_base)
-        result = dict(
-            bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(12),
-        )
-        self._glass_cache[cache_key] = result
-        return result
     
     def _file_type_icon(self, extension: str) -> tuple[str, str]:
         """Return (icon_name, accent_color) for a file extension."""
@@ -376,7 +359,7 @@ class ResultsPage(ft.Stack):
         self._min_group_filter.on_select = self._on_min_group_filter_change
 
         # Type / grouping / reclaim filters (must live under _scroll_col or clicks do nothing useful).
-        self._results_filters_bar = ft.Container(
+        self._results_filters_bar = glass_container(
             content=ft.Column(
                 [
                     self._filter_seg,
@@ -393,15 +376,15 @@ class ResultsPage(ft.Stack):
                 ],
                 spacing=t.spacing.sm,
             ),
+            t=t,
             padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, bottom=t.spacing.sm),
-            **self._get_glass_style(0.03),
         )
 
         self._group_list = ft.ListView(expand=True, spacing=t.spacing.sm, padding=t.spacing.lg)
         self._results_grid = ft.ListView(expand=True, spacing=t.spacing.md, padding=t.spacing.lg)
         self._hero_primary = ft.Text("0 B", size=t.typography.size_xxxl, weight=ft.FontWeight.BOLD, color="#22D3EE")
         self._hero_secondary = ft.Text("", size=t.typography.size_base, color=t.colors.fg2)
-        self._hero_card = ft.Container(
+        self._hero_card = glass_container(
             content=ft.Column(
                 [
                     self._hero_primary,
@@ -425,8 +408,8 @@ class ResultsPage(ft.Stack):
                 ],
                 spacing=t.spacing.sm,
             ),
+            t=t,
             padding=t.spacing.xl,
-            **self._get_glass_style(0.06),
         )
         self._type_strip = ft.Row(wrap=True, spacing=t.spacing.sm)
         self._folder_col = ft.Column(spacing=t.spacing.xs)
@@ -440,41 +423,41 @@ class ResultsPage(ft.Stack):
                 self._type_strip,
                 ft.ResponsiveRow(
                     [
-                        ft.Container(
+                        glass_container(
                             col={"sm": 12, "md": 6},
                             content=ft.Column(
                                 [ft.Text("Top folders", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._folder_col],
                                 spacing=t.spacing.xs,
                             ),
+                            t=t,
                             padding=t.spacing.md,
-                            **self._get_glass_style(0.05),
                         ),
-                        ft.Container(
+                        glass_container(
                             col={"sm": 12, "md": 6},
                             content=ft.Column(
                                 [ft.Text("Top groups", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._group_col],
                                 spacing=t.spacing.xs,
                             ),
+                            t=t,
                             padding=t.spacing.md,
-                            **self._get_glass_style(0.05),
                         ),
-                        ft.Container(
+                        glass_container(
                             col={"sm": 12, "md": 6},
                             content=ft.Column(
                                 [ft.Text("By age", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._age_col],
                                 spacing=t.spacing.xs,
                             ),
+                            t=t,
                             padding=t.spacing.md,
-                            **self._get_glass_style(0.05),
                         ),
-                        ft.Container(
+                        glass_container(
                             col={"sm": 12, "md": 6},
                             content=ft.Column(
                                 [ft.Text("Highest multiplicity", size=t.typography.size_md, weight=ft.FontWeight.W_700), self._mult_col],
                                 spacing=t.spacing.xs,
                             ),
+                            t=t,
                             padding=t.spacing.md,
-                            **self._get_glass_style(0.05),
                         ),
                     ],
                     run_spacing=t.spacing.sm,
@@ -510,7 +493,7 @@ class ResultsPage(ft.Stack):
             ),
         )
 
-        self._empty = ft.Container(
+        self._empty = glass_container(
             content=ft.Column(
                 [
                     ft.Container(
@@ -532,7 +515,7 @@ class ResultsPage(ft.Stack):
             ),
             expand=True,
             alignment=ft.Alignment(0, 0),
-            **self._get_glass_style(0.04),
+            t=t,
         )
         self._loading_state = ft.Container(
             content=ft.Column(
@@ -577,10 +560,10 @@ class ResultsPage(ft.Stack):
         )
 
         self._scroll_col.controls = [
-            ft.Container(
+            glass_container(
                 content=self._header,
                 padding=ft.padding.only(left=t.spacing.lg, right=t.spacing.lg, top=t.spacing.md),
-                **self._get_glass_style(0.04),
+                t=t,
             ),
             ft.Container(content=self._dashboard, padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.md)),
             self._results_filters_bar,
@@ -1470,7 +1453,7 @@ class ResultsPage(ft.Stack):
             bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE),
             border_radius=4,
         )
-        return ft.Container(
+        return glass_container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -1489,8 +1472,8 @@ class ResultsPage(ft.Stack):
                 ],
                 spacing=t.spacing.xs,
             ),
+            t=t,
             padding=t.spacing.md,
-            **self._get_glass_style(0.04),
         )
 
     def _build_group_card(self, group: DuplicateGroup, extra_badge: str | None = None) -> ft.Container:
@@ -1578,8 +1561,8 @@ class ResultsPage(ft.Stack):
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
+            t=t,
             padding=t.spacing.md,
-            **self._get_glass_style(0.06),
         )
         return card
 
@@ -1678,10 +1661,10 @@ class ResultsPage(ft.Stack):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
             out.append(
-                ft.Container(
+                glass_container(
                     content=ft.Column([header, body], spacing=self._t.spacing.sm),
+                    t=self._t,
                     padding=self._t.spacing.md,
-                    **self._get_glass_style(0.05),
                 )
             )
         return out
@@ -1904,13 +1887,13 @@ class ResultsPage(ft.Stack):
             ],
             spacing=t.spacing.sm,
         )
-        return ft.Container(
+        return glass_container(
             content=ft.Column(
                 [header, ft.Row(tiles, spacing=t.spacing.sm, wrap=True)],
                 spacing=t.spacing.sm,
             ),
+            t=t,
             padding=t.spacing.md,
-            **self._get_glass_style(0.05),
         )
 
     async def _load_grid_thumbnails_async(self, slots: Dict[str, ft.Container]) -> None:
@@ -2008,7 +1991,6 @@ class ResultsPage(ft.Stack):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
 
         # Update colors on static elements
@@ -2017,15 +1999,14 @@ class ResultsPage(ft.Stack):
         # Update container glass styles (parent exists only when this page is mounted)
         hdr_parent = getattr(self._header, "parent", None)
         if hdr_parent is not None:
-            hdr_parent.bgcolor = self._get_glass_style(0.04).get("bgcolor")
-            hdr_parent.border = self._get_glass_style(0.04).get("border")
+            hdr_parent.bgcolor = self._t.colors.glass_bg
+            hdr_parent.border = ft.border.all(1, self._t.colors.glass_border)
         bar = getattr(self, "_results_filters_bar", None)
         if bar is not None:
-            st = self._get_glass_style(0.03)
-            bar.bgcolor = st.get("bgcolor")
-            bar.border = st.get("border")
+            bar.bgcolor = self._t.colors.glass_bg
+            bar.border = ft.border.all(1, self._t.colors.glass_border)
 
-        self._empty.bgcolor = self._get_glass_style(0.04).get("bgcolor")
-        self._empty.border = self._get_glass_style(0.04).get("border")
+        self._empty.bgcolor = self._t.colors.glass_bg
+        self._empty.border = ft.border.all(1, self._t.colors.glass_border)
 
         self._safe_update(self)

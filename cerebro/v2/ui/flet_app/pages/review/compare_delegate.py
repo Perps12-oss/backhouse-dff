@@ -15,8 +15,6 @@ if TYPE_CHECKING:
 class ReviewCompareDelegate(Protocol):
     """Callbacks and read-only state used by compare UI."""
 
-    def get_glass_style(self, opacity: float = 0.06) -> dict: ...
-
     def delete_marked_files(self, e: ft.ControlEvent | None = None) -> None: ...
     def to_grid(self, e: ft.ControlEvent | None = None) -> None: ...
     def prev_group(self, e: ft.ControlEvent | None = None) -> None: ...
@@ -63,9 +61,6 @@ class ReviewCompareDelegateAdapter:
 
     def __init__(self, page: ReviewPage) -> None:
         self._page = page
-
-    def get_glass_style(self, opacity: float = 0.06) -> dict:
-        return self._page._get_glass_style(opacity)
 
     def delete_marked_files(self, e: ft.ControlEvent | None = None) -> None:
         self._page._delete_marked_files(e)

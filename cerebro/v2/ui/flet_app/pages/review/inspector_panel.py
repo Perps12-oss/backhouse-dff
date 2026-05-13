@@ -119,8 +119,13 @@ class ReviewInspectorPanel(ft.Container):
         self._t = t
         is_light = app_theme_is_light(self._bridge)
         edge = ft.Colors.with_opacity(0.12, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
-        self.border = ft.border.only(left=ft.BorderSide(1, edge))
-        self.bgcolor = ft.Colors.with_opacity(0.03, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        # Review workstation collapses width to 0 in compare mode; do not restore chrome then.
+        if int(getattr(self, "width", 336) or 0) > 0:
+            self.border = ft.border.only(left=ft.BorderSide(1, edge))
+            self.bgcolor = ft.Colors.with_opacity(0.03, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+        else:
+            self.border = None
+            self.bgcolor = None
         # Re-render current state with new theme tokens.
         if self._current_mode == "group" and self._current_group:
             self._scroll_col.controls = self._build_group_controls(

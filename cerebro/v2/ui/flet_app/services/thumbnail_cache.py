@@ -115,7 +115,10 @@ class ThumbnailCache:
     def get_compare_preview_base64(self, path: Path) -> Optional[str]:
         """High-res JPEG preview for compare mode (separate cache key from grid thumbnails)."""
         p = Path(path)
-        key = f"cmp:{p.resolve()}"
+        try:
+            key = f"cmp:{p.resolve()}"
+        except OSError:
+            key = f"cmp:{p}"
         if key in self._data:
             self._data.move_to_end(key)
             return self._data[key]
@@ -166,7 +169,7 @@ class ThumbnailCache:
         When ``max_edge`` is set, decode at that pixel cap (Review grid large tiles).
         When omitted, use the default small grid edge (``_MAX_EDGE``).
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if max_edge is None:
             worker = self._load_one
             tasks = [
@@ -185,7 +188,8 @@ class ThumbnailCache:
         for done in asyncio.as_completed(tasks):
             try:
                 p, b64 = await done
-            except Exception:  # pragma: no cover - defensive
+            except Exception:
+                _log.debug("thumbnail worker raised", exc_info=True)
                 continue
             out = on_thumbnail_ready(p, b64)
             if asyncio.iscoroutine(out):

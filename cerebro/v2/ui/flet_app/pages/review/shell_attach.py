@@ -16,7 +16,7 @@ from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
 from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkstationSidebar
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
-from cerebro.v2.ui.flet_app.theme import ThemeTokens
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, glass_container
 
 
 def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
@@ -95,7 +95,7 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         color=t.colors.fg_muted,
         text_align=ft.TextAlign.CENTER,
     )
-    page._empty_state = ft.Container(
+    page._empty_state = glass_container(
         content=ft.Column(
             [
                 ft.Container(
@@ -113,9 +113,9 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         ),
         expand=True,
         alignment=ft.Alignment(0, 0),
-        **page._get_glass_style(0.04),
+        t=t,
     )
-    page._loading_state = ft.Container(
+    page._loading_state = glass_container(
         content=ft.Column(
             [
                 ft.ProgressRing(width=28, height=28, stroke_width=3, color=RC.side_a),
@@ -126,7 +126,7 @@ def _attach_empty_and_loading(page: Any, t: ThemeTokens, bridge: Any) -> None:
         ),
         expand=True,
         alignment=ft.Alignment(0, 0),
-        **page._get_glass_style(0.04),
+        t=t,
     )
 
 
@@ -244,20 +244,28 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
 
     strip_pad = ft.Padding.symmetric(horizontal=t.spacing.lg)
     hwrap = page._hwrap_strip
+    page._smart_host = ft.Container(content=hwrap(page._smart_row), padding=strip_pad)
+    page._cmp_bar_host = ft.Container(
+        content=hwrap(page._cmp_bar),
+        padding=ft.Padding.symmetric(horizontal=t.spacing.lg),
+    )
+    page._content_frame = ft.Container(content=page._content, expand=True)
+    # Single slot: either list/grid (content_frame) or compare body — never Stack both.
+    # Stack + expand children can yield unbounded height on Flet desktop (blank A/B row);
+    # a hidden content layer can also composite incorrectly over compare in some builds.
+    page._workspace_slot = ft.Container(expand=True, content=page._content_frame)
     center_column = ft.Column(
         [
             page._stats_header,
-            ft.Container(content=hwrap(page._smart_row), padding=strip_pad),
-            ft.Container(
-                content=hwrap(page._cmp_bar),
-                padding=ft.Padding.symmetric(horizontal=t.spacing.lg),
-            ),
-            ft.Container(content=page._content, expand=True),
+            page._smart_host,
+            page._cmp_bar_host,
+            page._workspace_slot,
             page._review_action_bar,
         ],
         expand=True,
         spacing=0,
     )
+    page._center_column = center_column
 
     page._main_workstation_row = ft.Row(
         [

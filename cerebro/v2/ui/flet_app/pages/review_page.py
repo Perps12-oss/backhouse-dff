@@ -74,7 +74,6 @@ class ReviewPage(
         self._smart_rule = "keep_largest"
         self._loading = False
         self._files_by_filter: dict[str, List[DuplicateFile]] = {k: [] for k, _ in FILTER_TABS}
-        self._glass_cache: dict = {}
         self._filter_counts: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
         self._filter_sizes: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
         self._filter_group_counts: dict[str, int] = {k: 0 for k, _ in FILTER_TABS}
@@ -91,14 +90,19 @@ class ReviewPage(
         self._stats_header: StatsHeader
         self._smart_seg: ft.SegmentedButton
         self._smart_row: ft.Row
+        self._smart_host: ft.Container
         self._grid_view: ReviewGridView
         self._compare_ui: ReviewCompareView
         self._cmp_bar: ft.Container
+        self._cmp_bar_host: ft.Container
         self._workstation_sidebar: ReviewWorkstationSidebar
         self._inspector_panel: ReviewInspectorPanel
         self._review_action_bar: ReviewActionBar
         self._main_workstation_row: ft.Row
+        self._center_column: ft.Column
         self._content: ft.Column
+        self._content_frame: ft.Container
+        self._workspace_slot: ft.Container
         self._empty_state: ft.Container
         self._empty_title_lbl: ft.Text
         self._empty_body_lbl: ft.Text

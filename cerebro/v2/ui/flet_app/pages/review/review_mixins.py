@@ -57,26 +57,6 @@ class ReviewPageChromeMixin:
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-
-    def _get_glass_style(self, opacity: float = 0.06) -> dict:
-        # Use theme_detect.app_theme_is_light (not raw ==) so non-canonical theme strings
-        # still pick light glass when appropriate.
-        is_light = app_theme_is_light(self._bridge)
-        cache_key = (opacity, is_light)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        bg = ft.Colors.with_opacity(opacity, bg_base)
-        border_color = ft.Colors.with_opacity(0.12, border_base)
-        result = dict(
-            bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(12),
-        )
-        self._glass_cache[cache_key] = result
-        return result
-
     def _sync_view_toggle_pills(self) -> None:
         t = self._t
         if self._mode == "groups":
@@ -186,7 +166,6 @@ class ReviewPageModeMixin:
         self._content.controls.clear()
         if mode != "grid":
             self._grid_view.set_rendering(False)
-        self._compare_view.visible = mode == "compare"
 
         vis = self._MODE_VISIBILITY[mode]
         self._cmp_bar.visible = vis["cmp_bar"]
@@ -194,6 +173,26 @@ class ReviewPageModeMixin:
         self._view_toggle_row.visible = vis["toggle"]
         self._group_sort_row.visible = vis["sort"]
         self._workstation_sidebar.set_compare_mode(mode == "compare")
+        # Compare owns the main workspace width. Keeping the right inspector mounted
+        # leaves too little room for the A/B row on common desktop sizes, causing the
+        # preview surface to overflow into the inspector and appear blank/overlapped.
+        if mode == "compare":
+            self._inspector_panel.visible = False
+            # Collapse layout + decoration so the Row cannot paint an invisible 336px strip
+            # on top of the center column on overflow (Flet desktop compositor quirk).
+            self._inspector_panel.width = 0
+            self._inspector_panel.padding = ft.padding.all(0)
+            self._inspector_panel.border = None
+        else:
+            self._inspector_panel.visible = True
+            self._inspector_panel.width = 336
+            self._inspector_panel.padding = ft.padding.all(14)
+            edge = ft.Colors.with_opacity(
+                0.12, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE
+            )
+            self._inspector_panel.border = ft.border.only(left=ft.BorderSide(1, edge))
+
+        self._smart_host.visible = mode in ("groups", "grid")
 
         if mode == "empty":
             self._content.controls.append(self._empty_state)
@@ -212,7 +211,34 @@ class ReviewPageModeMixin:
             self._content.controls.append(self._grid_view)
             self._refresh_grid()
         elif mode == "compare":
-            self._content.controls.append(self._compare_view)
+            pass
+
+        # One workspace child at a time (see shell_attach._workspace_slot): restores
+        # bounded flex like the old content_frame-in-Column path for compare layout.
+        slot = getattr(self, "_workspace_slot", None)
+        if slot is not None:
+            if mode == "compare":
+                self._compare_view.visible = True
+                slot.content = self._compare_view
+            else:
+                self._compare_view.visible = False
+                self._content_frame.content = self._content
+                slot.content = self._content_frame
+
+        try:
+            _log.debug(
+                "[COMPARE_DEBUG] enter_mode mode=%s content_controls=%s compare_visible=%s "
+                "compare_page=%s cmp_bar_visible=%s cmp_bar_page=%s inspector_visible=%s",
+                mode,
+                [type(c).__name__ for c in self._content.controls],
+                getattr(self._compare_view, "visible", None),
+                self._ctrl_page_set(self._compare_view),
+                getattr(self._cmp_bar, "visible", None),
+                self._ctrl_page_set(self._cmp_bar),
+                getattr(self._inspector_panel, "visible", None),
+            )
+        except Exception:
+            _log.debug("[COMPARE_DEBUG] enter_mode failed to collect state", exc_info=True)
 
         safe_update(self._content)
         safe_update(self._cmp_bar)
@@ -220,6 +246,9 @@ class ReviewPageModeMixin:
         safe_update(self._view_toggle_row)
         safe_update(self._group_sort_row)
         safe_update(self._workstation_sidebar)
+        safe_update(self._inspector_panel)
+        safe_update(getattr(self, "_workspace_slot", None))
+        safe_update(self._center_column)
         self._refresh_stats_header()
         self._refresh_action_bar()
         self._apply_pill_chrome()
@@ -260,7 +289,6 @@ class ReviewPageGroupsGridMixin:
             idx,
             total_reclaim_scan,
             self._reviewed_group_ids,
-            get_glass_style=self._get_glass_style,
             smart_rule=self._smart_rule,
             on_group_click=self._on_group_card_click,
             on_inspector_select=self._on_group_inspector_select,
@@ -637,12 +665,19 @@ class ReviewPageCompareNavMixin:
             self._enter_mode("compare")
             self._cmp_smart_rule = self._smart_rule
             self._sync_compare_group_marks_to_rule(gid)
-            self._refresh_group_list_panel()
             self._update_compare_panels()
+            self._refresh_group_list_panel()
             self._update_compare_chrome()
             group = next((g for g in self._groups if g.group_id == gid), None)
             if group and not self._selected_file:
                 self._inspector_panel.show_group(group, self._smart_rule, self._marked_paths)
+            # _enter_mode already updated once; compare panels mount after that — force a
+            # full relayout so bounded flex + thumbnails paint on first open (Flet desktop).
+            try:
+                if self._ctrl_page_set(self):
+                    self.update()
+            except Exception:
+                pass
             self._log_if_slow("review:on_click_group_nav", _t0)
         finally:
             self._compare_nav_in_flight = False
@@ -848,13 +883,11 @@ class ReviewPageNavThemeMixin:
             self._bridge.show_snackbar("Nothing to undo.", info=True)
 
     def apply_theme(self, mode: str) -> None:
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         self._compare_ui.sync_theme(self._t)
         self._grid_view.sync_theme(self._t)
 
-        g04 = self._get_glass_style(0.04)
-        self._stats_header.bgcolor = g04.get("bgcolor")
+        self._stats_header.bgcolor = self._t.colors.glass_bg
         edge_h = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE)
         self._stats_header.border = ft.border.only(bottom=ft.BorderSide(1, edge_h))
         self._workstation_sidebar.sync_theme(self._t)
@@ -864,8 +897,8 @@ class ReviewPageNavThemeMixin:
 
         self._compare_ui.apply_cmp_bar_glass()
 
-        self._empty_state.bgcolor = g04.get("bgcolor")
-        self._empty_state.border = g04.get("border")
+        self._empty_state.bgcolor = self._t.colors.glass_bg
+        self._empty_state.border = ft.border.all(1, self._t.colors.glass_border)
         self._empty_title_lbl.color = self._t.colors.fg
         self._empty_body_lbl.color = self._t.colors.fg_muted
         self._empty_title_lbl.size = self._t.typography.size_lg

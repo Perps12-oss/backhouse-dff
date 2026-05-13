@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Set
@@ -242,6 +243,11 @@ class ReviewGridView(ft.Stack):
         )
 
     @staticmethod
+    def _thumb_slot_key(path: Path | str) -> str:
+        """Stable dict key for ``DuplicateFile.path`` ↔ async thumbnail callbacks (Windows)."""
+        return os.path.normcase(os.path.normpath(str(Path(path))))
+
+    @staticmethod
     def _safe_update(ctrl: ft.Control | None) -> None:
         if ctrl is None:
             return
@@ -258,8 +264,12 @@ class ReviewGridView(ft.Stack):
             _log.debug("[UI_SLOW] %s took %.1f ms", label, elapsed_ms)
 
     def set_rendering(self, value: bool) -> None:
-        self._grid_build_generation += 1
-        gen = self._grid_build_generation
+        # Bump generation only when *starting* an async grid build. Incrementing on
+        # every hide() caused stale append tasks to advance the counter and cancel
+        # fresh work (thumbnails never applied; UI felt stuck).
+        if value:
+            self._grid_build_generation += 1
+            gen = self._grid_build_generation
         self._rendering_badge.visible = value
         self._safe_update(self._rendering_badge)
         if value:
@@ -355,7 +365,6 @@ class ReviewGridView(ft.Stack):
     ) -> None:
         for i in range(0, len(tail), _GRID_ASYNC_BATCH):
             if gen != self._grid_build_generation:
-                self.set_rendering(False)
                 return
             chunk = tail[i : i + _GRID_ASYNC_BATCH]
             self._grid.controls.extend(
@@ -407,7 +416,8 @@ class ReviewGridView(ft.Stack):
     ) -> ft.Container:
         t = self._t
         p = Path(str(f.path))
-        key = str(getattr(f, "path", ""))
+        slot_key = ReviewGridView._thumb_slot_key(f.path)
+        mark_key = str(f.path)
         info_bar = self._tile_info_footer(f, p, t)
 
         thumb_slot = ft.Container(
@@ -417,21 +427,36 @@ class ReviewGridView(ft.Stack):
         )
 
         cb = ft.Checkbox(
-            value=key in marked_paths,
+            value=mark_key in marked_paths,
             on_change=lambda e, file=f: self._on_toggle_mark(file),
             active_color=RC.danger,
         )
-        self._mark_checkboxes[key] = cb
+        self._mark_checkboxes[mark_key] = cb
 
         badge_txt = ft.Text(size=9, weight=ft.FontWeight.W_800)
-        self._status_badge_labels[key] = badge_txt
-        self._sync_badge_label(key, badge_txt, marked_paths, keep_paths)
+        self._status_badge_labels[mark_key] = badge_txt
+        self._sync_badge_label(mark_key, badge_txt, marked_paths, keep_paths)
         badge = ft.Container(
             content=badge_txt,
             padding=ft.Padding.symmetric(horizontal=6, vertical=2),
             bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
             border=ft.border.all(1, ft.Colors.with_opacity(0.35, RC.grid_badge_text)),
             border_radius=4,
+        )
+
+        cmp_hint = ft.Container(
+            content=ft.Text(
+                "Compare →",
+                size=9,
+                weight=ft.FontWeight.W_700,
+                color=RC.side_a,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.45, RC.side_a)),
+            border_radius=4,
+            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+            visible=False,
+            ignore_interactions=True,
         )
 
         stack = ft.Stack(
@@ -457,20 +482,6 @@ class ReviewGridView(ft.Stack):
             expand=True,
         )
 
-        cmp_hint = ft.Container(
-            content=ft.Text(
-                "Compare →",
-                size=9,
-                weight=ft.FontWeight.W_700,
-                color=RC.side_a,
-            ),
-            bgcolor=ft.Colors.with_opacity(0.82, RC.grid_badge_bg),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.45, RC.side_a)),
-            border_radius=4,
-            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-            visible=False,
-        )
-
         def _hover(e: ft.ControlEvent) -> None:
             enter = e.data == "true"
             info_bar.opacity = 1 if enter else 0
@@ -494,16 +505,18 @@ class ReviewGridView(ft.Stack):
             on_click=lambda e, file=f: self._on_tile_clicked(file),
             on_hover=_hover,
         )
-        self._thumb_slots[key] = thumb_slot
-        self._tile_cache[key] = tile
+        self._thumb_slots[slot_key] = thumb_slot
+        self._tile_cache[slot_key] = tile
         return tile
 
     def _thumb_image_control(self, thumb_b64: str) -> ft.Image:
-        """Fill the tile slot; decoded JPEG resolution follows ``_thumb_decode_max_edge``."""
+        """Fill the tile slot; explicit size avoids zero-bounds ``Image`` on Flet desktop."""
+        side = max(64, int(self._grid_extent * 0.88))
         return ft.Image(
             src=f"data:image/jpeg;base64,{thumb_b64}",
+            width=side,
+            height=side,
             fit=ft.BoxFit.COVER,
-            expand=True,
             border_radius=8,
         )
 
@@ -515,12 +528,19 @@ class ReviewGridView(ft.Stack):
             if load_gen != self._thumb_load_generation or not self._is_grid_mode():
                 return
             if not b64:
+                _log.debug("grid thumb: empty payload for %r", ReviewGridView._thumb_slot_key(path))
                 return
-            key = str(path)
+            key = ReviewGridView._thumb_slot_key(path)
             if key not in self._tile_cache:
+                _log.debug(
+                    "grid thumb: callback key %r not in tile_cache (%d tiles) — path casing?",
+                    key,
+                    len(self._tile_cache),
+                )
                 return
             thumb_slot = self._thumb_slots.get(key)
             if thumb_slot is None:
+                _log.debug("grid thumb: missing slot for key %r", key)
                 return
             pending.append((thumb_slot, b64))
             if len(pending) >= 8:
@@ -530,6 +550,7 @@ class ReviewGridView(ft.Stack):
                 pending.clear()
                 if load_gen == self._thumb_load_generation and self._is_grid_mode():
                     self._safe_update(self._grid)
+                    self._safe_update(self)
                 self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
                 await asyncio.sleep(0)
 
@@ -543,5 +564,6 @@ class ReviewGridView(ft.Stack):
                 slot.content = self._thumb_image_control(thumb_b64)
             if load_gen == self._thumb_load_generation and self._is_grid_mode():
                 self._safe_update(self._grid)
+                self._safe_update(self)
             self._log_if_slow("review:thumbnail_batch_apply", _apply_t0)
 
