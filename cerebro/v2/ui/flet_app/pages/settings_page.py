@@ -10,7 +10,7 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
-from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
+from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode, glass_container
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -47,7 +47,6 @@ class SettingsPage(ft.Column):
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._settings: Dict[str, Any] = {}  # loaded from bridge
-        self._glass_cache: dict = {}
         
         # UI References
         self._header: ft.Container
@@ -103,25 +102,6 @@ class SettingsPage(ft.Column):
         except RuntimeError:
             return False
 
-    # ------------------------------------------------------------------
-    # Glass helper
-    # ------------------------------------------------------------------
-    def _get_glass_style(self, opacity: float = 0.06) -> dict:
-        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        cache_key = (opacity, is_light)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        bg = ft.Colors.with_opacity(opacity, bg_base)
-        border_color = ft.Colors.with_opacity(0.12, border_base)
-        result = dict(
-            bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(12),
-        )
-        self._glass_cache[cache_key] = result
-        return result
 
     # ------------------------------------------------------------------
     # Build (Runs Once)
@@ -153,11 +133,11 @@ class SettingsPage(ft.Column):
 
         # Tab content containers (glass)
         self._tab_contents = {
-            "general": ft.Container(padding=t.spacing.xl, **self._get_glass_style(0.04)),
-            "appearance": ft.Container(padding=t.spacing.xl, **self._get_glass_style(0.04)),
-            "performance": ft.Container(padding=t.spacing.xl, **self._get_glass_style(0.04)),
-            "deletion": ft.Container(padding=t.spacing.xl, **self._get_glass_style(0.04)),
-            "about": ft.Container(padding=t.spacing.xl, **self._get_glass_style(0.04)),
+            "general": glass_container(content=None, padding=t.spacing.xl, t=t),
+            "appearance": glass_container(content=None, padding=t.spacing.xl, t=t),
+            "performance": glass_container(content=None, padding=t.spacing.xl, t=t),
+            "deletion": glass_container(content=None, padding=t.spacing.xl, t=t),
+            "about": glass_container(content=None, padding=t.spacing.xl, t=t),
         }
 
         # Build each tab's inner content
@@ -844,17 +824,15 @@ class SettingsPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls or losing pending input state."""
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         
         # Update Header
         self._header.content.color = self._t.colors.fg
         
         # Update all Tab Containers (Glass styles)
-        new_glass = self._get_glass_style(0.04)
         for container in self._tab_contents.values():
-            container.bgcolor = new_glass['bgcolor']
-            container.border = new_glass['border']
+            container.bgcolor = self._t.colors.glass_bg
+            container.border = ft.border.all(1, self._t.colors.glass_border)
             
         # Helper to update text colors in specific controls
         # Note: This is a broad update. For perfection, we'd update every Text control individually.

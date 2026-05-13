@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, List
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.theme import theme_for_mode, glass_container
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -23,26 +23,11 @@ class ExcludeListPage(ft.Column):
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._paths: List[str] = []
-        self._glass_cache: dict = {}
         self._folder_picker: ft.FilePicker
         self._list_col: ft.Column
         self._empty: ft.Container
         self._build_ui()
 
-    def _get_glass_style(self, opacity: float = 0.06) -> dict:
-        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, "app_theme") else False
-        cache_key = (opacity, is_light)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        result = dict(
-            bgcolor=ft.Colors.with_opacity(opacity, bg_base),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.12, border_base)),
-            border_radius=ft.border_radius.all(12),
-        )
-        self._glass_cache[cache_key] = result
-        return result
 
     @staticmethod
     def _safe_update(ctrl: ft.Control | None) -> None:
@@ -57,7 +42,7 @@ class ExcludeListPage(ft.Column):
     def _build_ui(self) -> None:
         t = self._t
 
-        header = ft.Container(
+        header = glass_container(
             content=ft.Row(
                 [
                     ft.Column(
@@ -95,8 +80,8 @@ class ExcludeListPage(ft.Column):
                 vertical_alignment=ft.CrossAxisAlignment.START,
                 spacing=t.spacing.md,
             ),
+            t=t,
             padding=ft.padding.only(left=t.spacing.xl, right=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
-            **self._get_glass_style(0.04),
         )
 
         self._list_col = ft.Column(spacing=t.spacing.sm)
@@ -106,7 +91,7 @@ class ExcludeListPage(ft.Column):
             visible=False,
         )
 
-        self._empty = ft.Container(
+        self._empty = glass_container(
             content=ft.Column(
                 [
                     ft.Container(
@@ -123,8 +108,8 @@ class ExcludeListPage(ft.Column):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
+            t=t,
             expand=True, alignment=ft.Alignment(0, 0),
-            **self._get_glass_style(0.04),
         )
 
         self._folder_picker = ft.FilePicker()
@@ -141,7 +126,7 @@ class ExcludeListPage(ft.Column):
 
     def _build_path_row(self, path: str) -> ft.Container:
         t = self._t
-        return ft.Container(
+        return glass_container(
             content=ft.Row(
                 [
                     ft.Container(
@@ -162,8 +147,8 @@ class ExcludeListPage(ft.Column):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
+            t=t,
             padding=ft.Padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
-            **self._get_glass_style(0.05),
         )
 
     def _on_add_folder(self, e) -> None:
@@ -235,6 +220,5 @@ class ExcludeListPage(ft.Column):
         self._refresh()
 
     def apply_theme(self, mode: str) -> None:
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         self._safe_update(self)

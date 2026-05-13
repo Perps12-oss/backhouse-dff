@@ -21,7 +21,7 @@ from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_outlined_button_style,
     pill_text_button_style,
 )
-from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES, glass_container
 from cerebro.engines.scan_stage import ScanStage
 
 if TYPE_CHECKING:
@@ -72,7 +72,6 @@ class DashboardPage(ft.Column):
         self._stats_row_signature: tuple[int, int, int] | None = None
         # Initial Theme Load
         self._t = theme_for_mode("dark")
-        self._glass_cache: dict = {}
 
         # UI References (to update without rebuilding)
         self._hero: ft.Container
@@ -244,7 +243,7 @@ class DashboardPage(ft.Column):
         self._hero_tagline_icon = ft.Icon(
             ft.icons.Icons.AUTO_AWESOME, size=16, color=t.colors.accent
         )
-        self._hero = ft.Container(
+        self._hero = glass_container(
             content=ft.Row(
                 [
                     self._hero_tagline_icon,
@@ -260,9 +259,9 @@ class DashboardPage(ft.Column):
                 spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
+            t=t,
             padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
             width=860,
-            **self._get_glass_style(opacity=0.04),
         )
 
         # Stat cards
@@ -293,11 +292,11 @@ class DashboardPage(ft.Column):
             wrap=True,
             alignment=ft.MainAxisAlignment.CENTER,
         )
-        self._presence_row = ft.Container(
+        self._presence_row = glass_container(
             visible=False,
             width=620,
             padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
-            **self._get_glass_style(0.05),
+            t=t,
             content=ft.Column(
                 [
                     self._presence_title,
@@ -340,7 +339,7 @@ class DashboardPage(ft.Column):
         self._folder_section_icon = ft.Icon(
             ft.icons.Icons.FOLDER_OPEN, size=18, color=t.colors.accent
         )
-        self._folder_container = ft.Container(
+        self._folder_container = glass_container(
             content=ft.Column(
                 [
                     ft.Row(
@@ -363,8 +362,8 @@ class DashboardPage(ft.Column):
                 ],
                 spacing=s.xs,
             ),
+            t=t,
             padding=s.md,
-            **self._get_glass_style(0.10),
         )
         self._folder_container.on_click = self._browse_folders
         self._folder_container.on_hover = lambda e, c=self._folder_container: self._set_container_glow(
@@ -894,10 +893,10 @@ class DashboardPage(ft.Column):
             style=pill_outlined_button_style(t),
         )
         self._scan_options_dropdown = ft.Container(
-            content=ft.Container(
+            content=glass_container(
                 content=self._scan_options_row,
+                t=t,
                 padding=ft.padding.all(s.xl),
-                **self._get_glass_style(0.08),
             ),
             visible=False,
             width=620,
@@ -923,9 +922,10 @@ class DashboardPage(ft.Column):
             text_align=ft.TextAlign.CENTER,
         )
 
-        workflow_stack = ft.Container(
+        workflow_stack = glass_container(
             width=840,
             padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.md),
+            t=t,
             content=ft.Column(
                 [
                     self._hero,
@@ -942,7 +942,6 @@ class DashboardPage(ft.Column):
                 spacing=s.xs,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            **self._get_glass_style(0.035),
         )
 
         # Checkpoint restore section (checkpoint DB manifests, not in-session pause)
@@ -1006,30 +1005,7 @@ class DashboardPage(ft.Column):
     # ------------------------------------------------------------------
     # Theme Helpers
     # ------------------------------------------------------------------
-    def _get_glass_style(self, opacity: float = 0.08) -> dict:
-        """Calculate glass style based on CURRENT theme."""
-        is_dark = False
-        if hasattr(self._bridge, 'app_theme'):
-            is_dark = "dark" in self._bridge.app_theme.lower()
-        cache_key = (opacity, is_dark)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
-        border_base = ft.Colors.WHITE if is_dark else ft.Colors.BLACK
-        bg = ft.Colors.with_opacity(opacity, bg_base)
-        border_color = ft.Colors.with_opacity(0.15, border_base)
-        result = dict(
-            bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(16),
-            shadow=ft.BoxShadow(
-                blur_radius=20,
-                color=ft.Colors.with_opacity(0.05, ft.Colors.BLACK),
-                offset=ft.Offset(0, 4),
-            ),
-        )
-        self._glass_cache[cache_key] = result
-        return result
+
 
     def _get_button_style(self, base_color: str = None) -> ft.ButtonStyle:
         t = self._t
@@ -1156,7 +1132,7 @@ class DashboardPage(ft.Column):
         ]
         controls: list[ft.Control] = []
         for icon, accent, label, value in cards:
-            tile = ft.Container(
+            tile = glass_container(
                 content=ft.Row(
                     [
                         ft.Container(
@@ -1178,7 +1154,6 @@ class DashboardPage(ft.Column):
                                     label,
                                     size=t.typography.size_sm,
                                     color=t.colors.fg_muted,
-                                    weight=ft.FontWeight.W_500,
                                 ),
                             ],
                             spacing=2,
@@ -1188,10 +1163,10 @@ class DashboardPage(ft.Column):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=10,
                 ),
+                t=self._t,
                 padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-                **self._get_glass_style(0.06),
-                ink=True,
             )
+            tile.ink = True
             tile.on_hover = lambda e, c=tile: self._set_container_glow(c, e.data == "true", variant="secondary")
             controls.append(
                 ft.GestureDetector(
@@ -1303,9 +1278,8 @@ class DashboardPage(ft.Column):
                 )
 
         self._insights_row.controls = chips
-        ps = self._get_glass_style(0.05)
-        self._presence_row.bgcolor = ps.get("bgcolor")
-        self._presence_row.border = ps.get("border")
+        self._presence_row.bgcolor = self._t.colors.glass_bg
+        self._presence_row.border = ft.border.all(1, self._t.colors.glass_border)
         self._presence_row.visible = True
         DashboardPage._safe_update(self._presence_title)
         DashboardPage._safe_update(self._presence_body)
@@ -3725,16 +3699,15 @@ class DashboardPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         
         # Update styles and colors on existing controls
-        self._hero.bgcolor = self._get_glass_style(0.06).get('bgcolor')
-        self._hero.border = self._get_glass_style(0.06).get('border')
+        self._hero.bgcolor = self._t.colors.glass_bg
+        self._hero.border = ft.border.all(1, self._t.colors.glass_border)
         
         # Re-apply styles to containers
-        self._folder_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._folder_container.border = self._get_glass_style(0.04).get('border')
+        self._folder_container.bgcolor = self._t.colors.glass_bg
+        self._folder_container.border = ft.border.all(1, self._t.colors.glass_border)
 
         # Refresh text colors and stats to match new theme
         self._mode_label.color = self._t.colors.fg_muted

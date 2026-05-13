@@ -428,10 +428,11 @@ def glass_container(
     content: ft.Control,
     t: ThemeTokens,
     *,
-    padding: int = 16,
+    padding: int | ft.Padding | float = 16,
     border_radius: int | None = None,
-    expand: bool = False,
+    expand: bool | int = False,
     blur: int = 0,
+    **kwargs
 ) -> ft.Container:
     """Create a glassmorphism-styled container."""
     br = border_radius or t.border_radius
@@ -448,6 +449,7 @@ def glass_container(
             color="#00000015",
         ),
         expand=expand,
+        **kwargs
     )
     if blur > 0:
         container_kwargs["blur"] = ft.Blur(blur, blur)

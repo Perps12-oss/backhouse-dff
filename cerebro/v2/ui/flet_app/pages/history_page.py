@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.theme import fmt_size as _fmt, theme_for_mode
+from cerebro.v2.ui.flet_app.theme import fmt_size as _fmt, theme_for_mode, glass_container
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -25,7 +25,6 @@ class HistoryPage(ft.Column):
         self._scan_rows: list = []
         self._deletion_rows: list = []
         self._active_tab = "scan"
-        self._glass_cache: dict = {}
         
         # UI References
         self._header: ft.Container
@@ -47,25 +46,6 @@ class HistoryPage(ft.Column):
         except RuntimeError:
             return False
 
-    # ------------------------------------------------------------------
-    # Glass helper
-    # ------------------------------------------------------------------
-    def _get_glass_style(self, opacity: float = 0.06) -> dict:
-        is_light = "light" in self._bridge.app_theme.lower() if hasattr(self._bridge, 'app_theme') else False
-        cache_key = (opacity, is_light)
-        if cache_key in self._glass_cache:
-            return self._glass_cache[cache_key]
-        bg_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        border_base = ft.Colors.BLACK if is_light else ft.Colors.WHITE
-        bg = ft.Colors.with_opacity(opacity, bg_base)
-        border_color = ft.Colors.with_opacity(0.12, border_base)
-        result = dict(
-            bgcolor=bg,
-            border=ft.border.all(1, border_color),
-            border_radius=ft.border_radius.all(12),
-        )
-        self._glass_cache[cache_key] = result
-        return result
 
     # ------------------------------------------------------------------
     # Build (Runs Once)
@@ -123,7 +103,7 @@ class HistoryPage(ft.Column):
         self._empty_label = ft.Text(
             "Run a scan to start building your history.", size=t.typography.size_base, color=t.colors.fg_muted, text_align=ft.TextAlign.CENTER
         )
-        self._empty_container = ft.Container(
+        self._empty_container = glass_container(
             content=ft.Column(
                 [
                     ft.Container(
@@ -138,9 +118,9 @@ class HistoryPage(ft.Column):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=t.spacing.md,
             ),
+            t=t,
             expand=True,
             alignment=ft.Alignment(0, 0),
-            **self._get_glass_style(0.04),
         )
         
         # Container to hold the switching views
@@ -352,12 +332,11 @@ class HistoryPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
-        self._glass_cache = {}
         self._t = theme_for_mode(mode)
         
         # Update Glass Styles
-        self._empty_container.bgcolor = self._get_glass_style(0.04).get('bgcolor')
-        self._empty_container.border = self._get_glass_style(0.04).get('border')
+        self._empty_container.bgcolor = self._t.colors.glass_bg
+        self._empty_container.border = ft.border.all(1, self._t.colors.glass_border)
 
         # Update Table Borders
         self._table.border = ft.border.all(1, self._t.colors.border)
