@@ -202,6 +202,12 @@ class GroupsPruned:
     groups: Tuple[DuplicateGroup, ...]
 
 
+@dataclass(frozen=True)
+class WorkspaceUiPreferencesChanged:
+    """Merge workspace UI preferences into ``AppState.ui`` (filters, view mode, sort)."""
+    patch: Dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Action Union
 # ---------------------------------------------------------------------------
@@ -230,4 +236,5 @@ Action = Union[
     SetDryRun,
     ResultsFilesRemoved,
     GroupsPruned,
+    WorkspaceUiPreferencesChanged,
 ]

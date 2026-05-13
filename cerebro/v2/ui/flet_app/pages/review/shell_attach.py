@@ -6,6 +6,7 @@ from typing import Any
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.components.filters.workspace_filter_stack import WorkspaceFilterStack
 from cerebro.v2.ui.flet_app.components.smart_selection import SmartSelectionRow
 from cerebro.v2.ui.flet_app.pages.review._types import RC
 from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
@@ -18,6 +19,7 @@ from cerebro.v2.ui.flet_app.pages.review.workstation_sidebar import ReviewWorkst
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
 from cerebro.v2.ui.flet_app.design_system.animations import fade_in
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.theme import ThemeTokens
 from cerebro.v2.ui.flet_app.design_system.skeleton import skeleton_card_row
 
 
@@ -217,6 +219,15 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
 
     page._stats_header = StatsHeader(bridge, t, back_btn=page._btn_back, right_tools=right_tools)
 
+    page._workspace_filter_stack = WorkspaceFilterStack(
+        t,
+        on_filter_change=page._on_filter_changed,
+        on_text_filter=page._on_workspace_text_filter,
+        on_cross_folder_change=page._on_cross_folder_only_changed,
+        on_view_mode_change=page._on_workspace_view_mode_changed,
+    )
+    page._filter_stack_host = ft.Container(content=page._workspace_filter_stack)
+
     page._workstation_sidebar = ReviewWorkstationSidebar(bridge, t, on_category_change=page._on_filter_changed)
     page._inspector_panel = ReviewInspectorPanel(
         bridge, t, on_compare_file=page._on_inspector_compare_file
@@ -243,6 +254,7 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     center_column = ft.Column(
         [
             page._stats_header,
+            page._filter_stack_host,
             page._smart_host,
             page._cmp_bar_host,
             page._workspace_slot,

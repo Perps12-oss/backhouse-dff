@@ -27,6 +27,7 @@ from cerebro.v2.state import (
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
     GroupsPruned,
+    WorkspaceUiPreferencesChanged,
 
     SetDryRun,
     ScanCompleted,
@@ -167,6 +168,9 @@ class CerebroCoordinator:
 
     def results_set_text_filter(self, text: str) -> None:
         self._store.dispatch(ResultsViewTextFilterChanged(text))
+
+    def workspace_set_ui_preferences(self, patch: dict) -> None:
+        self._store.dispatch(WorkspaceUiPreferencesChanged(dict(patch or {})))
 
     # ------------------------------------------------------------------
     # Delete Flow (FINAL PLAN §6)

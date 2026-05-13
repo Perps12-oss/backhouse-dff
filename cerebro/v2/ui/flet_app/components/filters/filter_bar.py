@@ -89,6 +89,12 @@ class FilterBar(ft.Container):
     def segmented_button(self) -> ft.SegmentedButton:
         return self._seg
 
+    def set_active(self, key: str) -> None:
+        if key not in {k for k, _ in FILTER_TABS}:
+            key = "all"
+        self._seg.selected = [key]
+        FilterBar._safe_update(self._seg)
+
     def _on_seg_change(self, e: ft.ControlEvent) -> None:
         ctrl = getattr(e, "control", None) or self._seg
         sel = getattr(ctrl, "selected", None)

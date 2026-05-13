@@ -339,6 +339,12 @@ class ReviewPageGroupsGridMixin:
             if (self._filter_key == "all" or any(self._passes_filter(f) for f in g.files))
             and (not q or any(q in str(f.path).lower() for f in g.files))
         ]
+        if getattr(self, "_cross_folder_only", False):
+            filtered = [
+                g
+                for g in filtered
+                if len({Path(str(f.path)).parent for f in g.files}) > 1
+            ]
         key = str(self._group_sort_key or "files_desc")
         if key == "files_desc":
             return sorted(filtered, key=lambda g: len(g.files), reverse=True)
@@ -357,6 +363,8 @@ class ReviewPageGroupsGridMixin:
 
     def _refresh_groups_overview(self) -> None:
         filtered_groups = self._sorted_groups_for_current_filter()
+        if getattr(self, "_workspace_view_mode", "triage") == "dashboard":
+            filtered_groups = filtered_groups[:12]
         _log.debug(
             "_refresh_groups_overview: total=%d filtered=%d filter_key=%r",
             len(self._groups),
@@ -738,8 +746,33 @@ class ReviewPageCompareNavMixin:
             self._enter_compare(self._groups[idx + 1].group_id)
 
 class ReviewPageFilterMixin:
+    def _sync_workspace_preferences_from_state(self) -> None:
+        state = self._bridge.state
+        self._filter_key = str(state.review_file_filter or "all")
+        self._search_query = str(state.results_text_filter or "").strip()
+        ui = state.ui or {}
+        self._cross_folder_only = bool(ui.get("workspace_cross_folder_only", False))
+        self._workspace_view_mode = str(ui.get("workspace_view_mode", "triage"))
+        stack = getattr(self, "_workspace_filter_stack", None)
+        if stack is not None:
+            stack.sync_from_state(
+                filter_key=self._filter_key,
+                text_filter=self._search_query,
+                cross_folder_only=self._cross_folder_only,
+                view_mode=self._workspace_view_mode,
+            )
+            stack.filter_bar.update_counts(
+                self._filter_counts,
+                self._filter_sizes,
+                self._filter_key,
+            )
+
     def _on_filter_changed(self, key: str) -> None:
         self._filter_key = key
+        try:
+            self._bridge.coordinator.review_set_filter(key)
+        except Exception:
+            pass
         if self._mode == "grid":
             self._refresh_grid()
         elif self._mode == "groups":
@@ -782,7 +815,46 @@ class ReviewPageFilterMixin:
 
     def _refresh_filter_labels(self) -> None:
         self._workstation_sidebar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
+        stack = getattr(self, "_workspace_filter_stack", None)
+        if stack is not None:
+            stack.filter_bar.update_counts(self._filter_counts, self._filter_sizes, self._filter_key)
         self._refresh_stats_header()
+
+    def _on_workspace_text_filter(self, text: str) -> None:
+        self._search_query = str(text or "").strip()
+        try:
+            self._bridge.coordinator.results_set_text_filter(self._search_query)
+        except Exception:
+            pass
+        if self._mode in ("groups", "grid"):
+            if self._mode == "groups":
+                self._refresh_groups_overview()
+            else:
+                self._refresh_grid()
+            self._refresh_stats_header()
+
+    def _on_cross_folder_only_changed(self, enabled: bool) -> None:
+        self._cross_folder_only = bool(enabled)
+        try:
+            self._bridge.coordinator.workspace_set_ui_preferences(
+                {"workspace_cross_folder_only": self._cross_folder_only}
+            )
+        except Exception:
+            pass
+        if self._mode == "groups":
+            self._refresh_groups_overview()
+
+    def _on_workspace_view_mode_changed(self, mode: str) -> None:
+        self._workspace_view_mode = mode if mode in ("triage", "dashboard") else "triage"
+        try:
+            self._bridge.coordinator.workspace_set_ui_preferences(
+                {"workspace_view_mode": self._workspace_view_mode}
+            )
+        except Exception:
+            pass
+        if self._mode == "groups":
+            self._refresh_groups_overview()
+            self._refresh_stats_header()
 
     def _refresh_stats_header(self) -> None:
         fl = next((lab for k, lab in FILTER_TABS if k == self._filter_key), self._filter_key.title())

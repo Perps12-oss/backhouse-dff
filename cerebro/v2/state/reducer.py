@@ -18,6 +18,7 @@ from cerebro.v2.state.actions import (
     ResultsViewTextFilterChanged,
     ResultsFilesRemoved,
     GroupsPruned,
+    WorkspaceUiPreferencesChanged,
     SetDryRun,
     ScanCompleted,
     ScanEnded,
@@ -202,6 +203,12 @@ def _reduce_results(state: AppState, action: Action) -> AppState | None:
     if isinstance(action, ReviewViewFilterChanged):
         fk = action.filter_key if action.filter_key in RESULTS_FILE_VALID_FILTERS else "all"
         return replace(state, review_file_filter=fk)
+
+    if isinstance(action, WorkspaceUiPreferencesChanged):
+        patch = {k: v for k, v in (action.patch or {}).items()}
+        if not patch:
+            return state
+        return replace(state, ui={**state.ui, **patch})
 
     return None
 

@@ -67,6 +67,8 @@ class ReviewPage(
         self._group_index: dict[int, int] = {}
         self._group_files: dict[int, List[DuplicateFile]] = {}
         self._filter_key = "all"
+        self._cross_folder_only = False
+        self._workspace_view_mode = "triage"
         self._mode = "empty"
         self._compare_gid: Optional[int] = None
         self._compare_a: Optional[DuplicateFile] = None
@@ -181,6 +183,7 @@ class ReviewPage(
         self._compare_ui.group_list.clear_tracking()
         self._rebuild_group_index()
         self._rebuild_filter_index()
+        self._sync_workspace_preferences_from_state()
         if defer_render:
             if not self._groups:
                 self._pending_deferred_render = False
