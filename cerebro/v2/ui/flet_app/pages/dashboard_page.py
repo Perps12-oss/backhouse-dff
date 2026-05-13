@@ -19,9 +19,11 @@ from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_text_button_style,
 )
 from cerebro.v2.ui.flet_app.components.scan.scan_hud import ScanHUD, ScanHUDCallbacks
+from cerebro.v2.ui.flet_app.components.dashboard.collapsible_section import CollapsibleSection
 from cerebro.v2.ui.flet_app.components.dashboard.folder_panel import DashboardFolderPanel
 from cerebro.v2.ui.flet_app.components.dashboard.home_chrome import DashboardHomeChrome
 from cerebro.v2.ui.flet_app.components.dashboard.home_shell import DashboardHomeShell
+from cerebro.v2.ui.flet_app.components.dashboard.scan_complete_banner import ScanCompleteBanner
 from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import DashboardScanOptionsPanel
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
@@ -320,25 +322,49 @@ class DashboardPage(ft.Column):
             scan_options_dropdown=self._scan_options_dropdown,
         )
 
-        # Checkpoint restore section (checkpoint DB manifests, not in-session pause)
+        self._scan_complete_banner = ScanCompleteBanner(
+            t,
+            on_open_workspace=self._open_workspace_from_scan_complete,
+        )
 
-        # Assemble — main panels tracked so scan view can swap in/out
+        scan_section = CollapsibleSection(t, "Scan", workflow_stack, expanded=True)
+        recent_section = CollapsibleSection(
+            t,
+            "Recent activity",
+            ft.Column(
+                [
+                    self._paused_scans_section,
+                    ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.xs)),
+                ],
+                spacing=s.xs,
+            ),
+            expanded=True,
+        )
+        summary_section = CollapsibleSection(
+            t,
+            "Summary",
+            ft.Column(
+                [
+                    ft.Container(content=self._stats_row, width=360),
+                    ft.Container(content=self._presence_row, width=620, padding=ft.padding.only(top=s.xs)),
+                ],
+                spacing=s.xs,
+            ),
+            expanded=False,
+        )
+
         home_content = ft.Container(
             alignment=ft.Alignment(0, -1),
             padding=ft.padding.only(top=4),
             content=ft.Column(
                 [
-                    workflow_stack,
-                    ft.Container(
-                        content=self._paused_scans_section,
-                        padding=ft.padding.only(top=s.sm),
-                    ),
-                    ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.sm)),
-                    ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.sm)),
-                    ft.Container(content=self._stats_row, width=360, padding=ft.padding.only(top=s.sm)),
-                    ft.Container(content=self._presence_row, width=620, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(content=self._scan_complete_banner.container, width=840),
+                    scan_section,
+                    recent_section,
+                    summary_section,
                 ],
-                spacing=s.xs,
+                spacing=s.sm,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
@@ -1224,6 +1250,14 @@ class DashboardPage(ft.Column):
             reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
         except Exception:
             reclaimed = 0
+        try:
+            self._scan_complete_banner.show(
+                group_count=len(results),
+                reclaimable=reclaimed,
+                elapsed_label=frozen_scan_elapsed,
+            )
+        except Exception:
+            pass
         if reclaimed >= 1_073_741_824:
             self._bridge.show_snackbar(
                 f"Great cleanup! Reclaimable space exceeds 1 GB ({fmt_size(reclaimed)}).",
@@ -1500,6 +1534,23 @@ class DashboardPage(ft.Column):
             self._status.value = f"Drive disconnected at {paused_root}. Cancelling and preserving partial results."
             DashboardPage._safe_update(self._status)
         self._sync_pause_scan_hero_button()
+
+    def _open_workspace_from_scan_complete(self) -> None:
+        """Hand off to Workspace with the latest scan groups loaded."""
+        self._scan_complete_banner.hide()
+        self._pause_scan_btn.visible = False
+        self._scan_hud.dismiss_to_home()
+        self._status.value = "Preparing workspace…"
+        DashboardPage._safe_update(self._status)
+        try:
+            state = self._bridge.state
+            groups = list(state.groups)
+            mode = str(state.scan_mode or "files")
+            if groups:
+                self._bridge.dispatch_scan_complete(groups, mode)
+            self._bridge.navigate("review")
+        except Exception as err:
+            _log.error("Open Workspace from scan-complete banner failed: %s", err)
 
     def _go_to_results(self, e: ft.ControlEvent) -> None:
         """Navigate to results after a successful scan completion."""
