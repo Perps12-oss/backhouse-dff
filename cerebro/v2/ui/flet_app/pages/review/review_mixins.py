@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -16,6 +15,7 @@ from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.components.common.chunked_view import REVIEW_GROUPS_CHUNK_CONFIG
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.components.files.group_card import build_group_card
+from cerebro.v2.ui.flet_app.pages.review.compare_flags import COMPARE_SIDE_BY_SIDE_ENABLED
 from cerebro.v2.ui.flet_app.pages.review.delete_flow import run_delete_with_progress, show_smart_delete_paths_dialog
 from cerebro.v2.ui.flet_app.pages.review.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
@@ -35,11 +35,6 @@ from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, t
 
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
-_COMPARE_SIDE_BY_SIDE_DISABLED = os.getenv("CEREBRO_DISABLE_COMPARE", "").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
 
 
 def _marked_bytes_total(groups: List[DuplicateGroup], marked_paths: Set[str]) -> int:
@@ -637,6 +632,45 @@ class ReviewPageSmartMixin:
 class ReviewPageCompareNavMixin:
     """Compare navigation; slow-path logging uses ``ReviewPage._log_if_slow`` on the concrete class."""
 
+    def _open_group_in_grid_workspace(
+        self,
+        gid: int,
+        *,
+        preferred_a: Optional[DuplicateFile] = None,
+    ) -> None:
+        files = self._group_files.get(gid) or []
+        self._compare_gid = gid
+        self._selected_group_id = gid
+        if preferred_a is not None and any(
+            f is preferred_a or str(f.path) == str(preferred_a.path) for f in files
+        ):
+            pick = next(f for f in files if f is preferred_a or str(f.path) == str(preferred_a.path))
+            others = [f for f in files if f is not pick]
+            self._compare_a = pick
+            self._compare_b = others[0] if others else None
+            self._selected_file = pick
+        else:
+            self._compare_a = files[0] if files else None
+            self._compare_b = files[1] if len(files) > 1 else None
+            self._selected_file = None
+        group = next((g for g in self._groups if g.group_id == gid), None)
+        if group is not None:
+            if self._selected_file is not None:
+                self._inspector_panel.show_file(
+                    self._selected_file,
+                    self._smart_rule,
+                    group,
+                    self._marked_paths,
+                )
+            else:
+                self._inspector_panel.show_group(group, self._smart_rule, self._marked_paths)
+        if self._mode != "grid":
+            self._enter_mode("grid")
+        else:
+            self._refresh_grid()
+            self._refresh_stats_header()
+            self._refresh_action_bar()
+
     def _enter_compare(self, gid: int, *, preferred_a: Optional[DuplicateFile] = None) -> None:
         _t0 = time.perf_counter()
         if self._compare_nav_in_flight:
@@ -648,12 +682,8 @@ class ReviewPageCompareNavMixin:
                 self._to_grid()
                 self._log_if_slow("review:on_click_group_nav", _t0)
                 return
-            if _COMPARE_SIDE_BY_SIDE_DISABLED:
-                self._selected_group_id = gid
-                group = next((g for g in self._groups if g.group_id == gid), None)
-                if group is not None:
-                    self._inspector_panel.show_group(group, self._smart_rule, self._marked_paths)
-                self._to_grid()
+            if not COMPARE_SIDE_BY_SIDE_ENABLED:
+                self._open_group_in_grid_workspace(gid, preferred_a=preferred_a)
                 self._log_if_slow("review:on_click_group_nav", _t0)
                 return
             if self._compare_gid is not None:
@@ -868,10 +898,7 @@ class ReviewPageFilterMixin:
             self._refresh_groups_overview()
 
     def _on_rail_group_selected(self, group_id: int) -> None:
-        if self._mode == "compare":
-            self._enter_compare(int(group_id))
-            return
-        self._enter_mode("groups")
+        self._enter_compare(int(group_id))
         self._refresh_filter_labels()
 
     def _on_rail_group_search(self) -> None:

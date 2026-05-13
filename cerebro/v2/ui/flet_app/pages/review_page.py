@@ -16,6 +16,7 @@ from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.components.common.chunked_view import ChunkedViewBuilder, REVIEW_GROUPS_CHUNK_CONFIG
+from cerebro.v2.ui.flet_app.pages.review.compare_flags import COMPARE_SIDE_BY_SIDE_ENABLED
 from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
 from cerebro.v2.ui.flet_app.pages.review.filter_bar import FILTER_TABS
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
@@ -220,6 +221,12 @@ class ReviewPage(
                 self._enter_mode("empty")
             return
         if self._mode == "compare":
+            if not COMPARE_SIDE_BY_SIDE_ENABLED:
+                gid = self._compare_gid
+                if gid is None or gid not in self._group_files:
+                    gid = self._groups[0].group_id
+                self._open_group_in_grid_workspace(gid)
+                return
             if self._compare_gid is None or self._compare_gid not in self._group_files:
                 self._enter_compare(self._groups[0].group_id)
                 return

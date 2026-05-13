@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
 
-# Last compare probe: fixed 80px thumbs — if A/B still blank, set CEREBRO_DISABLE_COMPARE=1.
+# Compare body is only mounted when CEREBRO_ENABLE_COMPARE=1 (off by default on Flet desktop).
 _COMPARE_PREVIEW_SLOT_HEIGHT = 80
 _COMPARE_PREVIEW_SLOT_WIDTH = 80
 _COMPARE_ROW_HEIGHT = 96
