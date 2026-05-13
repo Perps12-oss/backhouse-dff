@@ -16,6 +16,8 @@ from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDe
 from cerebro.v2.ui.flet_app.pages.review.group_list import GroupListPanel
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_text_button_style
+from cerebro.v2.ui.flet_app.components.files.group_filmstrip import GroupFilmstrip
+from cerebro.v2.ui.flet_app.design_system.accents import METADATA, WARNING
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -30,6 +32,7 @@ _COMPARE_PREVIEW_SLOT_HEIGHT = 300
 _COMPARE_PREVIEW_SLOT_WIDTH = 420
 _COMPARE_ROW_HEIGHT = 360
 _COMPARE_PANEL_W = _COMPARE_PREVIEW_SLOT_WIDTH + 20
+_TEXT_DIFF_MAX_BYTES = 2 * 1024 * 1024
 
 
 class ReviewCompareView:
@@ -64,6 +67,12 @@ class ReviewCompareView:
             "Next →",
             on_click=self._del.next_group,
             style=pill_text_button_style(t, variant="primary"),
+        )
+        self._compare_details_enabled = False
+        self._details_switch = ft.Switch(
+            label="Compare details",
+            value=False,
+            on_change=self._on_compare_details_toggle,
         )
         self.cmp_bar = self._build_cmp_bar_container(t)
 
@@ -117,9 +126,11 @@ class ReviewCompareView:
             padding=ft.Padding.symmetric(vertical=4, horizontal=4),
             visible=False,
         )
+        self._filmstrip = GroupFilmstrip(t, on_select=self._del.set_compare_a)
 
         self.body = ft.Column(
             [
+                self._filmstrip,
                 self._ab_row,
                 self._metadata_strip,
                 ft.Container(
@@ -143,6 +154,7 @@ class ReviewCompareView:
                             self._btn_cmp_grid,
                             self._btn_cmp_prev,
                             self._btn_cmp_next,
+                            self._details_switch,
                             ft.Container(content=self._cmp_title, expand=True),
                         ],
                         wrap=True,
@@ -285,6 +297,9 @@ class ReviewCompareView:
         self._safe_update(self._compare_panel_a)
         self._safe_update(self._compare_panel_b)
         self._refresh_file_selector()
+        gid = self._del.compare_gid
+        files = self._del.group_files.get(gid, []) if gid is not None else []
+        self._filmstrip.refresh(files, active=self._del.compare_a)
         self._refresh_metadata_strip()
         self.update_progress_and_marked_bar()
         self._safe_update(self._ab_row)
@@ -374,14 +389,28 @@ class ReviewCompareView:
             )
         return chips
 
+    def _on_compare_details_toggle(self, e: ft.ControlEvent) -> None:
+        self._compare_details_enabled = bool(getattr(e.control, "value", False))
+        self._refresh_metadata_strip()
+        self._safe_update(self._metadata_strip)
+
     def _refresh_metadata_strip(self) -> None:
         a, b = self._del.compare_a, self._del.compare_b
-        if a is None and b is None:
+        if not self._compare_details_enabled or (a is None and b is None):
             self._metadata_strip.visible = False
             self._safe_update(self._metadata_strip)
             return
         self._meta_col_a.controls = self._build_meta_col_controls(a, RC.side_a)
         self._meta_col_b.controls = self._build_meta_col_controls(b, RC.side_b)
+        if a is not None and b is not None:
+            size_delta = int(b.size) - int(a.size)
+            self._meta_col_a.controls.append(
+                ft.Text(
+                    f"Δ size vs B: {fmt_size(abs(size_delta))}",
+                    size=9,
+                    color=WARNING if size_delta else METADATA,
+                )
+            )
         self._metadata_strip.visible = True
         self._safe_update(self._metadata_strip)
 
