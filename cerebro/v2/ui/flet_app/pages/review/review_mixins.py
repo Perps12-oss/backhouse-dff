@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -34,6 +35,11 @@ from cerebro.v2.ui.flet_app.theme import EXT_ALL_KNOWN, FILTER_EXTS, fmt_size, t
 
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
+_COMPARE_SIDE_BY_SIDE_DISABLED = os.getenv("CEREBRO_DISABLE_COMPARE", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 def _marked_bytes_total(groups: List[DuplicateGroup], marked_paths: Set[str]) -> int:
@@ -639,6 +645,14 @@ class ReviewPageCompareNavMixin:
         files = self._group_files.get(gid) or []
         try:
             if not files:
+                self._to_grid()
+                self._log_if_slow("review:on_click_group_nav", _t0)
+                return
+            if _COMPARE_SIDE_BY_SIDE_DISABLED:
+                self._selected_group_id = gid
+                group = next((g for g in self._groups if g.group_id == gid), None)
+                if group is not None:
+                    self._inspector_panel.show_group(group, self._smart_rule, self._marked_paths)
                 self._to_grid()
                 self._log_if_slow("review:on_click_group_nav", _t0)
                 return

@@ -27,11 +27,11 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 _UI_SLOW_MS = 80.0
 
-# Stripped compare: pixel-sized Row/Column only (no expand-in-AB-row, no glass body).
-_COMPARE_PREVIEW_SLOT_HEIGHT = 300
-_COMPARE_PREVIEW_SLOT_WIDTH = 420
-_COMPARE_ROW_HEIGHT = 360
-_COMPARE_PANEL_W = _COMPARE_PREVIEW_SLOT_WIDTH + 20
+# Last compare probe: fixed 80px thumbs — if A/B still blank, set CEREBRO_DISABLE_COMPARE=1.
+_COMPARE_PREVIEW_SLOT_HEIGHT = 80
+_COMPARE_PREVIEW_SLOT_WIDTH = 80
+_COMPARE_ROW_HEIGHT = 96
+_COMPARE_PANEL_W = 96
 _TEXT_DIFF_MAX_BYTES = 2 * 1024 * 1024
 
 
@@ -83,14 +83,14 @@ class ReviewCompareView:
         self._compare_panel_a = ft.Container(
             content=self._compare_side_empty_column("A", t),
             width=_COMPARE_PANEL_W,
-            padding=t.spacing.sm,
+            padding=4,
             border=edge,
             bgcolor=None,
         )
         self._compare_panel_b = ft.Container(
             content=self._compare_side_empty_column("B", t),
             width=_COMPARE_PANEL_W,
-            padding=t.spacing.sm,
+            padding=4,
             border=edge,
             bgcolor=None,
         )
@@ -101,8 +101,9 @@ class ReviewCompareView:
         self._ab_row = ft.Row(
             [self._compare_panel_a, div, self._compare_panel_b],
             height=_COMPARE_ROW_HEIGHT,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+            tight=True,
         )
         self._init_progress_and_marked_strip(t)
         # Orphan controls: refresh_* still update them if we re-mount chips/metadata later.
@@ -130,17 +131,16 @@ class ReviewCompareView:
 
         self.body = ft.Column(
             [
-                ft.Container(content=self._ab_row, height=_COMPARE_ROW_HEIGHT),
-                self._metadata_strip,
-                ft.Container(
-                    content=ft.Column([self._progress_bar, self._progress_lbl], spacing=6, tight=True),
-                    padding=ft.Padding.symmetric(horizontal=8),
+                ft.Text(
+                    "Thumbnail compare probe (80 px). If both sides show below, sizing was the issue.",
+                    size=t.typography.size_xs,
+                    color=t.colors.fg_muted,
                 ),
-                self._marked_bar,
+                self._ab_row,
             ],
             expand=False,
-            spacing=8,
-            scroll=ft.ScrollMode.AUTO,
+            spacing=6,
+            tight=True,
         )
 
     def _build_cmp_bar_container(self, t: ThemeTokens) -> ft.Container:
@@ -575,17 +575,17 @@ class ReviewCompareView:
                     src = str(p.expanduser())
                 return ft.Image(
                     src=src,
-                    fit=ft.BoxFit.CONTAIN,
-                    filter_quality=ft.FilterQuality.HIGH,
+                    fit=ft.BoxFit.COVER,
+                    filter_quality=ft.FilterQuality.MEDIUM,
                     width=_COMPARE_PREVIEW_SLOT_WIDTH,
                     height=_COMPARE_PREVIEW_SLOT_HEIGHT,
-                    border_radius=8,
+                    border_radius=4,
                     tooltip=str(p),
                 )
         return ft.Container(
             content=ft.Icon(
                 ft.icons.Icons.INSERT_DRIVE_FILE,
-                size=56,
+                size=24,
                 color=ft.Colors.with_opacity(0.35, t.colors.fg_muted),
             ),
             alignment=ft.Alignment(0, 0),
@@ -600,54 +600,39 @@ class ReviewCompareView:
             return self._compare_side_empty_column(label, t)
         p = Path(str(f.path))
         marked = str(f.path) in self._del.marked_paths
-        name = p.name
         thumb_slot = ft.Container(
             content=self._thumb_media_control(f, p),
             width=_COMPARE_PREVIEW_SLOT_WIDTH,
             height=_COMPARE_PREVIEW_SLOT_HEIGHT,
             alignment=ft.Alignment(0, 0),
-            bgcolor=None,
-            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, label_color),
+            border=ft.border.all(2, label_color),
+            border_radius=4,
         )
-        label_badge = ft.Container(
-            content=ft.Text(
-                f"Side {label}",
-                size=t.typography.size_sm,
-                weight=ft.FontWeight.BOLD,
-                color=label_color,
-            ),
-            bgcolor=ft.Colors.with_opacity(0.12, label_color),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, label_color)),
-            border_radius=6,
-            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
-        )
-
-        slim_meta = self._slim_path_size_under_thumb(f, p, t)
-
-        head: list[ft.Control] = [label_badge]
-        banner = self._exact_dup_banner_if_needed(label, t)
-        if banner is not None:
-            head.append(banner)
-
         mark_cb = ft.Checkbox(
-            label="Mark for deletion",
+            label="Mark",
             value=marked,
             active_color=RC.danger,
             on_change=lambda e, file=f: self._del.toggle_mark_file(file),
         )
         self._compare_mark_checkboxes[str(f.path)] = mark_cb
-
         return ft.Column(
-            head
-            + [
+            [
+                ft.Text(label, size=10, weight=ft.FontWeight.W_800, color=label_color),
                 thumb_slot,
-                ft.Text(name, size=t.typography.size_md, weight=ft.FontWeight.W_600, color=t.colors.fg),
-                slim_meta,
+                ft.Text(
+                    p.name,
+                    size=9,
+                    color=t.colors.fg_muted,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    tooltip=str(p),
+                ),
                 mark_cb,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=t.spacing.sm,
-            alignment=ft.MainAxisAlignment.START,
+            spacing=4,
+            tight=True,
         )
 
     # --- Pill targets (ReviewPageChromeMixin._apply_pill_chrome) ---
