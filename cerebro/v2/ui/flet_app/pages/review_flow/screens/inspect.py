@@ -8,6 +8,7 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 
 def _file_icon(ext: str) -> str:
