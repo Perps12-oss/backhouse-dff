@@ -15,8 +15,11 @@ def test_cart_buckets_group_delete_and_keep() -> None:
         ],
     )
     state = ReviewFlowState(scan_results=[g])
-    state.set_selections[1] = SetSelection(kept_paths={"/a/one.jpg"}, deleted_paths={"/a/two.jpg"})
-    state.marked_paths = {"/a/two.jpg"}
+    state.set_selections[1] = SetSelection(
+        kept_paths={str(g.files[0].path)},
+        deleted_paths={str(g.files[1].path)},
+    )
+    state.marked_paths = {str(g.files[1].path)}
     buckets = state.cart_buckets()
     assert len(buckets["delete"]) == 1
     assert len(buckets["keep"]) == 1
