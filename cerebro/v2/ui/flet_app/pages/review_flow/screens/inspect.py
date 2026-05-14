@@ -7,7 +7,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
 
 
 def _file_icon(ext: str) -> str:
@@ -21,23 +21,44 @@ def _file_icon(ext: str) -> str:
     return ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED
 
 
-def _preview_panel(t: ThemeTokens, f: Optional[DuplicateFile], label: str) -> ft.Container:
+def _preview_panel(
+    t: ThemeTokens,
+    f: Optional[DuplicateFile],
+    label: str,
+) -> tuple[ft.Container, Optional[ft.Container]]:
     if f is None:
-        return ft.Container(expand=True, bgcolor=t.colors.bg2, border_radius=8)
+        return ft.Container(expand=True, bgcolor=t.colors.bg2, border_radius=8), None
     ext = (f.extension or Path(str(f.path)).suffix.lstrip(".")).lower()
-    body: List[ft.Control] = [
-        ft.Icon(_file_icon(ext), size=48, color=t.colors.primary),
-        ft.Text(f.path.name, weight=ft.FontWeight.W_600),
-        ft.Text(fmt_size(int(f.size)), color=t.colors.fg_muted),
-        ft.Text(str(f.path.parent), size=t.typography.size_xs, color=t.colors.fg_muted),
-    ]
+    path = Path(str(f.path))
+    preview_slot: Optional[ft.Container] = None
+    body: List[ft.Control] = []
+    if is_image_path(path):
+        preview_slot = ft.Container(
+            expand=True,
+            height=320,
+            bgcolor=t.colors.bg,
+            border_radius=8,
+            alignment=ft.Alignment.CENTER,
+            content=ft.ProgressRing(width=22, height=22),
+            data=str(path),
+        )
+        body.append(preview_slot)
+    else:
+        body.append(ft.Icon(_file_icon(ext), size=48, color=t.colors.primary))
+    body.extend(
+        [
+            ft.Text(f.path.name, weight=ft.FontWeight.W_600),
+            ft.Text(fmt_size(int(f.size)), color=t.colors.fg_muted),
+            ft.Text(str(f.path.parent), size=t.typography.size_xs, color=t.colors.fg_muted),
+        ]
+    )
     if ext in {"txt", "md", "json", "py"}:
         body.append(ft.Text("Document preview placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
     if ext in {"mp4", "mov"}:
         body.append(ft.Text("Video thumbnail strip placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
     if ext in {"mp3", "wav"}:
         body.append(ft.Text("Audio waveform placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
-    return ft.Container(
+    panel = ft.Container(
         content=ft.Column(body, spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         expand=True,
         padding=12,
@@ -45,6 +66,7 @@ def _preview_panel(t: ThemeTokens, f: Optional[DuplicateFile], label: str) -> ft
         border=ft.border.all(1, t.colors.border),
         bgcolor=t.colors.bg2,
     )
+    return panel, preview_slot
 
 
 def metadata_match_flags(left: Optional[DuplicateFile], right: Optional[DuplicateFile]) -> list[tuple[str, str, str, str]]:
@@ -94,7 +116,7 @@ def build_inspect_screen(
     on_toggle_diff=None,
     on_toggle_blink=None,
     stub_only: bool = False,
-) -> ft.Column:
+) -> tuple[ft.Column, Optional[ft.Container], Optional[ft.Container]]:
     group = state.group_by_id(state.inspect_set_id or -1)
     files = list(group.files) if group else []
     idx = max(0, min(state.inspect_file_index, max(0, len(files) - 1)))
@@ -108,7 +130,7 @@ def build_inspect_screen(
                 ft.FilledButton("Back to Browse", on_click=on_back),
             ],
             expand=True,
-        )
+        ), None, None
     header = ft.Row(
         [
             ft.TextButton("← Duplicates", on_click=on_back),
@@ -118,7 +140,9 @@ def build_inspect_screen(
             ft.IconButton(icon=ft.icons.Icons.ARROW_FORWARD, on_click=on_next_set),
         ],
     )
-    previews = ft.Row([_preview_panel(t, left, "A"), _preview_panel(t, right, "B")], expand=True, spacing=12)
+    panel_a, slot_a = _preview_panel(t, left, "A")
+    panel_b, slot_b = _preview_panel(t, right, "B")
+    previews = ft.Row([panel_a, panel_b], expand=True, spacing=12)
     toolbar = ft.Row(
         [
             ft.Switch(label="Diff", value=state.inspect_diff_enabled, on_change=on_toggle_diff),
@@ -138,4 +162,4 @@ def build_inspect_screen(
         ],
         wrap=True,
     )
-    return ft.Column([header, previews, toolbar, meta, actions], expand=True, spacing=10)
+    return ft.Column([header, previews, toolbar, meta, actions], expand=True, spacing=10), slot_a, slot_b

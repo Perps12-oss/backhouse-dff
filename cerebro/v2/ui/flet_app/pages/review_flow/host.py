@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -24,6 +25,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState, SetS
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, paths_to_delete
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
@@ -51,6 +53,7 @@ class ReviewFlowHost(ft.Column):
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
         self._inspect_stub = False
+        self._inspect_preview_generation = 0
         self.controls = [
             ft.Row(
                 [
@@ -105,7 +108,7 @@ class ReviewFlowHost(ft.Column):
             self._grid = self._browse_view.list_host
             self._browse_view.refresh()
         elif screen == "inspect":
-            self._content.content = build_inspect_screen(
+            inspect_col, slot_a, slot_b = build_inspect_screen(
                 t,
                 self._state,
                 on_back=self._on_back,
@@ -120,6 +123,8 @@ class ReviewFlowHost(ft.Column):
                 on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
             )
+            self._content.content = inspect_col
+            self._schedule_inspect_previews(slot_a, slot_b)
         elif screen == "cart":
             self._content.content = build_cart_screen(
                 t,
@@ -323,6 +328,72 @@ class ReviewFlowHost(ft.Column):
     def _inspect_mark_next(self) -> None:
         self._inspect_delete_all()
         self._inspect_next()
+
+    def _schedule_inspect_previews(self, slot_a: Optional[ft.Container], slot_b: Optional[ft.Container]) -> None:
+        self._inspect_preview_generation += 1
+        gen = self._inspect_preview_generation
+        page = getattr(self._bridge, "flet_page", None)
+        if page is None or (slot_a is None and slot_b is None):
+            return
+        if hasattr(page, "run_task"):
+            page.run_task(self._load_inspect_previews_async, slot_a, slot_b, gen)
+        else:
+            self._load_inspect_previews_sync(slot_a, slot_b, gen)
+
+    async def _load_inspect_previews_async(
+        self,
+        slot_a: Optional[ft.Container],
+        slot_b: Optional[ft.Container],
+        gen: int,
+    ) -> None:
+        loop = asyncio.get_event_loop()
+        cache = get_thumbnail_cache()
+
+        async def _decode(slot: Optional[ft.Container]) -> None:
+            if slot is None or gen != self._inspect_preview_generation:
+                return
+            path = getattr(slot, "data", None)
+            if not path:
+                return
+            b64 = await loop.run_in_executor(None, cache.get_compare_preview_base64, Path(str(path)))
+            if gen != self._inspect_preview_generation or not b64:
+                return
+            slot.content = ft.Image(
+                src=f"data:image/jpeg;base64,{b64}",
+                width=280,
+                height=300,
+                fit=ft.BoxFit.CONTAIN,
+                border_radius=8,
+            )
+            self._safe_update(slot)
+
+        await _decode(slot_a)
+        await _decode(slot_b)
+
+    def _load_inspect_previews_sync(
+        self,
+        slot_a: Optional[ft.Container],
+        slot_b: Optional[ft.Container],
+        gen: int,
+    ) -> None:
+        cache = get_thumbnail_cache()
+        for slot in (slot_a, slot_b):
+            if slot is None or gen != self._inspect_preview_generation:
+                continue
+            path = getattr(slot, "data", None)
+            if not path:
+                continue
+            b64 = cache.get_compare_preview_base64(Path(str(path)))
+            if gen != self._inspect_preview_generation or not b64:
+                continue
+            slot.content = ft.Image(
+                src=f"data:image/jpeg;base64,{b64}",
+                width=280,
+                height=300,
+                fit=ft.BoxFit.CONTAIN,
+                border_radius=8,
+            )
+            self._safe_update(slot)
 
     def _toggle_inspect_diff(self, e: ft.ControlEvent) -> None:
         self._state.inspect_diff_enabled = bool(getattr(e.control, "value", False))
