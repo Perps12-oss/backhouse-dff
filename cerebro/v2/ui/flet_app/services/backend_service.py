@@ -169,10 +169,6 @@ class BackendService:
     def get_results(self) -> List[DuplicateGroup]:
         return self._orchestrator.get_results()
 
-    def probe_mode(self, mode_key: str) -> Optional[Any]:
-        from cerebro.v2.core.engine_deps import probe_mode as _probe
-        return _probe(mode_key)
-
     # -- Internal -------------------------------------------------------------
 
     def _deliver_on_ui_thread(self, fn: Callable[..., None], *args: Any) -> None:

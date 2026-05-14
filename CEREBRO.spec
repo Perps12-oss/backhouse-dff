@@ -45,16 +45,6 @@ for pkg in ("flet", "PIL"):
 # Whole cerebro package (engines, v2 UI, etc.)
 hiddenimports += collect_submodules("cerebro")
 
-# Theme JSON is loaded by path — ensure tree is present under _MEIPASS/cerebro/themes
-_themes = spec_root / "cerebro" / "themes"
-if _themes.is_dir():
-    datas.append((str(_themes), "cerebro/themes"))
-
-# Duplicate themes at repo root (some installs reference themes/builtin)
-_root_themes = spec_root / "themes"
-if _root_themes.is_dir():
-    datas.append((str(_root_themes), "themes"))
-
 a = Analysis(
     ["main.py"],
     pathex=[str(spec_root)],

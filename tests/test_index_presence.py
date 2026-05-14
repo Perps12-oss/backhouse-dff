@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cerebro.v2.core import index_presence as ip
+import cerebro.v2.core.index_presence as ip
 from cerebro.v2.core.scan_history_db import ScanHistoryDB
 
 

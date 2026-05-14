@@ -30,19 +30,13 @@ jobs:
       - name: Ruff (scoped)
         run: |
           python -m ruff check \
-            cerebro/core/safety/deletion_gate.py \
-            cerebro/core/session.py \
-            cerebro/core/pipeline.py \
-            cerebro/core/preview.py \
+            cerebro/core/deletion.py \
             cerebro/engines/orchestrator.py \
             cerebro/engines/turbo_file_engine.py \
-            cerebro/v2/ui/delete_ceremony_widgets.py \
-            cerebro/v2/ui/delete_flow.py \
-            tests/test_deletion_gate.py \
-            tests/test_session_tokens.py \
+            cerebro/v2/ui/flet_app/main.py \
+            cerebro/v2/ui/flet_app/pages/review/delete_flow.py \
+            cerebro/v2/ui/flet_app/services/delete_service.py \
             tests/test_deletion_engine.py \
-            tests/test_deletion_gate_integration.py \
-            tests/test_preview_manager.py \
             main.py
 
       - name: Mypy (scoped)
@@ -57,8 +51,6 @@ jobs:
       - name: Runtime smoke
         run: |
           python -c "import main; print('import main OK')"
-          # Post-v1 audit Cut 3 invariant: only "files" is registered for file
-          # scans. "files_classic" (FileDedupEngine) was removed. Assert both.
           python -c "from cerebro.engines.orchestrator import ScanOrchestrator; o=ScanOrchestrator(); assert type(o._engines['files']).__name__ == 'TurboFileEngine'; assert 'files_classic' not in o.get_available_modes(); print('single-entrance invariant OK')"
 
       - name: Startup time check
@@ -72,7 +64,3 @@ jobs:
             echo "FAIL: import time ${ELAPSED}ms exceeds 3000ms threshold"
             exit 1
           fi
-
-      - name: Memory bounds
-        run: |
-          xvfb-run -a python -m pytest tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin

@@ -66,18 +66,6 @@ class PipelineRequest:
             "config": self.config.to_dict(),
         }
 
-    def to_history_entry(self, name: str, engine_version: str) -> "ScanHistoryEntry":
-        from cerebro.history.models import ScanHistoryEntry, ScanStatus
-
-        return ScanHistoryEntry(
-            scan_id=self.scan_id,
-            name=name,
-            root_path=str(self.config.root),
-            status=ScanStatus.IN_PROGRESS,
-            engine_version=engine_version,
-            settings_snapshot=self.config.to_dict(),
-        )
-
 # -- Deletion Request for cleanup step --
 
 @dataclass

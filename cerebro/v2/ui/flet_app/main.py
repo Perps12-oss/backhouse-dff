@@ -626,6 +626,11 @@ def _main(page: ft.Page) -> None:
     def _on_window_event(e: ft.WindowEvent) -> None:
         if e.data in {"close", "resized", "moved", "maximize", "unmaximize"}:
             _persist_window_state()
+        if e.data == "resized" and layout.current_key == "review":
+            try:
+                review_page._apply_workstation_layout(getattr(page, "width", None))
+            except Exception:
+                _log.exception("Failed to reflow review workstation on window resize")
 
     page.window.on_event = _on_window_event
 

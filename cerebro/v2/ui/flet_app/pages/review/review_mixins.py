@@ -141,14 +141,12 @@ class ReviewPageModeMixin:
         self._smart_row.visible = vis["smart"]
         self._view_toggle_row.visible = vis["toggle"]
         self._group_sort_row.visible = vis["sort"]
-        self._inspector_panel.visible = True
-        self._inspector_panel.width = 336
-        self._inspector_panel.expand = False
-        self._inspector_panel.padding = ft.padding.all(14)
+        self._apply_workstation_layout()
         edge = ft.Colors.with_opacity(
             0.12, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE
         )
-        self._inspector_panel.border = ft.border.only(left=ft.BorderSide(1, edge))
+        if self._inspector_panel.visible:
+            self._inspector_panel.border = ft.border.only(left=ft.BorderSide(1, edge))
 
         self._smart_host.visible = mode in ("groups", "grid")
         filter_host = getattr(self, "_filter_stack_host", None)

@@ -33,6 +33,8 @@ from cerebro.v2.ui.flet_app.pages.review.review_mixins import (
 )
 from cerebro.v2.ui.flet_app.pages.review.shell_attach import attach_review_shell
 from cerebro.v2.ui.flet_app.pages.review.stats_header import StatsHeader
+from cerebro.v2.ui.flet_app.components.layout.responsive_grid import workstation_layout_for_viewport
+from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
@@ -210,12 +212,39 @@ class ReviewPage(
         except RuntimeError:
             return False
 
+    def _apply_workstation_layout(self, page_width: float | int | None = None) -> None:
+        if page_width is None:
+            page_width = getattr(self._bridge.flet_page, "width", None)
+        layout = workstation_layout_for_viewport(page_width)
+        self._workstation_sidebar.visible = layout.sidebar_visible
+        self._workstation_sidebar.width = layout.sidebar_width
+        self._workstation_sidebar.expand = False
+
+        self._inspector_panel.visible = layout.inspector_visible
+        self._inspector_panel.width = layout.inspector_width
+        self._inspector_panel.expand = False
+        if layout.inspector_visible:
+            self._inspector_panel.padding = ft.padding.all(14)
+            edge = ft.Colors.with_opacity(
+                0.12, ft.Colors.BLACK if app_theme_is_light(self._bridge) else ft.Colors.WHITE
+            )
+            self._inspector_panel.border = ft.border.only(left=ft.BorderSide(1, edge))
+        else:
+            self._inspector_panel.padding = ft.padding.all(0)
+            self._inspector_panel.border = None
+
+        safe_update(self._main_workstation_row)
+
+    def _on_viewport_resize(self, e: ft.PageResizeEvent) -> None:
+        self._apply_workstation_layout(getattr(e, "width", None))
+
     def on_show(self) -> None:
         self._reduce_motion = self._bridge.is_reduce_motion_enabled()
         self._grid_view.set_reduce_motion(self._reduce_motion)
         try:
-            page_width = getattr(self._bridge.flet_page, "width", None)
-            self._inspector_panel.apply_viewport_width(page_width)
+            fp = self._bridge.flet_page
+            fp.on_resize = self._on_viewport_resize
+            self._apply_workstation_layout(getattr(fp, "width", None))
         except Exception:
             pass
         self._marked_paths = set(self._bridge.state.selected_files)

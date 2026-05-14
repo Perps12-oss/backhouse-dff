@@ -6,8 +6,8 @@ from cerebro.runtime_deps import ensure_runtime_dependencies
 
 ensure_runtime_dependencies()
 
-from .ui.app_shell import run_app
+from cerebro.v2.ui.flet_app.main import run_flet_app
 
 
 if __name__ == "__main__":
-    run_app()
+    run_flet_app()

@@ -14,8 +14,11 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import (
 from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint, is_machine_generated_name
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import (
     NARROW_BREAKPOINT_PX,
+    WORKSTATION_INSPECTOR_WIDTH_PX,
+    WORKSTATION_SIDEBAR_WIDTH_PX,
     inspector_overlay_width,
     is_narrow_viewport,
+    workstation_layout_for_viewport,
 )
 from cerebro.v2.ui.flet_app.design_system.accents import PRIMARY
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
@@ -71,6 +74,23 @@ def test_responsive_breakpoint() -> None:
     assert is_narrow_viewport(NARROW_BREAKPOINT_PX) is False
     assert inspector_overlay_width(800) is None
     assert inspector_overlay_width(1200) == 336
+
+
+def test_workstation_layout_reflows_rails() -> None:
+    wide = workstation_layout_for_viewport(1280)
+    assert wide.sidebar_visible is True
+    assert wide.inspector_visible is True
+    assert wide.sidebar_width == WORKSTATION_SIDEBAR_WIDTH_PX
+    assert wide.inspector_width == WORKSTATION_INSPECTOR_WIDTH_PX
+
+    compact = workstation_layout_for_viewport(900)
+    assert compact.sidebar_visible is True
+    assert compact.inspector_visible is False
+    assert compact.inspector_width == 0
+
+    tight = workstation_layout_for_viewport(620)
+    assert tight.sidebar_visible is False
+    assert tight.inspector_visible is False
 
 
 def test_skeleton_block_uses_theme() -> None:
