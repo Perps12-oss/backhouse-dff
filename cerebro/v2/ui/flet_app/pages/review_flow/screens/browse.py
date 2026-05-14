@@ -169,7 +169,7 @@ class BrowseScreenView:
             padding=10,
             border_radius=8,
             border=ft.border.all(1, t.colors.border),
-            bgcolor=t.colors.surface,
+            bgcolor=t.colors.bg2,
             on_click=lambda e, g=gid: self._on_open_inspect(g),
         )
         return row

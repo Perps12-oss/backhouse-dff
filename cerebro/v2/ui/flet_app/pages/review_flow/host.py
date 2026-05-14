@@ -522,7 +522,7 @@ class ReviewFlowHost(ft.Column):
     def _show_toast(self, message: str) -> None:
         toast = ft.Container(
             content=ft.Text(message, color=self._t.colors.fg),
-            bgcolor=ft.Colors.with_opacity(0.92, self._t.colors.surface),
+            bgcolor=ft.Colors.with_opacity(0.92, self._t.colors.bg2),
             padding=10,
             border_radius=8,
         )

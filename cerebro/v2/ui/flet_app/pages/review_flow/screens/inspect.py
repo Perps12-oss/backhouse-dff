@@ -23,7 +23,7 @@ def _file_icon(ext: str) -> str:
 
 def _preview_panel(t: ThemeTokens, f: Optional[DuplicateFile], label: str) -> ft.Container:
     if f is None:
-        return ft.Container(expand=True, bgcolor=t.colors.surface, border_radius=8)
+        return ft.Container(expand=True, bgcolor=t.colors.bg2, border_radius=8)
     ext = (f.extension or Path(str(f.path)).suffix.lstrip(".")).lower()
     body: List[ft.Control] = [
         ft.Icon(_file_icon(ext), size=48, color=t.colors.primary),
@@ -43,7 +43,7 @@ def _preview_panel(t: ThemeTokens, f: Optional[DuplicateFile], label: str) -> ft
         padding=12,
         border_radius=8,
         border=ft.border.all(1, t.colors.border),
-        bgcolor=t.colors.surface,
+        bgcolor=t.colors.bg2,
     )
 
 

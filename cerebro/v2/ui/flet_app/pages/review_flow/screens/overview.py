@@ -44,7 +44,7 @@ def build_overview_screen(
             padding=16,
             border_radius=8,
             border=ft.border.all(1, t.colors.border),
-            bgcolor=t.colors.surface,
+            bgcolor=t.colors.bg2,
             expand=True,
         )
 
