@@ -484,11 +484,12 @@ class ReviewFlowHost(ft.Column):
         self._show_modal(dlg)
 
     def _close_filter_sheet(self) -> None:
-        sheet = self._filter_sheet
-        if sheet is None:
+        if self._filter_sheet is None:
             return
-        sheet.open = False
-        self._safe_update(sheet)
+        try:
+            self._bridge.dismiss_top_dialog()
+        except Exception:
+            pass
         self._filter_sheet = None
 
     def _open_filter_sheet(self, _e=None) -> None:
@@ -529,11 +530,10 @@ class ReviewFlowHost(ft.Column):
                 ),
                 padding=16,
             ),
-            open=True,
             on_dismiss=lambda e: setattr(self, "_filter_sheet", None),
         )
         self._filter_sheet = sheet
-        self._bridge.flet_page.open(sheet)
+        self._bridge.show_modal_dialog(sheet)
 
     def _open_command_palette(self) -> None:
         field = ft.TextField(label="Command", autofocus=True)
