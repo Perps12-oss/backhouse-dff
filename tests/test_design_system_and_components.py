@@ -11,8 +11,7 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import (
     RESULTS_GRID_CHUNK,
     RESULTS_LIST_CHUNK,
 )
-from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint
-from cerebro.v2.ui.flet_app.components.files.results_list_card import is_machine_generated_name
+from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint, is_machine_generated_name
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import (
     NARROW_BREAKPOINT_PX,
     inspector_overlay_width,

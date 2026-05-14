@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional, Set
 
@@ -37,6 +38,15 @@ def group_duplicate_summary(g: DuplicateGroup) -> str:
     head = ", ".join(names[:3])
     tail = ", ..." if len(names) > 3 else ""
     return f"{n} similar matches · {head}{tail}"
+
+
+def is_machine_generated_name(name: str) -> bool:
+    stem = Path(name).stem
+    if len(stem) <= 40:
+        return False
+    digits = sum(1 for ch in stem if ch.isdigit())
+    ratio = digits / max(1, len(stem))
+    return ratio > 0.60 and bool(re.search(r"\d{8,}", stem))
 
 
 def group_path_hint(files: List[DuplicateFile]) -> str:
