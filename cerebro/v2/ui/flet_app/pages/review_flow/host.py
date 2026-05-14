@@ -449,6 +449,9 @@ class ReviewFlowHost(ft.Column):
         self._router.navigate("report")
         self._render_active_screen()
 
+    def _show_modal(self, dialog: ft.AlertDialog) -> None:
+        self._bridge.show_modal_dialog(dialog)
+
     def _open_auto_select_modal(self, _e=None) -> None:
         options = [ft.dropdown.Option(key, label) for key, label in RULE_LABELS]
         dd = ft.Dropdown(options=options, value=RULE_LABELS[0][0])
@@ -461,22 +464,24 @@ class ReviewFlowHost(ft.Column):
                     continue
                 to_delete = paths_to_delete(rule, group.files)
                 self._apply_paths_for_group(group, set(to_delete))
-            self._overlay_layer.controls.clear()
+            self._close_overlay()
             self._show_toast(f"Applied {rule}")
-            if self._browse_view:
+            if self._router.active_screen() == "overview":
+                self._router.navigate("browse")
+            elif self._browse_view:
                 self._browse_view.refresh()
-            self._safe_update(self)
+            else:
+                self._render_active_screen()
 
         dlg = ft.AlertDialog(
             title=ft.Text("Auto-Select"),
             content=dd,
-            actions=[ft.TextButton("Cancel", on_click=lambda e: self._close_overlay()), ft.FilledButton("Apply", on_click=apply_rule)],
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self._close_overlay()),
+                ft.FilledButton("OK", on_click=apply_rule),
+            ],
         )
-        self._overlay_layer.controls = [dlg]
-        page = self._bridge.flet_page
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
+        self._show_modal(dlg)
 
     def _close_filter_sheet(self) -> None:
         sheet = self._filter_sheet
@@ -557,10 +562,7 @@ class ReviewFlowHost(ft.Column):
             content=ft.Column([field, ft.Text("Try: invert, keep newest, grid")], tight=True),
             actions=[ft.TextButton("Close", on_click=lambda e: self._close_overlay()), ft.FilledButton("Run", on_click=run_cmd)],
         )
-        page = self._bridge.flet_page
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
+        self._show_modal(dlg)
 
     def _open_export_modal(self, _e=None) -> None:
         def export_json(_ev=None) -> None:
@@ -600,18 +602,18 @@ class ReviewFlowHost(ft.Column):
                 ft.FilledButton("HTML", on_click=export_html),
             ],
         )
-        page = self._bridge.flet_page
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
+        self._show_modal(dlg)
 
     def _close_overlay(self) -> None:
         self._close_filter_sheet()
         self._overlay_layer.controls.clear()
-        page = self._bridge.flet_page
-        if page.dialog:
-            page.dialog.open = False
-        page.update()
+        try:
+            self._bridge.dismiss_top_dialog()
+        except Exception:
+            page = self._bridge.flet_page
+            if getattr(page, "dialog", None):
+                page.dialog.open = False
+            page.update()
 
     def _show_toast(self, message: str) -> None:
         toast = ft.Container(
