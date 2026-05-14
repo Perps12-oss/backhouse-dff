@@ -40,6 +40,7 @@ class ReviewFlowHost(ft.Column):
         self._bridge = bridge
         self._t = theme_for_mode("dark")
         self._state = ReviewFlowState()
+        self._state.protected_path_prefixes = ("/windows", "/system", "c:/windows")
         self._router = ReviewFlowRouter(self._state, self._render_active_screen)
         self._delete_service = DeleteService()
         self._browse_view: Optional[BrowseScreenView] = None
@@ -456,10 +457,31 @@ class ReviewFlowHost(ft.Column):
             self._show_toast(f"Exported {out.name}")
             self._close_overlay()
 
+        def export_csv(_ev=None) -> None:
+            out = Path(self._bridge.get_settings().get("general", {}).get("export_dir", ".")) / "review_export.csv"
+            lines = ["path,action"]
+            for path in sorted(self._state.marked_paths):
+                lines.append(f"{path},delete")
+            out.write_text("\n".join(lines), encoding="utf-8")
+            self._show_toast(f"Exported {out.name}")
+            self._close_overlay()
+
+        def export_html(_ev=None) -> None:
+            out = Path(self._bridge.get_settings().get("general", {}).get("export_dir", ".")) / "review_export.html"
+            rows = "".join(f"<li>{p}</li>" for p in sorted(self._state.marked_paths))
+            out.write_text(f"<html><body><h1>Review export</h1><ul>{rows}</ul></body></html>", encoding="utf-8")
+            self._show_toast(f"Exported {out.name}")
+            self._close_overlay()
+
         dlg = ft.AlertDialog(
             title=ft.Text("Export"),
-            content=ft.Text("Export current review session as JSON."),
-            actions=[ft.TextButton("Close", on_click=lambda e: self._close_overlay()), ft.FilledButton("JSON", on_click=export_json)],
+            content=ft.Text("Export current review session."),
+            actions=[
+                ft.TextButton("Close", on_click=lambda e: self._close_overlay()),
+                ft.FilledButton("JSON", on_click=export_json),
+                ft.FilledButton("CSV", on_click=export_csv),
+                ft.FilledButton("HTML", on_click=export_html),
+            ],
         )
         page = self._bridge.flet_page
         page.dialog = dlg

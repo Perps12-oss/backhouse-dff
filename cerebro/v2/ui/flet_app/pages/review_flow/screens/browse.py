@@ -126,6 +126,9 @@ class BrowseScreenView:
         path = str(primary.path.parent) if primary else ""
         checked = gid in self._state.selected_set_ids
         expanded = gid in self._state.expanded_set_ids
+        protected = any(self._state.is_path_protected(str(f.path)) for f in group.files)
+        marked = any(str(f.path) in self._state.marked_paths for f in group.files)
+        name_style = ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if marked and self._state.dry_run else None)
         members: List[ft.Control] = []
         if expanded:
             for f in group.files:
@@ -139,7 +142,8 @@ class BrowseScreenView:
                         [
                             ft.Checkbox(value=checked, on_change=lambda e, g=gid: self._on_toggle_set(g)),
                             ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED, size=18, color=t.colors.primary),
-                            ft.Text(name, expand=True),
+                            ft.Icon(ft.icons.Icons.SHIELD, size=16, color=t.colors.warning, visible=protected),
+                            ft.Text(name, expand=True, style=name_style),
                             ft.Text(f"×{len(group.files)}", color=t.colors.primary),
                             ft.Text(size, color=t.colors.fg_muted),
                             ft.IconButton(
