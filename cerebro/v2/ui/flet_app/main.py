@@ -198,17 +198,9 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
-    _review_shell = (os.environ.get("CEREBRO_REVIEW_SHELL") or "").strip().lower()
-    _use_review_v2 = _review_shell in ("v2", "2", "true", "yes", "on")
-    if _use_review_v2:
-        from cerebro.v2.ui.flet_app.pages.review_v2.review_page_v2 import ReviewPageV2
+    from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
 
-        _ReviewTabCls = ReviewPageV2
-        _log.info("init: using ReviewPageV2 (CEREBRO_REVIEW_SHELL=%r)", _review_shell)
-    else:
-        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
-
-        _ReviewTabCls = ReviewPage
+    _ReviewTabCls = ReviewPage
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -244,7 +236,7 @@ def _main(page: ft.Page) -> None:
 
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
-            "ReviewNavigate": [getattr(review_page, "_compare_view", None), getattr(review_page, "_cmp_bar", None)],
+            "ReviewNavigate": [getattr(review_page, "_grid", None), getattr(review_page, "_content", None)],
             "ReviewViewFilterChanged": [
                 getattr(review_page, "_workstation_sidebar", None),
                 getattr(review_page, "_grid", None),

@@ -76,7 +76,7 @@ class ReviewActionBar(ft.Container):
             pass
 
     def refresh(self, mode: str, marked_n: int, marked_bytes: int, trust_line: str) -> None:
-        should_show = mode not in ("empty", "loading", "compare") and marked_n > 0
+        should_show = mode not in ("empty", "loading") and marked_n > 0
         if should_show:
             self.visible = True
             self.opacity = 1.0
@@ -86,7 +86,7 @@ class ReviewActionBar(ft.Container):
         else:
             self.opacity = 0.0
             self.visible = False
-        self._apply_btn.disabled = marked_n <= 0 or mode in ("empty", "loading", "compare")
+        self._apply_btn.disabled = marked_n <= 0 or mode in ("empty", "loading")
         ReviewActionBar._safe_update(self._summary)
         ReviewActionBar._safe_update(self._trust)
         ReviewActionBar._safe_update(self._apply_btn)

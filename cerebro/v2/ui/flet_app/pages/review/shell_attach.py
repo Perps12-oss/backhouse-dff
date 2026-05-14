@@ -8,12 +8,7 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.components.filters.workspace_filter_stack import WorkspaceFilterStack
 from cerebro.v2.ui.flet_app.components.smart_selection import SmartSelectionRow
-from cerebro.v2.ui.flet_app.components.workspace.advanced_drawer import AdvancedWorkspaceDrawer
-from cerebro.v2.ui.flet_app.components.workspace.compare_workspace import CompareWorkspace
 from cerebro.v2.ui.flet_app.pages.review._types import RC
-from cerebro.v2.ui.flet_app.pages.review.batch_review_view import BatchReviewView
-from cerebro.v2.ui.flet_app.pages.review.compare_delegate import ReviewCompareDelegateAdapter
-from cerebro.v2.ui.flet_app.pages.review.compare_view import ReviewCompareView
 from cerebro.v2.ui.flet_app.pages.review.grid_view import ReviewGridView
 from cerebro.v2.ui.flet_app.pages.review.inspector_panel import ReviewInspectorPanel
 from cerebro.v2.ui.flet_app.pages.review.review_action_bar import ReviewActionBar
@@ -31,7 +26,7 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
         "← Back",
         on_click=page._go_back,
         style=pill_text_button_style(t, variant="primary"),
-        tooltip="Group list when reviewing groups; returns here from Compare or Grid.",
+        tooltip="Group list when reviewing groups; returns here from Tiles.",
     )
 
     page._grid_view = ReviewGridView(
@@ -55,19 +50,7 @@ def _attach_header_grid_smart(page: Any, t: ThemeTokens, bridge: Any) -> None:
     page._smart_seg = page._smart_row.smart_seg
 
 
-def _attach_compare_and_content(page: Any, t: ThemeTokens, bridge: Any) -> None:
-    page._compare_ui = ReviewCompareView(ReviewCompareDelegateAdapter(page), bridge, t)
-    page._cmp_bar = page._compare_ui.cmp_bar
-    page._compare_workspace = CompareWorkspace(page._compare_ui.body, tokens=t)
-    page._compare_view = page._compare_workspace
-    page._batch_review_view = BatchReviewView(
-        t,
-        on_keep=page._batch_apply_keep_rule,
-        on_mark_extras=page._batch_mark_extras,
-        on_skip=page._batch_skip_group,
-        on_next=page._batch_advance,
-        on_exit=page._exit_batch_review,
-    )
+def _attach_content(page: Any) -> None:
     page._content = ft.Column(expand=True)
 
 
@@ -153,14 +136,8 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         on_click=lambda e: page._enter_mode("grid"),
         style=pill_text_button_style(t, variant="muted"),
     )
-    page._btn_batch_review = ft.TextButton(
-        "Batch review",
-        tooltip="Walk groups one at a time with keep / mark / skip shortcuts.",
-        on_click=page._enter_batch_review,
-        style=pill_text_button_style(t, variant="muted"),
-    )
     page._view_toggle_row = ft.Row(
-        [page._btn_view_groups, page._btn_view_tiles, page._btn_batch_review],
+        [page._btn_view_groups, page._btn_view_tiles],
         spacing=t.spacing.sm,
         visible=False,
     )
@@ -193,47 +170,10 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         visible=False,
     )
 
-    page._search_field = ft.TextField(
-        hint_text="Search files or paths…",
-        width=220,
-        height=36,
-        text_size=12,
-        content_padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-        border_radius=8,
-        visible=False,
-        on_change=page._on_search_changed,
-        prefix_icon=ft.icons.Icons.SEARCH,
-    )
-
-    def _toggle_search(_e):
-        page._search_field.visible = not page._search_field.visible
-        if not page._search_field.visible:
-            page._search_field.value = ""
-            page._search_query = ""
-            if page._mode in ("groups", "grid"):
-                if page._mode == "groups":
-                    page._refresh_groups_overview()
-                else:
-                    page._refresh_grid()
-        try:
-            if page._search_field.page is not None:
-                page._search_field.update()
-        except RuntimeError:
-            pass
-
-    page._btn_toolbar_search = ft.IconButton(
-        ft.icons.Icons.SEARCH,
-        icon_size=20,
-        tooltip="Search groups by filename or path",
-        on_click=_toggle_search,
-    )
-
     right_tools = ft.Row(
         [
             page._view_toggle_row,
             page._group_sort_row,
-            page._search_field,
-            page._btn_toolbar_search,
         ],
         spacing=t.spacing.sm,
         tight=True,
@@ -250,25 +190,12 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     )
     page._filter_stack_host = ft.Container(content=page._workspace_filter_stack)
 
-    page._advanced_drawer = AdvancedWorkspaceDrawer(
-        t,
-        on_regex_change=page._on_advanced_regex_changed,
-        on_export_marked=page._on_export_marked_paths,
-        on_rule_pipeline_change=page._on_advanced_rule_pipeline_changed,
-    )
     page._workstation_sidebar = ReviewWorkstationSidebar(
         bridge,
         t,
-        on_category_change=page._on_filter_changed,
-        on_group_select=page._on_rail_group_selected,
-        on_group_search=page._on_rail_group_search,
-        on_show_all_groups=page._on_rail_show_all_groups,
         on_review_scope_change=page._on_review_scope_changed,
-        footer=page._advanced_drawer,
     )
-    page._inspector_panel = ReviewInspectorPanel(
-        bridge, t, on_compare_file=page._on_inspector_compare_file
-    )
+    page._inspector_panel = ReviewInspectorPanel(bridge, t)
     page._review_action_bar = ReviewActionBar(
         bridge,
         t,
@@ -279,19 +206,13 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     strip_pad = ft.Padding.symmetric(horizontal=t.spacing.lg)
     hwrap = page._hwrap_strip
     page._smart_host = ft.Container(content=hwrap(page._smart_row), padding=strip_pad)
-    page._cmp_bar_host = ft.Container(
-        content=hwrap(page._cmp_bar),
-        padding=ft.Padding.symmetric(horizontal=t.spacing.lg),
-    )
     page._content_frame = ft.Container(content=page._content, expand=True)
-    # Compare mounts inside _content like groups/grid; the slot always hosts content_frame.
     page._workspace_slot = ft.Container(expand=True, content=page._content_frame)
     center_column = ft.Column(
         [
             page._stats_header,
             page._filter_stack_host,
             page._smart_host,
-            page._cmp_bar_host,
             page._workspace_slot,
             page._review_action_bar,
         ],
@@ -314,11 +235,11 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
 
 
 def attach_review_shell(page: Any) -> None:
-    """Populate ``page`` with workstation layout, grid, compare, and empty/loading states."""
+    """Populate ``page`` with workstation layout, grid, and empty/loading states."""
     t: ThemeTokens = page._t
     bridge = page._bridge
     _attach_header_grid_smart(page, t, bridge)
-    _attach_compare_and_content(page, t, bridge)
+    _attach_content(page)
     _attach_empty_and_loading(page, t, bridge)
     _attach_group_overview_and_page_controls(page, t, bridge)
     page._apply_pill_chrome()

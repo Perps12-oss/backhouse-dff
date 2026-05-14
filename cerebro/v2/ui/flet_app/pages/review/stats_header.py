@@ -67,13 +67,6 @@ class StatsHeader(ft.Container):
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-        self._compare_hint = ft.Text(
-            "",
-            size=11,
-            color=t.colors.fg_muted,
-            visible=False,
-            italic=True,
-        )
         main_row = ft.Row(
             [
                 left_block,
@@ -87,11 +80,7 @@ class StatsHeader(ft.Container):
         bg = ft.Colors.with_opacity(0.04, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         border_color = ft.Colors.with_opacity(0.1, ft.Colors.BLACK if is_light else ft.Colors.WHITE)
         super().__init__(
-            content=ft.Column(
-                [main_row, self._compare_hint],
-                spacing=6,
-                tight=True,
-            ),
+            content=main_row,
             padding=ft.Padding.symmetric(horizontal=14, vertical=10),
             bgcolor=bg,
             border=ft.border.only(bottom=ft.BorderSide(1, border_color)),
@@ -167,11 +156,6 @@ class StatsHeader(ft.Container):
         self._title_lbl.color = t.colors.fg
         self._subtext_lbl.size = t.typography.size_sm
         self._subtext_lbl.color = t.colors.fg_muted
-        self._compare_hint.size = 11
-        self._compare_hint.color = t.colors.fg_muted
-        root = self.content
-        if isinstance(root, ft.Column):
-            root.spacing = 6
         self.padding = ft.Padding.symmetric(horizontal=14, vertical=10)
 
         reviewed_in_filter = sum(1 for g in groups if g.group_id in reviewed_ids)
@@ -181,8 +165,6 @@ class StatsHeader(ft.Container):
             sum(int(getattr(g, "reclaimable", 0) or 0) for g in groups if g.group_id not in reviewed_ids)
         )
         mode_label_map = {
-            "compare": "Compare",
-            "batch": "Batch",
             "grid": "Tiles",
             "groups": "Details",
             "loading": "Loading",
@@ -192,8 +174,6 @@ class StatsHeader(ft.Container):
         self._subtext_lbl.value = (
             f"{filter_label} · {mode_label} · {reviewed_in_filter}/{total_filtered} reviewed"
         )
-        if mode == "compare":
-            self._subtext_lbl.value += " · Back returns to the group list"
 
         self._marked_chip_value.value = f"{marked_count:,} · {fmt_size(marked_bytes)}"
         self._marked_chip_value.color = RC.stats_chip_files
@@ -203,18 +183,7 @@ class StatsHeader(ft.Container):
             self._metric_chip_row("Marked", self._marked_chip_value, RC.stats_chip_files),
         ]
 
-        if mode == "compare":
-            self._compare_hint.visible = True
-            self._compare_hint.value = (
-                "Shortcuts: arrows change group; 1/K and 2/D mark sides; Enter next; "
-                "Space applies smart rule to extras."
-            )
-        else:
-            self._compare_hint.visible = False
-            self._compare_hint.value = ""
-
         StatsHeader._safe_update(self._title_lbl)
         StatsHeader._safe_update(self._subtext_lbl)
         StatsHeader._safe_update(self._stats_row)
-        StatsHeader._safe_update(self._compare_hint)
         StatsHeader._safe_update(self)

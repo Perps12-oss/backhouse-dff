@@ -52,10 +52,9 @@ def _status_badge(label: str, color: str, bg: str) -> ft.Container:
 
 
 class ReviewInspectorPanel(ft.Container):
-    def __init__(self, bridge, t: ThemeTokens, *, on_compare_file=None) -> None:
+    def __init__(self, bridge, t: ThemeTokens) -> None:
         self._bridge = bridge
         self._t = t
-        self._on_compare_file = on_compare_file
         self._current_mode: str = "placeholder"  # "placeholder" | "group" | "file"
         self._current_group: Optional[DuplicateGroup] = None
         self._current_file: Optional[DuplicateFile] = None
@@ -435,28 +434,6 @@ class ReviewInspectorPanel(ft.Container):
                 spacing=6,
             ),
         ]
-
-        if self._on_compare_file is not None:
-            captured_f = f
-
-            def _on_cmp_click(e: ft.ControlEvent, _f=captured_f) -> None:
-                if self._on_compare_file:
-                    self._on_compare_file(_f)
-
-            controls += [
-                _divider(is_light),
-                ft.OutlinedButton(
-                    "Compare in context →",
-                    icon=ft.icons.Icons.COMPARE,
-                    on_click=_on_cmp_click,
-                    style=ft.ButtonStyle(
-                        color=RC.side_a,
-                        side=ft.BorderSide(1, ft.Colors.with_opacity(0.4, RC.side_a)),
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-                        shape=ft.RoundedRectangleBorder(radius=8),
-                    ),
-                ),
-            ]
 
         return controls
 
