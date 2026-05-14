@@ -10,7 +10,7 @@ import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
-from cerebro.v2.ui.flet_app.pages.review_flow.mock_data import generate_mock_groups
+from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import build_progress_sidebar
 from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
@@ -71,7 +71,11 @@ class ReviewFlowHost(ft.Column):
         started = time.perf_counter()
         t = self._t
         screen = self._router.active_screen()
-        self._workstation_sidebar = build_progress_sidebar(t, screen, self._on_progress_jump)
+        page_width = getattr(self._bridge.flet_page, "width", None)
+        if is_narrow_viewport(page_width):
+            self._workstation_sidebar = ft.Container(width=0)
+        else:
+            self._workstation_sidebar = build_progress_sidebar(t, screen, self._on_progress_jump)
         self.controls[0].controls[0] = self._workstation_sidebar
         if screen == "overview":
             self._content.content = build_overview_screen(
@@ -81,6 +85,7 @@ class ReviewFlowHost(ft.Column):
                 on_auto_select=self._open_auto_select_modal,
                 on_filter=self._open_filter_sheet,
                 on_export=self._open_export_modal,
+                recent_lines=self._recent_review_lines(),
             )
         elif screen == "browse":
             self._browse_view = BrowseScreenView(
@@ -154,6 +159,7 @@ class ReviewFlowHost(ft.Column):
             self._state.use_mock_data = False
         elif not self._state.scan_results:
             self._seed_mock_results()
+        self._try_resume_session()
         self._render_active_screen()
 
     def get_groups(self) -> List[DuplicateGroup]:
@@ -552,6 +558,21 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.refresh()
 
+    def _try_resume_session(self) -> None:
+        path = Path("review_session.v1.json")
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        self._state.marked_paths = set(payload.get("marked_paths", []))
+        self._state.selected_set_ids = set(payload.get("selected_set_ids", []))
+        screen = payload.get("active_screen")
+        if screen in {"overview", "browse", "inspect", "cart", "execute", "report"}:
+            self._router.reset_to_overview()
+            self._router.navigate(screen)
+
     def _save_session(self) -> None:
         payload = {
             "version": 1,
@@ -562,6 +583,12 @@ class ReviewFlowHost(ft.Column):
         path = Path(".") / "review_session.v1.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self._show_toast("Session saved")
+
+    def _recent_review_lines(self) -> list[str]:
+        path = Path("review_session.v1.json")
+        if path.exists():
+            return [f"Resumable session ({path.name})"]
+        return ["No saved sessions yet"]
 
     def _push_marked_paths_to_store(self) -> None:
         self._bridge.store.dispatch(FileSelectionChanged(file_ids=tuple(self._state.marked_paths)))

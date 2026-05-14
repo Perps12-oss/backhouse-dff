@@ -14,6 +14,7 @@ def build_overview_screen(
     on_auto_select,
     on_filter,
     on_export,
+    recent_lines: list[str] | None = None,
 ) -> ft.Column:
     metrics = mock_overview_metrics(groups)
     hero = ft.Text(
@@ -74,6 +75,11 @@ def build_overview_screen(
                 alignment=ft.MainAxisAlignment.CENTER,
             ),
             ft.Container(expand=True),
+            ft.Text("Recent Reviews", size=t.typography.size_sm, color=t.colors.fg_muted),
+            ft.Column(
+                [ft.Text(line, size=t.typography.size_xs, color=t.colors.fg_muted) for line in (recent_lines or ["No saved sessions yet"])],
+                spacing=2,
+            ),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         expand=True,
