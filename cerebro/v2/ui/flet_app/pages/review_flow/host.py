@@ -11,6 +11,7 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
+from cerebro.v2.ui.flet_app.pages.review_flow.mock_data import generate_mock_groups
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import build_progress_sidebar
 from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
