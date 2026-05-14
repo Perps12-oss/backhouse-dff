@@ -72,7 +72,6 @@ class ReviewPage(
         self._group_files: dict[int, List[DuplicateFile]] = {}
         self._filter_key = "all"
         self._cross_folder_only = False
-        self._workspace_view_mode = "triage"
         self._mode = "empty"
         self._compare_gid: Optional[int] = None
         self._compare_a: Optional[DuplicateFile] = None

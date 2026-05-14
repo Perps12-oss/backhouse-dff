@@ -247,7 +247,6 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         on_filter_change=page._on_filter_changed,
         on_text_filter=page._on_workspace_text_filter,
         on_cross_folder_change=page._on_cross_folder_only_changed,
-        on_view_mode_change=page._on_workspace_view_mode_changed,
     )
     page._filter_stack_host = ft.Container(content=page._workspace_filter_stack)
 

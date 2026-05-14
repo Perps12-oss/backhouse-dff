@@ -11,7 +11,7 @@ from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
 
 class WorkspaceFilterStack(ft.Container):
-    """Type pills, search, cross-folder toggle, and triage/dashboard view mode."""
+    """Type pills, search, and cross-folder toggle for the workspace."""
 
     def __init__(
         self,
@@ -20,10 +20,8 @@ class WorkspaceFilterStack(ft.Container):
         on_filter_change: Callable[[str], None],
         on_text_filter: Callable[[str], None],
         on_cross_folder_change: Callable[[bool], None],
-        on_view_mode_change: Callable[[str], None],
     ) -> None:
         self._t = t
-        self._on_view_mode_change = on_view_mode_change
         self._filter_bar = FilterBar(t, on_filter_change, show_files_suffix=True)
         self._search = ft.TextField(
             hint_text="Search paths…",
@@ -41,14 +39,6 @@ class WorkspaceFilterStack(ft.Container):
             value=False,
             on_change=lambda e: on_cross_folder_change(bool(e.control.value)),
         )
-        self._view_mode = ft.SegmentedButton(
-            selected=["triage"],
-            segments=[
-                ft.Segment(value="triage", label=ft.Text("Triage")),
-                ft.Segment(value="dashboard", label=ft.Text("Dashboard")),
-            ],
-            on_change=self._on_view_mode_segment,
-        )
         super().__init__(
             content=ft.Column(
                 [
@@ -57,8 +47,6 @@ class WorkspaceFilterStack(ft.Container):
                         [
                             self._search,
                             self._cross_folder,
-                            ft.Container(expand=True),
-                            self._view_mode,
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=t.spacing.md,
@@ -68,17 +56,6 @@ class WorkspaceFilterStack(ft.Container):
             ),
             padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.xs),
         )
-
-    def _on_view_mode_segment(self, e: ft.ControlEvent) -> None:
-        ctrl = getattr(e, "control", None) or self._view_mode
-        sel = getattr(ctrl, "selected", None)
-        if isinstance(sel, list):
-            key = str(sel[0]) if sel else "triage"
-        elif isinstance(sel, (set, frozenset)):
-            key = str(next(iter(sel))) if sel else "triage"
-        else:
-            key = "triage"
-        self._on_view_mode_change(key)
 
     @property
     def filter_bar(self) -> FilterBar:
@@ -90,10 +67,7 @@ class WorkspaceFilterStack(ft.Container):
         filter_key: str,
         text_filter: str,
         cross_folder_only: bool,
-        view_mode: str,
     ) -> None:
         self._filter_bar.set_active(filter_key)
         self._search.value = text_filter
         self._cross_folder.value = cross_folder_only
-        mode = view_mode if view_mode in ("triage", "dashboard") else "triage"
-        self._view_mode.selected = [mode]

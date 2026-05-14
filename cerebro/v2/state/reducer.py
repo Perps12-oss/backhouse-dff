@@ -208,7 +208,13 @@ def _reduce_results(state: AppState, action: Action) -> AppState | None:
         patch = {k: v for k, v in (action.patch or {}).items()}
         if not patch:
             return state
-        return replace(state, ui={**state.ui, **patch})
+        new_ui = dict(state.ui or {})
+        for key, value in patch.items():
+            if value is None:
+                new_ui.pop(key, None)
+            else:
+                new_ui[key] = value
+        return replace(state, ui=new_ui)
 
     return None
 
