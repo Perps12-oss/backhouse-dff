@@ -206,7 +206,11 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     strip_pad = ft.Padding.symmetric(horizontal=t.spacing.lg)
     hwrap = page._hwrap_strip
     page._smart_host = ft.Container(content=hwrap(page._smart_row), padding=strip_pad)
-    page._content_frame = ft.Container(content=page._content, expand=True)
+    page._content_frame = ft.Container(
+        content=page._content,
+        expand=True,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+    )
     page._workspace_slot = ft.Container(expand=True, content=page._content_frame)
     center_column = ft.Column(
         [
@@ -219,7 +223,11 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         expand=True,
         spacing=0,
     )
-    page._center_column = center_column
+    page._center_column = ft.Container(
+        content=center_column,
+        expand=True,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+    )
 
     page._main_workstation_row = ft.Row(
         [

@@ -74,21 +74,18 @@ class ReviewInspectorPanel(ft.Container):
         super().__init__(
             width=336,
             expand=False,
-            bgcolor=ft.Colors.with_opacity(0.03, ft.Colors.WHITE if not is_light else ft.Colors.BLACK),
+            bgcolor=t.colors.glass_bg,
             border=ft.border.only(left=ft.BorderSide(1, edge)),
             padding=ft.padding.all(14),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
             content=self._scroll_col,
             animate_offset=ft.Animation(240, ft.AnimationCurve.EASE_OUT),
         )
 
     def apply_viewport_width(self, page_width: float | int | None) -> None:
         overlay_width = inspector_overlay_width(page_width, default=336)
-        if overlay_width is None:
-            self.width = None
-            self.expand = True
-        else:
-            self.width = overlay_width
-            self.expand = False
+        self.width = overlay_width if overlay_width is not None else 336
+        self.expand = False
         ReviewInspectorPanel._safe_update(self)
 
     # ── public API ───────────────────────────────────────────────────────────
@@ -133,7 +130,7 @@ class ReviewInspectorPanel(ft.Container):
         # Review workstation collapses width to 0 in compare mode; do not restore chrome then.
         if int(getattr(self, "width", 336) or 0) > 0:
             self.border = ft.border.only(left=ft.BorderSide(1, edge))
-            self.bgcolor = ft.Colors.with_opacity(0.03, ft.Colors.WHITE if not is_light else ft.Colors.BLACK)
+            self.bgcolor = t.colors.glass_bg
         else:
             self.border = None
             self.bgcolor = None

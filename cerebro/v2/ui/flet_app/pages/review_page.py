@@ -93,7 +93,7 @@ class ReviewPage(
         self._inspector_panel: ReviewInspectorPanel
         self._review_action_bar: ReviewActionBar
         self._main_workstation_row: ft.Row
-        self._center_column: ft.Column
+        self._center_column: ft.Container
         self._content: ft.Column
         self._content_frame: ft.Container
         self._workspace_slot: ft.Container
