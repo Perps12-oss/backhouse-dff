@@ -198,9 +198,21 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
-    from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+    def _review_flow_v2_enabled() -> bool:
+        try:
+            general = (bridge.get_settings().get("general") or {})
+            return bool(general.get("review_flow_v2", True))
+        except Exception:
+            return True
 
-    _ReviewTabCls = ReviewPage
+    if _review_flow_v2_enabled():
+        from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
+
+        _ReviewTabCls = ReviewFlowHost
+    else:
+        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+
+        _ReviewTabCls = ReviewPage
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -606,8 +618,14 @@ def _main(page: ft.Page) -> None:
             bridge.open_last_session()
             return
         if ctrl and key == "k":
+            if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
+                if review_page.handle_keyboard("k", ctrl=ctrl):
+                    return
             _show_command_palette()
             return
+        if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
+            if review_page.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
+                return
         if key in ("arrowleft", "left"):
             _cycle_tab(-1)
             return

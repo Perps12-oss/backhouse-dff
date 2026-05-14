@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Literal, Optional, Set, Tuple
+
+from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+
+ReviewScreen = Literal["overview", "browse", "inspect", "cart", "execute", "report"]
+BrowseViewMode = Literal["list", "grid", "tree", "folder_diff"]
+
+
+@dataclass
+class SetSelection:
+    kept_paths: Set[str] = field(default_factory=set)
+    deleted_paths: Set[str] = field(default_factory=set)
+    protected_paths: Set[str] = field(default_factory=set)
+
+
+@dataclass
+class ReviewFlowState:
+    active_screen: ReviewScreen = "overview"
+    screen_stack: List[ReviewScreen] = field(default_factory=lambda: ["overview"])
+    scan_results: List[DuplicateGroup] = field(default_factory=list)
+    scan_mode: str = "files"
+    selected_set_ids: Set[int] = field(default_factory=set)
+    expanded_set_ids: Set[int] = field(default_factory=set)
+    marked_paths: Set[str] = field(default_factory=set)
+    set_selections: Dict[int, SetSelection] = field(default_factory=dict)
+    browse_focus_index: int = 0
+    browse_scroll_offset: int = 0
+    inspect_set_id: Optional[int] = None
+    inspect_file_index: int = 0
+    view_mode: BrowseViewMode = "list"
+    sort_key: str = "size"
+    sort_desc: bool = True
+    dry_run: bool = True
+    execute_confirmed: bool = False
+    execute_progress: Tuple[int, int] = (0, 0)
+    execute_errors: List[str] = field(default_factory=list)
+    report_deleted_count: int = 0
+    report_freed_bytes: int = 0
+    tags_by_set: Dict[int, Set[str]] = field(default_factory=dict)
+    notes_by_set: Dict[int, str] = field(default_factory=dict)
+    protected_path_prefixes: Tuple[str, ...] = field(default_factory=tuple)
+    undo_stack: List[Dict[str, object]] = field(default_factory=list)
+    redo_stack: List[Dict[str, object]] = field(default_factory=list)
+    text_filter: str = ""
+    type_filter: Set[str] = field(default_factory=set)
+    min_size_bytes: int = 0
+    max_size_bytes: int = 0
+    similarity_min: float = 0.0
+    use_mock_data: bool = True
+
+    def visible_groups(self) -> List[DuplicateGroup]:
+        groups = list(self.scan_results)
+        if self.text_filter.strip():
+            q = self.text_filter.strip().lower()
+            groups = [
+                g
+                for g in groups
+                if any(q in str(f.path).lower() or q in str(f.path.name).lower() for f in g.files)
+            ]
+        if self.type_filter:
+            groups = [
+                g
+                for g in groups
+                if any((f.extension or "").lower().lstrip(".") in self.type_filter for f in g.files)
+            ]
+        if self.min_size_bytes or self.max_size_bytes:
+            lo = self.min_size_bytes
+            hi = self.max_size_bytes or 10**15
+            groups = [g for g in groups if any(lo <= int(f.size) <= hi for f in g.files)]
+        if self.similarity_min > 0:
+            groups = [
+                g
+                for g in groups
+                if any(float(getattr(f, "similarity", 1.0) or 1.0) >= self.similarity_min for f in g.files)
+            ]
+        key = self.sort_key
+        reverse = self.sort_desc
+
+        def sort_val(g: DuplicateGroup) -> object:
+            if key == "count":
+                return len(g.files)
+            if key == "name":
+                return str(g.files[0].path.name).lower() if g.files else ""
+            if key == "confidence":
+                return max(float(getattr(f, "similarity", 1.0) or 1.0) for f in g.files) if g.files else 0.0
+            return int(getattr(g, "reclaimable", 0) or 0)
+
+        return sorted(groups, key=sort_val, reverse=reverse)
+
+    def group_by_id(self, group_id: int) -> Optional[DuplicateGroup]:
+        for g in self.scan_results:
+            if g.group_id == group_id:
+                return g
+        return None
+
+    def marked_bytes(self) -> int:
+        total = 0
+        for g in self.scan_results:
+            for f in g.files:
+                if str(f.path) in self.marked_paths:
+                    total += int(getattr(f, "size", 0) or 0)
+        return total
+
+    def selected_set_count(self) -> int:
+        return len(self.selected_set_ids)
+
+    def is_path_protected(self, path: str) -> bool:
+        p = str(path).replace("\\", "/").lower()
+        return any(p.startswith(prefix.replace("\\", "/").lower()) for prefix in self.protected_path_prefixes)
+
+    def push_undo_snapshot(self) -> None:
+        self.undo_stack.append(
+            {
+                "marked_paths": set(self.marked_paths),
+                "selected_set_ids": set(self.selected_set_ids),
+                "set_selections": {
+                    gid: SetSelection(
+                        kept_paths=set(sel.kept_paths),
+                        deleted_paths=set(sel.deleted_paths),
+                        protected_paths=set(sel.protected_paths),
+                    )
+                    for gid, sel in self.set_selections.items()
+                },
+            }
+        )
+        self.redo_stack.clear()
+
+    def restore_snapshot(self, snap: Dict[str, object]) -> None:
+        self.marked_paths = set(snap.get("marked_paths", set()))
+        self.selected_set_ids = set(snap.get("selected_set_ids", set()))
+        restored = snap.get("set_selections", {})
+        if isinstance(restored, dict):
+            self.set_selections = dict(restored)
+
+    def cart_buckets(self) -> Dict[str, List[DuplicateFile]]:
+        to_delete: List[DuplicateFile] = []
+        to_keep: List[DuplicateFile] = []
+        protected: List[DuplicateFile] = []
+        for g in self.scan_results:
+            sel = self.set_selections.get(g.group_id)
+            for f in g.files:
+                path = str(f.path)
+                if sel and path in sel.protected_paths:
+                    protected.append(f)
+                elif path in self.marked_paths or (sel and path in sel.deleted_paths):
+                    to_delete.append(f)
+                elif sel and path in sel.kept_paths:
+                    to_keep.append(f)
+        return {"delete": to_delete, "keep": to_keep, "protected": protected}
