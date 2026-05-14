@@ -52,6 +52,7 @@ class ReviewFlowHost(ft.Column):
         self._workstation_sidebar = ft.Container(width=0)
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
+        self._filter_sheet: Optional[ft.BottomSheet] = None
         self._inspect_stub = False
         self._inspect_preview_generation = 0
         self.controls = [
@@ -477,6 +478,14 @@ class ReviewFlowHost(ft.Column):
         dlg.open = True
         page.update()
 
+    def _close_filter_sheet(self) -> None:
+        sheet = self._filter_sheet
+        if sheet is None:
+            return
+        sheet.open = False
+        self._safe_update(sheet)
+        self._filter_sheet = None
+
     def _open_filter_sheet(self, _e=None) -> None:
         min_size = ft.TextField(label="Min size bytes", value=str(self._state.min_size_bytes))
         query = ft.TextField(label="Search", value=self._state.text_filter)
@@ -487,9 +496,14 @@ class ReviewFlowHost(ft.Column):
             except ValueError:
                 self._state.min_size_bytes = 0
             self._state.text_filter = query.value or ""
-            self._close_overlay()
+            self._close_filter_sheet()
+            if self._router.active_screen() == "overview":
+                self._router.navigate("browse")
+                return
             if self._browse_view:
                 self._browse_view.refresh()
+            else:
+                self._render_active_screen()
 
         sheet = ft.BottomSheet(
             content=ft.Container(
@@ -498,14 +512,22 @@ class ReviewFlowHost(ft.Column):
                         ft.Text("Filter & Sort", weight=ft.FontWeight.W_700),
                         query,
                         min_size,
-                        ft.FilledButton("Apply", on_click=apply_filters),
+                        ft.Row(
+                            [
+                                ft.TextButton("Cancel", on_click=lambda e: self._close_filter_sheet()),
+                                ft.FilledButton("OK", on_click=apply_filters),
+                            ],
+                            alignment=ft.MainAxisAlignment.END,
+                        ),
                     ],
                     tight=True,
                 ),
                 padding=16,
             ),
             open=True,
+            on_dismiss=lambda e: setattr(self, "_filter_sheet", None),
         )
+        self._filter_sheet = sheet
         self._bridge.flet_page.open(sheet)
 
     def _open_command_palette(self) -> None:
@@ -584,6 +606,7 @@ class ReviewFlowHost(ft.Column):
         page.update()
 
     def _close_overlay(self) -> None:
+        self._close_filter_sheet()
         self._overlay_layer.controls.clear()
         page = self._bridge.flet_page
         if page.dialog:
