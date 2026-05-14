@@ -47,10 +47,10 @@ def _preview_panel(t: ThemeTokens, f: Optional[DuplicateFile], label: str) -> ft
     )
 
 
-def _metadata_rows(t: ThemeTokens, left: Optional[DuplicateFile], right: Optional[DuplicateFile]) -> ft.DataTable:
+def metadata_match_flags(left: Optional[DuplicateFile], right: Optional[DuplicateFile]) -> list[tuple[str, str, str, str]]:
     rows = []
     fields = [
-        ("Size", lambda f: fmt_size(int(f.size)) if f else "—"),
+        ("Size", lambda f: f"{int(f.size)}" if f else "—"),
         ("Modified", lambda f: f"{float(getattr(f, 'modified', 0) or 0):.0f}" if f else "—"),
         ("Path", lambda f: str(f.path) if f else "—"),
         ("Hash", lambda f: str((f.metadata or {}).get("hash", "—")) if f else "—"),
@@ -59,6 +59,13 @@ def _metadata_rows(t: ThemeTokens, left: Optional[DuplicateFile], right: Optiona
         lv = fn(left)
         rv = fn(right)
         match = "✓" if left and right and lv == rv else ("⚠" if left and right else "—")
+        rows.append((label, lv, rv, match))
+    return rows
+
+
+def _metadata_rows(t: ThemeTokens, left: Optional[DuplicateFile], right: Optional[DuplicateFile]) -> ft.DataTable:
+    rows = []
+    for label, lv, rv, match in metadata_match_flags(left, right):
         rows.append(ft.DataRow(cells=[ft.DataCell(ft.Text(label)), ft.DataCell(ft.Text(lv)), ft.DataCell(ft.Text(rv)), ft.DataCell(ft.Text(match))]))
     return ft.DataTable(
         columns=[

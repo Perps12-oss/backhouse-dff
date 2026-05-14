@@ -40,7 +40,7 @@ def generate_mock_groups(count: int = 1000, *, seed: int = 42) -> list[Duplicate
   return groups
 
 
-def mock_overview_metrics(groups: list[DuplicateGroup]) -> dict[str, int | float]:
+def metrics_from_groups(groups: list[DuplicateGroup]) -> dict[str, int | float]:
   file_count = sum(len(g.files) for g in groups)
   reclaimable = sum(int(getattr(g, "reclaimable", 0) or 0) for g in groups)
   return {
@@ -48,5 +48,9 @@ def mock_overview_metrics(groups: list[DuplicateGroup]) -> dict[str, int | float
     "file_count": file_count,
     "reclaimable_bytes": reclaimable,
     "scan_seconds": 14 * 60 + 32,
-    "files_scanned": 45231,
+    "files_scanned": max(file_count * 36, file_count),
   }
+
+
+def mock_overview_metrics(groups: list[DuplicateGroup]) -> dict[str, int | float]:
+  return metrics_from_groups(groups)

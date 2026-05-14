@@ -48,7 +48,7 @@ class ReviewFlowHost(ft.Column):
         self._workstation_sidebar = ft.Container(width=0)
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
-        self._inspect_stub = True
+        self._inspect_stub = False
         self.controls = [
             ft.Row(
                 [
@@ -144,11 +144,13 @@ class ReviewFlowHost(ft.Column):
     def on_show(self) -> None:
         self._t = theme_for_mode("dark")
         self._state.marked_paths = set(self._bridge.state.selected_files)
-        if not self._state.use_mock_data:
-            store_groups = list(getattr(self._bridge.state, "groups", []) or [])
-            if store_groups:
-                self._state.scan_results = store_groups
-                self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
+        store_groups = list(getattr(self._bridge.state, "groups", []) or [])
+        if store_groups:
+            self._state.scan_results = store_groups
+            self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
+            self._state.use_mock_data = False
+        elif not self._state.scan_results:
+            self._seed_mock_results()
         self._render_active_screen()
 
     def get_groups(self) -> List[DuplicateGroup]:
