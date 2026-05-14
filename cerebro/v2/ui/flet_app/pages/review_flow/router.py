@@ -43,6 +43,7 @@ class ReviewFlowRouter:
 
     def navigate(self, screen: ReviewScreen, *, push: bool = True) -> None:
         if screen == self._state.active_screen:
+            self._on_screen_changed()
             return
         if push:
             self._state.screen_stack.append(screen)

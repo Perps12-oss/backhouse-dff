@@ -106,7 +106,10 @@ class BrowseScreenView:
             [
                 header,
                 toolbar,
-                ft.Stack([self._list, ft.Container(content=self._chip, top=8, right=8)]),
+                ft.Stack(
+                    [self._list, ft.Container(content=self._chip, top=8, right=8)],
+                    expand=True,
+                ),
                 self._bottom_bar,
             ],
             expand=True,

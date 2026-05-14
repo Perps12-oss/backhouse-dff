@@ -452,6 +452,27 @@ class ReviewFlowHost(ft.Column):
     def _show_modal(self, dialog: ft.AlertDialog) -> None:
         self._bridge.show_modal_dialog(dialog)
 
+    def _navigate_browse_after_modal_from_overview(self) -> None:
+        """Defer one frame so dialog dismiss finishes before rebuilding Browse (avoids blank main)."""
+        page = self._bridge.flet_page
+
+        def _paint_browse() -> None:
+            if self._router.active_screen() == "overview":
+                self._router.navigate("browse")
+            elif self._router.active_screen() == "browse" and self._browse_view is not None:
+                self._browse_view.refresh()
+            self._safe_update(self._content)
+
+        if hasattr(page, "run_task"):
+
+            async def _deferred() -> None:
+                await asyncio.sleep(0)
+                _paint_browse()
+
+            page.run_task(_deferred)
+        else:
+            _paint_browse()
+
     def _open_auto_select_modal(self, _e=None) -> None:
         options = [ft.dropdown.Option(key, label) for key, label in RULE_LABELS]
         dd = ft.Dropdown(options=options, value=RULE_LABELS[0][0])
@@ -467,7 +488,7 @@ class ReviewFlowHost(ft.Column):
             self._close_overlay()
             self._show_toast(f"Applied {rule}")
             if self._router.active_screen() == "overview":
-                self._router.navigate("browse")
+                self._navigate_browse_after_modal_from_overview()
             elif self._browse_view:
                 self._browse_view.refresh()
             else:
@@ -504,7 +525,7 @@ class ReviewFlowHost(ft.Column):
             self._state.text_filter = query.value or ""
             self._close_filter_sheet()
             if self._router.active_screen() == "overview":
-                self._router.navigate("browse")
+                self._navigate_browse_after_modal_from_overview()
                 return
             if self._browse_view:
                 self._browse_view.refresh()
