@@ -50,6 +50,9 @@ class ReviewFlowState:
     max_size_bytes: int = 0
     similarity_min: float = 0.0
     use_mock_data: bool = True
+    inspect_diff_enabled: bool = False
+    inspect_blink_enabled: bool = False
+    active_tag_filter: str = ""
 
     def visible_groups(self) -> List[DuplicateGroup]:
         groups = list(self.scan_results)
@@ -76,6 +79,9 @@ class ReviewFlowState:
                 for g in groups
                 if any(float(getattr(f, "similarity", 1.0) or 1.0) >= self.similarity_min for f in g.files)
             ]
+        if self.active_tag_filter:
+            tag = self.active_tag_filter.strip().lower()
+            groups = [g for g in groups if tag in {t.lower() for t in self.tags_by_set.get(g.group_id, set())}]
         key = self.sort_key
         reverse = self.sort_desc
 

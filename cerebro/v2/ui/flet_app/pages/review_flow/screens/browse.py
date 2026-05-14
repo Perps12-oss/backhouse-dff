@@ -128,6 +128,8 @@ class BrowseScreenView:
         expanded = gid in self._state.expanded_set_ids
         protected = any(self._state.is_path_protected(str(f.path)) for f in group.files)
         marked = any(str(f.path) in self._state.marked_paths for f in group.files)
+        confidence = max(float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files) if group.files else 1.0
+        badge_color = t.colors.success if confidence >= 0.99 else t.colors.warning
         name_style = ft.TextStyle(decoration=ft.TextDecoration.LINE_THROUGH if marked and self._state.dry_run else None)
         members: List[ft.Control] = []
         if expanded:
@@ -145,6 +147,7 @@ class BrowseScreenView:
                             ft.Icon(ft.icons.Icons.SHIELD, size=16, color=t.colors.warning, visible=protected),
                             ft.Text(name, expand=True, style=name_style),
                             ft.Text(f"×{len(group.files)}", color=t.colors.primary),
+                            ft.Text(f"{confidence:.0%}", color=badge_color, size=t.typography.size_xs),
                             ft.Text(size, color=t.colors.fg_muted),
                             ft.IconButton(
                                 icon=ft.icons.Icons.ARROW_FORWARD,

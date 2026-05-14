@@ -110,6 +110,8 @@ class ReviewFlowHost(ft.Column):
                 on_keep_both=lambda e: self._inspect_keep_both(),
                 on_delete_all=lambda e: self._inspect_delete_all(),
                 on_mark_next=lambda e: self._inspect_mark_next(),
+                on_toggle_diff=self._toggle_inspect_diff,
+                on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
             )
         elif screen == "cart":
@@ -315,8 +317,23 @@ class ReviewFlowHost(ft.Column):
         self._inspect_delete_all()
         self._inspect_next()
 
+    def _toggle_inspect_diff(self, e: ft.ControlEvent) -> None:
+        self._state.inspect_diff_enabled = bool(getattr(e.control, "value", False))
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if group and len(group.files) >= 2 and self._state.inspect_diff_enabled:
+            from cerebro.v2.ui.flet_app.pages.review_flow.image_diff import build_diff_heatmap_path
+
+            build_diff_heatmap_path(group.files[0].path, group.files[1].path)
+        self._render_active_screen()
+
+    def _toggle_inspect_blink(self, e: ft.ControlEvent) -> None:
+        self._state.inspect_blink_enabled = bool(getattr(e.control, "value", False))
+        self._render_active_screen()
+
     def _toggle_dry_run(self, e: ft.ControlEvent) -> None:
         self._state.dry_run = bool(getattr(e.control, "value", True))
+        if self._browse_view:
+            self._browse_view.refresh()
 
     def _toggle_execute_confirm(self, e: ft.ControlEvent) -> None:
         self._state.execute_confirmed = bool(getattr(e.control, "value", False))

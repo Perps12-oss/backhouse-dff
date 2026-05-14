@@ -91,6 +91,8 @@ def build_inspect_screen(
     on_keep_both,
     on_delete_all,
     on_mark_next,
+    on_toggle_diff=None,
+    on_toggle_blink=None,
     stub_only: bool = False,
 ) -> ft.Column:
     group = state.group_by_id(state.inspect_set_id or -1)
@@ -119,8 +121,8 @@ def build_inspect_screen(
     previews = ft.Row([_preview_panel(t, left, "A"), _preview_panel(t, right, "B")], expand=True, spacing=12)
     toolbar = ft.Row(
         [
-            ft.Text("Diff", color=t.colors.fg_muted),
-            ft.Text("Blink", color=t.colors.fg_muted),
+            ft.Switch(label="Diff", value=state.inspect_diff_enabled, on_change=on_toggle_diff),
+            ft.Switch(label="Blink", value=state.inspect_blink_enabled, on_change=on_toggle_blink),
             ft.Text("Metadata", color=t.colors.fg_muted),
         ],
         spacing=12,
