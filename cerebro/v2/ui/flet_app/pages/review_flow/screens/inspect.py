@@ -104,7 +104,7 @@ def build_inspect_screen(
         return ft.Column(
             [
                 ft.TextButton("← Duplicates", on_click=on_back),
-                ft.Container(expand=True, alignment=ft.alignment.center, content=ft.Text("Inspect screen stub — comparison arrives in Slice 2")),
+                ft.Container(expand=True, alignment=ft.Alignment.CENTER, content=ft.Text("Inspect screen stub — comparison arrives in Slice 2")),
                 ft.FilledButton("Back to Browse", on_click=on_back),
             ],
             expand=True,

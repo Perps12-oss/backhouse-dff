@@ -25,7 +25,7 @@ def build_progress_sidebar(t: ThemeTokens, active: ReviewScreen, on_jump) -> ft.
         row = ft.Container(
             content=ft.Row(
                 [
-                    ft.Container(width=24, content=dot, alignment=ft.alignment.center),
+                    ft.Container(width=24, content=dot, alignment=ft.Alignment.CENTER),
                     ft.Column(
                         [
                             ft.Text(title, size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg if reached else t.colors.fg_muted),

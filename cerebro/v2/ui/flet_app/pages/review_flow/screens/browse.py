@@ -100,7 +100,7 @@ class BrowseScreenView:
         self._bottom_bar = ft.Container(
             content=ft.FilledButton("Review", on_click=self._on_open_cart),
             padding=12,
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment.CENTER,
         )
         return ft.Column(
             [
