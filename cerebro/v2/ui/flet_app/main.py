@@ -376,7 +376,6 @@ def _main(page: ft.Page) -> None:
 
         actions: list[tuple[str, Callable[[], None]]] = [
             ("Go to Home", lambda: layout.navigate_to("dashboard")),
-            ("Go to Workspace", lambda: layout.navigate_to("review")),
             ("Go to Review", lambda: layout.navigate_to("review")),
             ("Go to History", lambda: layout.navigate_to("history")),
             ("Go to Exclude", lambda: layout.navigate_to("exclude")),

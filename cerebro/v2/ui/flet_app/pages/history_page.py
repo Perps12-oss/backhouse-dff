@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
 from cerebro.v2.ui.flet_app.theme import fmt_size as _fmt, theme_for_mode
 
 if TYPE_CHECKING:
@@ -22,13 +23,14 @@ class HistoryPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._scan_rows: list = []
         self._deletion_rows: list = []
         self._active_tab = "scan"
         
         # UI References
         self._header: ft.Container
+        self._page_header: PageHeaderBlock
         self._recent_strip: ft.Column
         self._recent_strip_container: ft.Container
         self._mode_switch: ft.SegmentedButton
@@ -54,11 +56,12 @@ class HistoryPage(ft.Column):
     def _build_ui(self) -> None:
         t = self._t
 
-        # Header
-        self._header = ft.Container(
-            content=ft.Text("History", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
-            padding=ft.padding.only(left=t.spacing.lg, top=t.spacing.lg),
+        self._page_header = build_page_header(
+            t,
+            "History",
+            subtitle="Past scans and deletion log",
         )
+        self._header = self._page_header.root
 
         # Recent scans strip
         self._recent_strip = ft.Column([], spacing=4, visible=False)
@@ -108,8 +111,8 @@ class HistoryPage(ft.Column):
             content=ft.Column(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.HISTORY, size=40, color="#22D3EE"),
-                        bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                        content=ft.Icon(ft.icons.Icons.HISTORY, size=40, color=t.colors.accent),
+                        bgcolor=ft.Colors.with_opacity(0.08, t.colors.accent),
                         border_radius=14,
                         padding=18,
                     ),
@@ -184,7 +187,7 @@ class HistoryPage(ft.Column):
                     ft.Container(width=6, height=6, border_radius=3, bgcolor=mc),
                     ft.Text(row.get("date", ""), size=t.typography.size_xs, color=t.colors.fg2),
                     ft.Text(f"{row.get('groups_found', 0):,} groups", size=t.typography.size_xs, color=t.colors.fg_muted),
-                    ft.Text(fmt_size(row.get("bytes_reclaimable", 0)), size=t.typography.size_xs, color="#34D399"),
+                    ft.Text(fmt_size(row.get("bytes_reclaimable", 0)), size=t.typography.size_xs, color=t.colors.success),
                 ], spacing=8),
                 padding=ft.Padding.symmetric(vertical=2),
             ))
@@ -234,17 +237,19 @@ class HistoryPage(ft.Column):
     def _update_table_columns(self) -> None:
         """Update table headers based on the active tab context."""
         t = self._t
-        def _col(label: str, color: str = None) -> ft.DataColumn:
-            return ft.DataColumn(ft.Text(label, size=t.typography.size_xs, weight=ft.FontWeight.W_600, color=color or t.colors.fg_muted))
+        def _col(label: str, color: str | None = None) -> ft.DataColumn:
+            return ft.DataColumn(
+                ft.Text(label, size=t.typography.size_xs, weight=ft.FontWeight.W_600, color=color or t.colors.fg_muted)
+            )
 
         if self._active_tab == "scan":
             self._table.columns = [
                 _col("Date/Time"),
-                _col("Mode", "#22D3EE"),
+                _col("Mode", t.colors.accent),
                 _col("Folders"),
                 _col("Groups"),
                 _col("Files"),
-                _col("Reclaimable", "#34D399"),
+                _col("Reclaimable", t.colors.success),
                 _col("Duration"),
             ]
         else:
@@ -252,7 +257,7 @@ class HistoryPage(ft.Column):
                 _col("Date/Time"),
                 _col("Policy"),
                 _col("Files Deleted"),
-                _col("Space Freed", "#34D399"),
+                _col("Space Freed", t.colors.success),
                 _col("Status"),
             ]
 
@@ -334,7 +339,11 @@ class HistoryPage(ft.Column):
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
         self._t = theme_for_mode(mode)
-        
+
+        self._page_header.title.color = self._t.colors.fg
+        if self._page_header.subtitle is not None:
+            self._page_header.subtitle.color = self._t.colors.fg_muted
+
         # Update Glass Styles
         self._empty_container.bgcolor = self._t.colors.glass_bg
         self._empty_container.border = ft.border.all(1, self._t.colors.glass_border)

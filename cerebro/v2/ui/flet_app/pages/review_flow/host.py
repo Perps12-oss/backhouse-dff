@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
+import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
-from cerebro.v2.ui.flet_app.pages.review_flow.mock_data import generate_mock_groups
+from cerebro.v2.ui.flet_app.pages.review_flow.apply_sheet import ApplyOutcomeModel, ApplyStep, build_apply_sheet_column
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import build_progress_sidebar
 from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
-from cerebro.v2.ui.flet_app.pages.review_flow.screens.cart import build_cart_screen
-from cerebro.v2.ui.flet_app.pages.review_flow.screens.execute import build_execute_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.inspect import build_inspect_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.overview import build_overview_screen
-from cerebro.v2.ui.flet_app.pages.review_flow.screens.report import build_report_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.state import (
     ReviewFlowState,
     SetSelection,
@@ -31,7 +30,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
     step_inspect_cmp,
 )
 from cerebro.core.deletion import DeletionPolicy
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, paths_to_delete
+from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_INSPECT_EDGE, get_thumbnail_cache
@@ -46,7 +45,7 @@ _UI_SLOW_MS = 80.0
 
 
 class ReviewFlowHost(ft.Column):
-    """Progressive six-screen duplicate review host."""
+    """Three-screen duplicate review host (overview → browse → inspect) with apply sheet."""
 
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, spacing=0)
@@ -63,6 +62,14 @@ class ReviewFlowHost(ft.Column):
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
         self._filter_sheet: Optional[ft.BottomSheet] = None
+        self._apply_sheet: Optional[ft.BottomSheet] = None
+        self._apply_outer: Optional[ft.Container] = None
+        self._apply_step: ApplyStep = "summary"
+        self._apply_confirm_chk: Optional[ft.Checkbox] = None
+        self._apply_progress: Optional[ft.ProgressBar] = None
+        self._apply_progress_label: Optional[ft.Text] = None
+        self._apply_undo_snapshot: Optional[dict] = None
+        self._last_apply_outcome: Optional[ApplyOutcomeModel] = None
         self._inspect_stub = False
         self._inspect_preview_generation = 0
         self._reduce_motion = bool(bridge.is_reduce_motion_enabled())
@@ -77,34 +84,41 @@ class ReviewFlowHost(ft.Column):
                 spacing=0,
             )
         ]
-        self._seed_mock_results()
         self._render_active_screen()
-
-    def _seed_mock_results(self) -> None:
-        self._state.scan_results = generate_mock_groups(1000)
-        self._state.use_mock_data = True
 
     def _render_active_screen(self) -> None:
         started = time.perf_counter()
         t = self._t
         screen = self._router.active_screen()
+        if screen not in ("overview", "browse", "inspect"):
+            self._state.screen_stack = [s for s in self._state.screen_stack if s in ("overview", "browse", "inspect")]
+            if not self._state.screen_stack:
+                self._state.screen_stack = ["browse"]
+            self._state.active_screen = self._state.screen_stack[-1]
+            screen = self._state.active_screen
+        if screen != "browse":
+            self._state.browse_detail_group_id = None
         self._reduce_motion = bool(self._bridge.is_reduce_motion_enabled())
         prev_screen = self._last_render_screen
         page_width = getattr(self._bridge.flet_page, "width", None)
         if is_narrow_viewport(page_width):
             self._workstation_sidebar = ft.Container(width=0)
         else:
-            self._workstation_sidebar = build_progress_sidebar(t, screen, self._on_progress_jump)
+            self._workstation_sidebar = build_progress_sidebar(t, screen, self._state, self._on_progress_jump)
         self.controls[0].controls[0] = self._workstation_sidebar
         if screen == "overview":
+            elapsed: Optional[float] = None
+            sp = getattr(self._bridge.state, "scan_progress", None) or {}
+            if isinstance(sp, dict):
+                raw = sp.get("elapsed_seconds")
+                if isinstance(raw, (int, float)) and float(raw) > 0:
+                    elapsed = float(raw)
             overview_body = build_overview_screen(
                 t,
                 self._state.scan_results,
                 on_start_review=self._on_start_review,
-                on_auto_select=self._open_auto_select_modal,
-                on_filter=self._open_filter_sheet,
-                on_export=self._open_export_modal,
                 recent_lines=self._recent_review_lines(),
+                scan_elapsed_seconds=elapsed,
             )
             if len(self._state.scan_results) == 0:
                 sk = skeletons.overview_skeleton(t, reduce_motion=self._reduce_motion)
@@ -122,10 +136,13 @@ class ReviewFlowHost(ft.Column):
                 t,
                 self._state,
                 on_back=self._on_back,
-                on_toggle_set=self._toggle_set,
-                on_toggle_expand=self._toggle_expand,
                 on_open_inspect=self._open_inspect,
-                on_open_cart=self._open_cart,
+                on_open_group_detail=self._browse_open_detail,
+                on_close_group_detail=self._browse_close_detail,
+                on_toggle_file_mark=self._browse_toggle_file_mark,
+                on_apply_smart_rule_all=self._apply_smart_rule_all_visible,
+                on_start_delete_ceremony=self._open_apply_sheet,
+                on_proceed_execute=self._open_apply_sheet,
                 reduce_motion=self._reduce_motion,
             )
             page = getattr(self._bridge, "flet_page", None)
@@ -152,37 +169,13 @@ class ReviewFlowHost(ft.Column):
                 on_swap_panels=self._inspect_swap_panels,
                 on_pin_compare_as_reference=self._inspect_pin_compare_as_reference,
                 on_step_compare=self._inspect_step_compare,
+                on_proceed_execute=self._open_apply_sheet,
                 on_toggle_diff=self._toggle_inspect_diff,
                 on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
             )
             self._content.content = inspect_col
             self._schedule_inspect_previews(slot_a, slot_b)
-        elif screen == "cart":
-            self._content.content = build_cart_screen(
-                t,
-                self._state,
-                on_back=self._on_back,
-                on_proceed=lambda e: self._router.navigate("execute"),
-                on_toggle_dry_run=self._toggle_dry_run,
-            )
-        elif screen == "execute":
-            self._content.content = build_execute_screen(
-                t,
-                self._state,
-                on_back=self._on_back,
-                on_confirm_toggle=self._toggle_execute_confirm,
-                on_execute=self._run_execute,
-                on_cancel_remaining=lambda e: self._router.navigate("cart", push=False),
-            )
-        else:
-            self._content.content = build_report_screen(
-                t,
-                self._state,
-                on_back_overview=lambda e: self._router.reset_to_overview(),
-                on_export=self._open_export_modal,
-                on_new_scan=lambda e: self._bridge.navigate("dashboard"),
-            )
         if (
             not self._reduce_motion
             and prev_screen is not None
@@ -208,10 +201,12 @@ class ReviewFlowHost(ft.Column):
         if store_groups:
             self._state.scan_results = store_groups
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
-            self._state.use_mock_data = False
-        elif not self._state.scan_results:
-            self._seed_mock_results()
         self._try_resume_session()
+        # When there are results and the user has not manually navigated
+        # deeper than overview, land them directly on browse — one fewer click.
+        if self._state.scan_results and self._state.active_screen == "overview":
+            self._state.screen_stack = ["overview", "browse"]
+            self._state.active_screen = "browse"
         self._render_active_screen()
 
     def apply_theme(self, mode: str) -> None:
@@ -229,12 +224,8 @@ class ReviewFlowHost(ft.Column):
         return list(self._state.scan_results)
 
     def load_results(self, groups: List[DuplicateGroup], mode: str = "files", defer_render: bool = False) -> None:
-        if groups:
-            self._state.scan_results = list(groups)
-            self._state.scan_mode = mode
-            self._state.use_mock_data = False
-        elif not self._state.scan_results:
-            self._seed_mock_results()
+        self._state.scan_results = list(groups)
+        self._state.scan_mode = mode
         if not defer_render and self._page_is_set(self):
             self._render_active_screen()
 
@@ -258,10 +249,12 @@ class ReviewFlowHost(ft.Column):
                 self._state.browse_focus_index += 1
                 return True
             if key == "space":
+                if self._state.browse_detail_group_id is not None:
+                    return False
                 groups = self._state.visible_groups()
                 if groups:
                     idx = min(self._state.browse_focus_index, len(groups) - 1)
-                    self._toggle_set(groups[idx].group_id)
+                    self._browse_open_detail(groups[idx].group_id)
                 return True
             if key == "enter":
                 groups = self._state.visible_groups()
@@ -350,14 +343,6 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.refresh()
 
-    def _toggle_expand(self, group_id: int) -> None:
-        if group_id in self._state.expanded_set_ids:
-            self._state.expanded_set_ids.remove(group_id)
-        else:
-            self._state.expanded_set_ids.add(group_id)
-        if self._browse_view:
-            self._browse_view.refresh()
-
     def _persist_inspect_layout(self) -> None:
         gid = self._state.inspect_set_id
         if gid is None:
@@ -411,8 +396,261 @@ class ReviewFlowHost(ft.Column):
         self._restore_inspect_layout_for_set(group_id)
         self._router.navigate("inspect")
 
-    def _open_cart(self, _e=None) -> None:
-        self._router.navigate("cart")
+    def _snapshot_apply_undo(self) -> dict:
+        selections: dict[int, SetSelection] = {}
+        for gid, sel in self._state.set_selections.items():
+            selections[gid] = SetSelection(
+                kept_paths=set(sel.kept_paths),
+                deleted_paths=set(sel.deleted_paths),
+                protected_paths=set(sel.protected_paths),
+            )
+        return {
+            "scan_results": copy.deepcopy(self._state.scan_results),
+            "marked_paths": set(self._state.marked_paths),
+            "set_selections": selections,
+        }
+
+    def _restore_apply_undo_bundle(self, snap: dict) -> None:
+        self._state.scan_results = copy.deepcopy(snap.get("scan_results", []))
+        self._state.marked_paths = set(snap.get("marked_paths", set()))
+        restored = snap.get("set_selections", {})
+        if isinstance(restored, dict):
+            self._state.set_selections = dict(restored)
+
+    def _reconcile_state_after_delete(self, new_groups: List[DuplicateGroup]) -> None:
+        self._state.scan_results = new_groups
+        alive = {str(f.path) for g in new_groups for f in g.files}
+        self._state.marked_paths &= alive
+        alive_gids = {g.group_id for g in new_groups}
+        for gid in list(self._state.set_selections.keys()):
+            if gid not in alive_gids:
+                del self._state.set_selections[gid]
+                continue
+            sel = self._state.set_selections[gid]
+            sel.deleted_paths = {p for p in sel.deleted_paths if p in alive}
+            sel.kept_paths = {p for p in sel.kept_paths if p in alive}
+            sel.protected_paths = {p for p in sel.protected_paths if p in alive}
+
+    def _apply_sheet_closed(self, _e=None) -> None:
+        self._apply_sheet = None
+        self._apply_confirm_chk = None
+
+    def _apply_close_sheet(self, _e=None) -> None:
+        try:
+            self._bridge.dismiss_top_dialog()
+        except Exception:
+            pass
+        self._apply_sheet_closed()
+
+    def _apply_refresh_body(self) -> None:
+        if self._apply_sheet is None or self._apply_outer is None:
+            return
+        t = self._t
+        buckets = self._state.cart_buckets()
+        del_n = len(buckets["delete"])
+        freed = sum(int(f.size) for f in buckets["delete"])
+        prot_n = len(buckets["protected"])
+        step = self._apply_step
+        chk = self._apply_confirm_chk if step == "confirm" else None
+        assert self._apply_progress is not None and self._apply_progress_label is not None
+        col = build_apply_sheet_column(
+            t,
+            step=step,
+            delete_count=del_n,
+            freed_bytes=freed,
+            protected_count=prot_n,
+            confirm_checkbox=chk,
+            progress_bar=self._apply_progress,
+            progress_label=self._apply_progress_label,
+            outcome=self._last_apply_outcome,
+            reduce_motion=self._reduce_motion,
+            on_close=lambda _e: self._apply_close_sheet(),
+            on_continue_summary=lambda _e: self._apply_goto_confirm(),
+            on_back_confirm=lambda _e: self._apply_goto_summary(),
+            on_apply=lambda _e: self._apply_run_confirmed(),
+            on_restore_managed=lambda _e: self._apply_restore_managed(),
+            on_back_overview=lambda _e: self._apply_finish_overview(),
+            on_new_scan=lambda _e: self._apply_finish_new_scan(),
+        )
+        self._apply_outer.content = col
+        self._safe_update(self._apply_outer)
+
+    def _open_apply_sheet(self, _e=None) -> None:
+        buckets = self._state.cart_buckets()["delete"]
+        if not buckets:
+            self._show_toast("No files marked for removal. Apply a smart rule or pick files in a group.")
+            return
+        self._apply_step = "summary"
+        self._last_apply_outcome = None
+        self._apply_undo_snapshot = None
+        self._apply_confirm_chk = ft.Checkbox(
+            label="I understand these files will be moved to app-managed storage (not the OS Recycle Bin).",
+            value=False,
+        )
+        self._apply_progress = ft.ProgressBar(value=0, width=400)
+        self._apply_progress_label = ft.Text("Preparing…", size=self._t.typography.size_xs)
+        self._apply_outer = ft.Container(padding=16)
+        self._apply_refresh_body()
+        self._apply_sheet = ft.BottomSheet(
+            content=self._apply_outer,
+            on_dismiss=lambda e: self._apply_sheet_closed(),
+        )
+        self._bridge.show_modal_dialog(self._apply_sheet)
+
+    def _apply_goto_confirm(self, _e=None) -> None:
+        self._apply_step = "confirm"
+        self._apply_refresh_body()
+
+    def _apply_goto_summary(self, _e=None) -> None:
+        self._apply_step = "summary"
+        self._apply_refresh_body()
+
+    def _apply_run_confirmed(self, _e=None) -> None:
+        if self._apply_confirm_chk is None or not self._apply_confirm_chk.value:
+            self._show_toast("Confirm the checkbox before applying.")
+            return
+        self._apply_step = "progress"
+        self._apply_progress.value = 0
+        self._apply_progress_label.value = "Applying…"
+        self._apply_refresh_body()
+        self._apply_execute_deletes()
+
+    def _apply_execute_deletes(self) -> None:
+        buckets = self._state.cart_buckets()
+        paths = [str(f.path) for f in buckets["delete"]]
+        simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        if simulate:
+            self._apply_undo_snapshot = self._snapshot_apply_undo()
+            freed = sum(int(f.size) for f in buckets["delete"])
+            self._state.report_deleted_count = len(paths)
+            self._state.report_freed_bytes = freed
+            self._state.execute_errors = []
+            self._state.execute_failures_detail = []
+            self._last_apply_outcome = ApplyOutcomeModel(
+                deleted_count=len(paths),
+                freed_bytes=freed,
+                error_count=0,
+                failures=[],
+            )
+            self._apply_step = "outcome"
+            self._apply_refresh_body()
+            self._show_apply_undo_toast(simulated=True)
+            return
+
+        self._apply_undo_snapshot = self._snapshot_apply_undo()
+
+        def on_progress(done: int, total: int, _name: str) -> None:
+            self._state.execute_progress = (done, total)
+            if self._apply_progress:
+                self._apply_progress.value = (done / total) if total else 0.0
+            if self._apply_progress_label:
+                self._apply_progress_label.value = f"{done}/{total} processed"
+            self._safe_update(self._apply_outer)
+
+        new_groups, dfr = self._delete_service.delete_and_prune(
+            paths,
+            self._state.scan_results,
+            DeletionPolicy.TRASH,
+            progress_cb=on_progress,
+        )
+        self._state.execute_failures_detail = list(dfr.failures)
+        self._state.execute_errors = (
+            [f"{dfr.failed_count} file(s) could not be moved"] if dfr.failed_count else []
+        )
+        self._state.report_deleted_count = dfr.deleted_count
+        self._state.report_freed_bytes = dfr.bytes_reclaimed
+        self._reconcile_state_after_delete(new_groups)
+        self._push_marked_paths_to_store()
+        self._last_apply_outcome = ApplyOutcomeModel(
+            deleted_count=dfr.deleted_count,
+            freed_bytes=dfr.bytes_reclaimed,
+            error_count=dfr.failed_count,
+            failures=list(dfr.failures),
+        )
+        self._apply_step = "outcome"
+        self._apply_refresh_body()
+        self._render_active_screen()
+        self._show_apply_undo_toast(simulated=False)
+
+    def _show_apply_undo_toast(self, *, simulated: bool) -> None:
+        msg = "Simulated apply (no files moved)." if simulated else "Last batch can be restored from managed storage."
+        self._show_toast(msg, action_label="Undo", on_action=self._toast_undo_last_apply)
+
+    def _toast_undo_last_apply(self, _e=None) -> None:
+        simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        if not simulate:
+            DeleteService.undo_last_trash_delete()
+        if self._apply_undo_snapshot is not None:
+            self._restore_apply_undo_bundle(self._apply_undo_snapshot)
+            self._apply_undo_snapshot = None
+        self._push_marked_paths_to_store()
+        self._render_active_screen()
+        if self._browse_view:
+            self._browse_view.refresh()
+        self._show_toast("Restored previous review state.")
+
+    def _apply_restore_managed(self, _e=None) -> None:
+        self._toast_undo_last_apply()
+        self._apply_close_sheet()
+
+    def _apply_finish_overview(self, _e=None) -> None:
+        self._apply_close_sheet()
+        self._router.reset_to_overview()
+        self._render_active_screen()
+
+    def _apply_finish_new_scan(self, _e=None) -> None:
+        self._apply_close_sheet()
+        self._bridge.navigate("dashboard")
+
+    def _browse_open_detail(self, group_id: int) -> None:
+        self._state.browse_detail_group_id = int(group_id)
+        if self._browse_view:
+            self._browse_view.refresh()
+
+    def _browse_close_detail(self, _e=None) -> None:
+        self._state.browse_detail_group_id = None
+        if self._browse_view:
+            self._browse_view.refresh()
+
+    def _browse_toggle_file_mark(self, path: str, group_id: int, mark: bool) -> None:
+        p = str(path)
+        gid = int(group_id)
+        sel = self._state.set_selections.setdefault(gid, SetSelection())
+        if mark:
+            self._state.marked_paths.add(p)
+            sel.deleted_paths.add(p)
+            sel.kept_paths.discard(p)
+        else:
+            self._state.marked_paths.discard(p)
+            sel.deleted_paths.discard(p)
+        self._push_marked_paths_to_store()
+        if self._browse_view:
+            self._browse_view.refresh()
+
+    def _apply_smart_rule_all_visible(self, rule: str) -> None:
+        """Mark delete candidates in every visible duplicate group using the smart rule."""
+        r = normalized_rule(rule)
+        self._state.push_undo_snapshot()
+        groups_touched = 0
+        files_marked = 0
+        for group in self._state.visible_groups():
+            if any(self._state.is_path_protected(str(f.path)) for f in group.files):
+                continue
+            to_delete = paths_to_delete(r, group.files)
+            if not to_delete:
+                continue
+            self._apply_paths_for_group(group, set(to_delete))
+            groups_touched += 1
+            files_marked += len(to_delete)
+        label = next((lbl for key, lbl in RULE_LABELS if key == r), r)
+        if files_marked:
+            self._show_toast(f"Smart select ({label}): {files_marked} file(s) in {groups_touched} group(s).")
+        else:
+            self._show_toast("Nothing to mark — adjust filters or pick another rule.")
+        if self._browse_view:
+            self._browse_view.refresh()
+        self._rebuild_sidebar_in_place()
+        self._safe_update(self._content)
 
     def _inspect_prev(self, _e=None) -> None:
         groups = self._state.visible_groups()
@@ -679,48 +917,18 @@ class ReviewFlowHost(ft.Column):
         self._state.inspect_blink_enabled = bool(getattr(e.control, "value", False))
         self._render_active_screen()
 
-    def _toggle_dry_run(self, e: ft.ControlEvent) -> None:
-        self._state.dry_run = bool(getattr(e.control, "value", True))
-        if self._browse_view:
-            self._browse_view.refresh()
-
-    def _toggle_execute_confirm(self, e: ft.ControlEvent) -> None:
-        self._state.execute_confirmed = bool(getattr(e.control, "value", False))
-
-    def _run_execute(self, _e=None) -> None:
-        if not self._state.execute_confirmed:
-            self._show_toast("Confirm the checkbox before executing.")
-            return
-        buckets = self._state.cart_buckets()["delete"]
-        paths = [str(f.path) for f in buckets]
-        if self._state.dry_run:
-            self._state.report_deleted_count = len(paths)
-            self._state.report_freed_bytes = sum(int(f.size) for f in buckets)
-            self._show_toast(f"Dry run: would remove {len(paths)} files.")
-            self._router.navigate("report")
-            self._render_active_screen()
-            return
-        self._state.execute_progress = (0, len(paths))
-        self._state.execute_errors = []
-
-        def on_progress(done: int, total: int, _name: str) -> None:
-            self._state.execute_progress = (done, total)
-            self._render_active_screen()
-
-        deleted, failed, freed, _deleted_paths = self._delete_service.delete_files(
-            paths,
-            policy=DeletionPolicy.TRASH,
-            progress_cb=on_progress,
-        )
-        self._state.report_deleted_count = deleted
-        self._state.report_freed_bytes = freed
-        if failed:
-            self._state.execute_errors = [f"{failed} file(s) could not be deleted"]
-        self._router.navigate("report")
-        self._render_active_screen()
-
     def _show_modal(self, dialog: ft.AlertDialog) -> None:
         self._bridge.show_modal_dialog(dialog)
+
+    def _rebuild_sidebar_in_place(self) -> None:
+        """Rebuild the sidebar stat counts without recreating the full screen."""
+        page_width = getattr(self._bridge.flet_page, "width", None)
+        if not is_narrow_viewport(page_width):
+            self._workstation_sidebar = build_progress_sidebar(
+                self._t, self._router.active_screen(), self._state, self._on_progress_jump
+            )
+            self.controls[0].controls[0] = self._workstation_sidebar
+        self._safe_update(self)
 
     def _navigate_browse_after_modal_from_overview(self) -> None:
         """Defer one frame so dialog dismiss finishes before rebuilding Browse (avoids blank main)."""
@@ -939,9 +1147,18 @@ class ReviewFlowHost(ft.Column):
                 page.dialog.open = False
             page.update()
 
-    def _show_toast(self, message: str) -> None:
+    def _show_toast(
+        self,
+        message: str,
+        *,
+        action_label: Optional[str] = None,
+        on_action: Optional[Callable[[ft.ControlEvent], None]] = None,
+    ) -> None:
+        row_children: list[ft.Control] = [ft.Text(message, color=self._t.colors.fg)]
+        if action_label and on_action is not None:
+            row_children.append(ft.TextButton(action_label, on_click=on_action))
         toast = ft.Container(
-            content=ft.Text(message, color=self._t.colors.fg),
+            content=ft.Row(row_children, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor=ft.Colors.with_opacity(0.92, self._t.colors.bg2),
             padding=10,
             border_radius=8,
@@ -1001,7 +1218,11 @@ class ReviewFlowHost(ft.Column):
                     continue
             self._state.inspect_layout_by_set_id = parsed
         screen = payload.get("active_screen")
-        if screen in {"overview", "browse", "inspect", "cart", "execute", "report"}:
+        if screen == "cart":
+            screen = "browse"
+        if screen in {"execute", "report"}:
+            screen = "browse"
+        if screen in {"overview", "browse", "inspect"}:
             self._router.reset_to_overview()
             self._router.navigate(screen)
 

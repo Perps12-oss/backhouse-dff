@@ -37,8 +37,8 @@ class ScanCompleteBanner:
             color=t.colors.fg_muted,
         )
         self._open_btn = ft.FilledButton(
-            "Open Workspace",
-            icon=ft.icons.Icons.GRID_VIEW,
+            "Open review",
+            icon=ft.icons.Icons.FIND_IN_PAGE,
             on_click=lambda _e: self._on_open_workspace(),
             style=pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700),
         )

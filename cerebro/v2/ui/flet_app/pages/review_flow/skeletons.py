@@ -93,33 +93,3 @@ def inspect_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Colum
         ],
         spacing=12,
     )
-
-
-def cart_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Column:
-    op, anim = _pulse_opacity_control(reduce_motion)
-    return ft.Column(
-        [ft.Container(height=48, bgcolor=t.colors.border, border_radius=8, opacity=op, animate_opacity=anim) for _ in range(4)],
-        spacing=8,
-    )
-
-
-def execute_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Column:
-    op, anim = _pulse_opacity_control(reduce_motion)
-    return ft.Column(
-        [
-            ft.Container(height=120, bgcolor=t.colors.border, border_radius=8, opacity=op, animate_opacity=anim),
-            ft.Container(height=40, bgcolor=t.colors.border, border_radius=8, opacity=op, animate_opacity=anim),
-        ],
-        spacing=12,
-    )
-
-
-def report_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Column:
-    op, anim = _pulse_opacity_control(reduce_motion)
-    return ft.Column(
-        [
-            ft.Container(height=24, width=200, bgcolor=t.colors.border, border_radius=6, opacity=op, animate_opacity=anim),
-            ft.Container(height=80, bgcolor=t.colors.border, border_radius=8, opacity=op, animate_opacity=anim),
-        ],
-        spacing=12,
-    )

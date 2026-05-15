@@ -5,7 +5,7 @@ from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 
-ReviewScreen = Literal["overview", "browse", "inspect", "cart", "execute", "report"]
+ReviewScreen = Literal["overview", "browse", "inspect"]
 BrowseViewMode = Literal["list", "grid", "tree", "folder_diff"]
 
 
@@ -26,6 +26,7 @@ class ReviewFlowState:
     expanded_set_ids: Set[int] = field(default_factory=set)
     marked_paths: Set[str] = field(default_factory=set)
     set_selections: Dict[int, SetSelection] = field(default_factory=dict)
+    browse_detail_group_id: Optional[int] = None
     browse_focus_index: int = 0
     browse_scroll_offset: int = 0
     inspect_set_id: Optional[int] = None
@@ -38,10 +39,11 @@ class ReviewFlowState:
     view_mode: BrowseViewMode = "list"
     sort_key: str = "size"
     sort_desc: bool = True
-    dry_run: bool = True
+    dry_run: bool = False  # Dev/tests: host may treat CEREBRO_REVIEW_SIMULATE_APPLY as simulate-only
     execute_confirmed: bool = False
     execute_progress: Tuple[int, int] = (0, 0)
     execute_errors: List[str] = field(default_factory=list)
+    execute_failures_detail: List[Tuple[str, str]] = field(default_factory=list)
     report_deleted_count: int = 0
     report_freed_bytes: int = 0
     tags_by_set: Dict[int, Set[str]] = field(default_factory=dict)
@@ -54,7 +56,6 @@ class ReviewFlowState:
     min_size_bytes: int = 0
     max_size_bytes: int = 0
     similarity_min: float = 0.0
-    use_mock_data: bool = True
     inspect_diff_enabled: bool = False
     inspect_blink_enabled: bool = False
     active_tag_filter: str = ""

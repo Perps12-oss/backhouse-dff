@@ -8,18 +8,12 @@ _BACK_TARGETS: Dict[ReviewScreen, Optional[ReviewScreen]] = {
     "overview": None,
     "browse": "overview",
     "inspect": "browse",
-    "cart": "browse",
-    "execute": "cart",
-    "report": "overview",
 }
 
 _FORWARD_TRANSITIONS: Dict[ReviewScreen, List[ReviewScreen]] = {
     "overview": ["browse"],
-    "browse": ["inspect", "cart"],
+    "browse": ["inspect"],
     "inspect": ["browse"],
-    "cart": ["execute"],
-    "execute": ["report"],
-    "report": ["overview"],
 }
 
 

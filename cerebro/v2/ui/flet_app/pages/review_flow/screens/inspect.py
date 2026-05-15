@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -99,11 +100,11 @@ def _preview_panel(
         ]
     )
     if ext in {"txt", "md", "json", "py"}:
-        body.append(ft.Text("Document preview placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
-    if ext in {"mp4", "mov"}:
-        body.append(ft.Text("Video thumbnail strip placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
-    if ext in {"mp3", "wav"}:
-        body.append(ft.Text("Audio waveform placeholder", size=t.typography.size_xs, color=t.colors.fg_muted))
+        body.append(ft.Text("Text preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
+    elif ext in {"mp4", "mov"}:
+        body.append(ft.Text("Video preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
+    elif ext in {"mp3", "wav", "flac"}:
+        body.append(ft.Text("Audio preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
     panel = ft.Container(
         content=ft.Column(body, spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         width=_INSPECT_PANEL_W,
@@ -115,14 +116,35 @@ def _preview_panel(
     return panel, preview_slot
 
 
+def _fmt_timestamp(ts: float) -> str:
+    try:
+        if ts <= 0:
+            return "—"
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return "—"
+
+
 def metadata_match_flags(left: Optional[DuplicateFile], right: Optional[DuplicateFile]) -> list[tuple[str, str, str, str]]:
     rows = []
+    def _hash(f: Optional[DuplicateFile]) -> str:
+        if f is None:
+            return "—"
+        h = (f.metadata or {}).get("hash")
+        return str(h) if h else "—"
+
+    left_hash = _hash(left)
+    right_hash = _hash(right)
+    has_hash = left_hash != "—" or right_hash != "—"
+
     fields = [
-        ("Size", lambda f: f"{int(f.size)}" if f else "—"),
-        ("Modified", lambda f: f"{float(getattr(f, 'modified', 0) or 0):.0f}" if f else "—"),
+        ("Size", lambda f: f"{int(f.size):,} B" if f else "—"),
+        ("Modified", lambda f: _fmt_timestamp(float(getattr(f, "modified", 0) or 0)) if f else "—"),
         ("Path", lambda f: str(f.path) if f else "—"),
-        ("Hash", lambda f: str((f.metadata or {}).get("hash", "—")) if f else "—"),
     ]
+    if has_hash:
+        fields.append(("Hash", lambda f: _hash(f)))
+
     for label, fn in fields:
         lv = fn(left)
         rv = fn(right)
@@ -280,6 +302,7 @@ def build_inspect_screen(
     on_swap_panels,
     on_pin_compare_as_reference,
     on_step_compare,
+    on_proceed_execute,
     on_toggle_diff=None,
     on_toggle_blink=None,
     stub_only: bool = False,
@@ -304,7 +327,17 @@ def build_inspect_screen(
                     alignment=ft.Alignment.CENTER,
                     content=ft.Text("Inspect screen stub — comparison arrives in Slice 2"),
                 ),
-                ft.FilledButton("Back to Browse", on_click=on_back),
+                ft.Row(
+                    [
+                        ft.FilledButton("Back to Browse", on_click=on_back),
+                        ft.IconButton(
+                            icon=ft.icons.Icons.PLAY_ARROW,
+                            tooltip="Apply cleanup — confirm in sheet",
+                            on_click=on_proceed_execute,
+                        ),
+                    ],
+                    spacing=8,
+                ),
             ],
             expand=True,
         ), None, None
@@ -321,6 +354,11 @@ def build_inspect_screen(
             ft.Container(expand=True),
             ft.IconButton(icon=ft.icons.Icons.ARROW_BACK, tooltip="Previous set ([ or PgUp)", on_click=on_prev_set),
             ft.IconButton(icon=ft.icons.Icons.ARROW_FORWARD, tooltip="Next set (] or PgDn)", on_click=on_next_set),
+            ft.IconButton(
+                icon=ft.icons.Icons.PLAY_ARROW,
+                tooltip="Apply cleanup — confirm in sheet",
+                on_click=on_proceed_execute,
+            ),
         ],
     )
     panel_left, slot_left = _preview_panel(t, left, role_label=left_role, panel_label="A (left)")
@@ -399,4 +437,7 @@ def build_inspect_screen(
     if strip is not None:
         inspect_body.append(strip)
     inspect_body.extend([toolbar, meta, actions])
+    # Never use scroll=ScrollMode.AUTO on this root Column (breaks previews). Avoid a
+    # wrapped header Row with nested Columns + text buttons here — that also broke
+    # preview painting on some Flet builds (grey panels). Cart = extra IconButton only.
     return ft.Column(inspect_body, expand=True, spacing=10), slot_left, slot_right

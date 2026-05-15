@@ -11,6 +11,7 @@ import flet as ft
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
@@ -46,11 +47,12 @@ class SettingsPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._settings: Dict[str, Any] = {}  # loaded from bridge
         
         # UI References
         self._header: ft.Container
+        self._page_header: PageHeaderBlock
         self._tabs: ft.SegmentedButton
         self._tab_keys: tuple[str, ...]
         self._tab_contents: Dict[str, ft.Container]
@@ -111,11 +113,13 @@ class SettingsPage(ft.Column):
         t = self._t
         self._load_settings()
 
-        # Header
-        self._header = ft.Container(
-            content=ft.Text("Settings", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
-            padding=ft.padding.only(left=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
+        self._page_header = build_page_header(
+            t,
+            "Settings",
+            subtitle="Preferences, appearance, and safety",
+            padding=ft.padding.only(left=t.spacing.xl, right=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
         )
+        self._header = self._page_header.root
 
         # Section switcher (replaces legacy Tabs(tabs=...) — Flet 0.25+ Tabs use content+length+TabBar/TabBarView)
         self._tab_keys = ("general", "appearance", "performance", "deletion", "about")
@@ -519,7 +523,7 @@ class SettingsPage(ft.Column):
             value=default_criteria,
         )
         content.controls.append(self._criteria_radio)
-        content.controls.append(ft.Divider(height=1, color=ft.Colors.with_opacity(0.10, ft.Colors.WHITE)))
+        content.controls.append(ft.Divider(height=1, color=t.colors.border3))
 
         # Deletion method
         content.controls.append(ft.Text("Deletion Method", weight=ft.FontWeight.W_600, color=t.colors.fg))
@@ -633,7 +637,7 @@ class SettingsPage(ft.Column):
                     text_align=ft.TextAlign.CENTER,
                     size=t.typography.size_base,
                 ),
-                ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
+                ft.Divider(color=t.colors.border3, height=1),
                 ft.Text("Thanks for using Cerebro. ✨", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
             ],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -828,8 +832,10 @@ class SettingsPage(ft.Column):
         self._t = theme_for_mode(mode)
         
         # Update Header
-        self._header.content.color = self._t.colors.fg
-        
+        self._page_header.title.color = self._t.colors.fg
+        if self._page_header.subtitle is not None:
+            self._page_header.subtitle.color = self._t.colors.fg_muted
+
         # Update all Tab Containers (Glass styles)
         for container in self._tab_contents.values():
             container.bgcolor = self._t.colors.glass_bg

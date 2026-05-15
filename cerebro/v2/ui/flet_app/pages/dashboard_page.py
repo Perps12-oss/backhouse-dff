@@ -67,7 +67,7 @@ class DashboardPage(ft.Column):
         self._stats_fetch_generation = 0
         self._last_on_show_ts = 0.0
         # Initial Theme Load
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
 
         # UI References (to update without rebuilding)
         self._hero: ft.Container

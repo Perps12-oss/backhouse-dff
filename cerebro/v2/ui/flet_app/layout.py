@@ -51,7 +51,11 @@ class AppLayout(ft.Column):
         # Plain container (not AnimatedSwitcher): with singleton tab pages, the
         # switcher often failed to replace visible content while the rail updated.
         # Clip so wide / overflowing results subtree cannot sit on top of the rail in hit-testing.
-        self._content_host = ft.Container(expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
+        self._content_host = ft.Container(
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            padding=ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0),
+        )
         self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
         # Keep power-user pages routable but remove low-frequency pages from top-level navbar.
@@ -116,7 +120,7 @@ class AppLayout(ft.Column):
 
     def _on_nav_click(self, key: str) -> None:
         if key == "review" and not bool(self._bridge.state.groups):
-            self._bridge.show_snackbar("Run a scan first to unlock Results and Review.", info=True)
+            self._bridge.show_snackbar("Run a scan first to open Review.", info=True)
             self.navigate_to("dashboard")
             return
         self.navigate_to(key)
@@ -187,6 +191,7 @@ class AppLayout(ft.Column):
         """Repaint shell controls when the app theme changes."""
         self._theme_mode = "dark" if (mode or "").lower() == "dark" else "light"
         self._t = theme_for_mode(self._theme_mode)
+        self._content_host.padding = ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0)
         self._apply_nav_theme()
         if self.page is not None:
             self.update()

@@ -22,7 +22,7 @@ class RouteInfo:
 
 ROUTES: list[RouteInfo] = [
     RouteInfo(key="dashboard", route="/dashboard", icon=ft.icons.Icons.HOME, label="Home"),
-    RouteInfo(key="review", route="/review", icon=ft.icons.Icons.GRID_VIEW, label="Workspace"),
+    RouteInfo(key="review", route="/review", icon=ft.icons.Icons.FIND_IN_PAGE, label="Review"),
     RouteInfo(key="history", route="/history", icon=ft.icons.Icons.HISTORY, label="History"),
     RouteInfo(key="exclude", route="/exclude", icon=ft.icons.Icons.BLOCK, label="Exclude"),
     RouteInfo(key="settings", route="/settings", icon=ft.icons.Icons.SETTINGS, label="Settings"),

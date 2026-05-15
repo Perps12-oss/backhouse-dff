@@ -2,49 +2,34 @@ from __future__ import annotations
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewScreen
-from cerebro.v2.ui.flet_app.theme import ThemeTokens
+from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState, ReviewScreen
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 
-_STEPS: list[tuple[ReviewScreen, str, str]] = [
-    ("overview", "Overview", "Scan complete"),
-    ("browse", "Browse", "Review duplicates"),
-    ("inspect", "Inspect", "Compare and decide"),
-    ("cart", "Review Cart", "Audit selections"),
-    ("execute", "Execute", "Confirm and run"),
-    ("report", "Report", "Summary and export"),
-]
-
-
-def build_progress_sidebar(t: ThemeTokens, active: ReviewScreen, on_jump) -> ft.Container:
-    items: list[ft.Control] = []
-    active_idx = next((i for i, (sid, _, _) in enumerate(_STEPS) if sid == active), 0)
-    for idx, (sid, title, subtitle) in enumerate(_STEPS):
-        reached = idx <= active_idx
-        dot = ft.Text("✓" if idx < active_idx else str(idx + 1), size=11, color=t.colors.fg if reached else t.colors.fg_muted)
-        row = ft.Container(
-            content=ft.Row(
-                [
-                    ft.Container(width=24, content=dot, alignment=ft.Alignment.CENTER),
-                    ft.Column(
-                        [
-                            ft.Text(title, size=t.typography.size_sm, weight=ft.FontWeight.W_600, color=t.colors.fg if reached else t.colors.fg_muted),
-                            ft.Text(subtitle, size=t.typography.size_xs, color=t.colors.fg_muted),
-                        ],
-                        spacing=0,
-                    ),
-                ],
-                spacing=8,
-            ),
-            padding=ft.padding.symmetric(vertical=6, horizontal=8),
-            border_radius=8,
-            bgcolor=ft.Colors.with_opacity(0.06, t.colors.primary) if sid == active else None,
-            on_click=(lambda e, s=sid: on_jump(s)) if reached else None,
-        )
-        items.append(row)
+def build_progress_sidebar(t: ThemeTokens, active: ReviewScreen, state: ReviewFlowState, on_jump) -> ft.Container:
+    """Operational status strip (replaces linear wizard steps)."""
+    n_groups = len(state.scan_results)
+    marked = len(state.cart_buckets()["delete"])
+    reclaim = state.marked_bytes()
+    mode = (state.scan_mode or "files").replace("_", " ").title()
+    screen_label = {"overview": "Overview", "browse": "Browse", "inspect": "Compare"}.get(active, active)
     return ft.Container(
         width=220,
         padding=12,
         border=ft.border.only(right=ft.BorderSide(1, t.colors.border)),
-        content=ft.Column(items, spacing=4),
+        content=ft.Column(
+            [
+                ft.Text("Review", size=t.typography.size_xs, color=t.colors.fg_muted, weight=ft.FontWeight.W_600),
+                ft.Text(screen_label, size=t.typography.size_sm, weight=ft.FontWeight.W_700, color=t.colors.fg),
+                ft.Divider(height=1, color=t.colors.border),
+                ft.Text(f"Scan: {mode}", size=t.typography.size_xs, color=t.colors.fg_muted),
+                ft.Text(f"{n_groups:,} groups", size=t.typography.size_xs, color=t.colors.fg),
+                ft.Text(f"{marked:,} marked · {fmt_size(reclaim)}", size=t.typography.size_xs, color=t.colors.primary),
+                ft.Container(height=8),
+                ft.TextButton("Go to Overview", on_click=lambda e: on_jump("overview")),
+                ft.TextButton("Go to Browse", on_click=lambda e: on_jump("browse")),
+            ],
+            spacing=4,
+            tight=True,
+        ),
     )
