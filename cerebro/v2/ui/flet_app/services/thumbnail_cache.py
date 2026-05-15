@@ -18,6 +18,12 @@ _MAX_CACHE = 384
 _MAX_EDGE = 112
 _JPEG_QUALITY = 82
 
+# Progressive preview tiers (same LRU; keys prefixed so eviction stays coherent).
+TINY_BROWSE_EDGE = 32
+TINY_INSPECT_EDGE = 128
+_TINY_JPEG_QUALITY_BROWSE = 48
+_TINY_JPEG_QUALITY_INSPECT = 55
+
 # Side-by-side compare view: much larger decode than grid thumbnails.
 _COMPARE_MAX_EDGE = 2048
 _COMPARE_JPEG_QUALITY = 90
@@ -106,6 +112,41 @@ class ThumbnailCache:
                 b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception:
             _log.debug("thumbnail failed for %s (edge=%s)", path, me, exc_info=True)
+            self._remember(key, None)
+            return None
+
+        self._remember(key, b64)
+        return b64
+
+    def get_preview_tiny_base64(self, path: Path, edge: int) -> Optional[str]:
+        """Very small JPEG for blur-up / placeholder (Browse 32px, Inspect 128px). LRU key ``tiny|edge|path``."""
+        p = Path(path)
+        me = max(16, min(512, int(edge)))
+        try:
+            key = f"tiny|{me}|{p.resolve()}"
+        except OSError:
+            key = f"tiny|{me}|{p}"
+        if key in self._data:
+            self._data.move_to_end(key)
+            return self._data[key]
+
+        if not p.is_file() or not is_image_path(p):
+            self._remember(key, None)
+            return None
+
+        q = _TINY_JPEG_QUALITY_INSPECT if me >= 64 else _TINY_JPEG_QUALITY_BROWSE
+        try:
+            from PIL import Image
+
+            with Image.open(p) as im:
+                im = _normalize_for_safe_convert(im)
+                im = im.convert("RGB")
+                im.thumbnail((me, me), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=q, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            _log.debug("tiny preview failed for %s edge=%s", path, me, exc_info=True)
             self._remember(key, None)
             return None
 

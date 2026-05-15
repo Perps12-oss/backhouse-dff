@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from dataclasses import dataclass
 from typing import Callable, Generic, Iterable, TypeVar
 
@@ -28,6 +30,8 @@ class ChunkedViewConfig:
     first_sync_count: int = 4
     batch_size: int = 16
     max_items: int | None = MAX_RENDERED_GROUPS
+    """Max new controls appended before yielding a frame (scroll/jank guard)."""
+    max_builds_per_tick: int = 20
 
 
 def _register_presets() -> None:
@@ -38,24 +42,28 @@ def _register_presets() -> None:
         first_sync_count=4,
         batch_size=16,
         max_items=MAX_RENDERED_GROUPS,
+        max_builds_per_tick=20,
     )
     _PRESETS[RESULTS_GRID_CHUNK_CONFIG] = ChunkedViewConfig(
         async_threshold=36,
         first_sync_count=4,
         batch_size=8,
         max_items=MAX_RENDERED_GROUPS,
+        max_builds_per_tick=20,
     )
     _PRESETS[REVIEW_GROUPS_CHUNK_CONFIG] = ChunkedViewConfig(
         async_threshold=40,
         first_sync_count=40,
         batch_size=40,
         max_items=None,
+        max_builds_per_tick=20,
     )
     _PRESETS[REVIEW_GRID_FILES_CHUNK_CONFIG] = ChunkedViewConfig(
         async_threshold=220,
         first_sync_count=20,
         batch_size=30,
         max_items=None,
+        max_builds_per_tick=20,
     )
 
 
@@ -129,7 +137,9 @@ class ChunkedViewBuilder(Generic[T]):
             host.controls = controls
             if after_chunk is not None:
                 after_chunk()
+            t0 = time.perf_counter()
             self._safe_update(host)
+            self._maybe_log_chunk_perf(host, "sync_full", (time.perf_counter() - t0) * 1000.0)
             if on_complete is not None:
                 on_complete()
             return gen
@@ -139,7 +149,9 @@ class ChunkedViewBuilder(Generic[T]):
         host.controls = [card_builder(item, i) for i, item in enumerate(head)]
         if after_chunk is not None:
             after_chunk()
+        t0 = time.perf_counter()
         self._safe_update(host)
+        self._maybe_log_chunk_perf(host, "sync_head", (time.perf_counter() - t0) * 1000.0)
 
         if not tail:
             if overflow > 0 and trailing_builder is not None:
@@ -164,6 +176,7 @@ class ChunkedViewBuilder(Generic[T]):
                 after_chunk,
                 on_complete,
                 on_abort,
+                cfg.max_builds_per_tick,
             )
         else:
             self._append_sync(
@@ -175,6 +188,7 @@ class ChunkedViewBuilder(Generic[T]):
                 overflow,
                 after_chunk,
                 on_complete,
+                cfg.max_builds_per_tick,
             )
         return gen
 
@@ -189,6 +203,14 @@ class ChunkedViewBuilder(Generic[T]):
     def _safe_update(ctrl: ft.Control | None) -> None:
         _safe_update_control(ctrl)
 
+    @staticmethod
+    def _maybe_log_chunk_perf(host: ft.Control, label: str, elapsed_ms: float) -> None:
+        if os.environ.get("CEREBRO_PROFILE_CHUNKED", "").lower() not in ("1", "true", "yes"):
+            return
+        import logging
+
+        logging.getLogger(__name__).info("[CHUNK_PERF] %s safe_update %.2f ms", label, elapsed_ms)
+
     def _append_sync(
         self,
         host: ft.Control,
@@ -199,16 +221,25 @@ class ChunkedViewBuilder(Generic[T]):
         overflow: int,
         after_chunk: Callable[[], None] | None,
         on_complete: Callable[[], None] | None,
+        max_per_tick: int,
     ) -> None:
         for i, item in enumerate(tail):
             host.controls.append(card_builder(item, start_idx + i))
+            if max_per_tick > 0 and (i + 1) % max_per_tick == 0:
+                if after_chunk is not None:
+                    after_chunk()
+                t0 = time.perf_counter()
+                self._safe_update(host)
+                self._maybe_log_chunk_perf(host, "sync_tail_tick", (time.perf_counter() - t0) * 1000.0)
         if overflow > 0 and trailing_builder is not None:
             banner = trailing_builder(overflow)
             if banner is not None:
                 host.controls.append(banner)
         if after_chunk is not None:
             after_chunk()
+        t0 = time.perf_counter()
         self._safe_update(host)
+        self._maybe_log_chunk_perf(host, "sync_tail_final", (time.perf_counter() - t0) * 1000.0)
         if on_complete is not None:
             on_complete()
 
@@ -225,7 +256,9 @@ class ChunkedViewBuilder(Generic[T]):
         after_chunk: Callable[[], None] | None,
         on_complete: Callable[[], None] | None,
         on_abort: Callable[[], None] | None,
+        max_per_tick: int,
     ) -> None:
+        cap = max(1, int(max_per_tick)) if max_per_tick else 10_000
         for i in range(0, len(tail), cfg.batch_size):
             if gen != self._generation:
                 if on_abort is not None:
@@ -233,13 +266,21 @@ class ChunkedViewBuilder(Generic[T]):
                 return
             chunk = tail[i : i + cfg.batch_size]
             offset = start_idx + i
-            host.controls.extend(
-                [card_builder(item, offset + j) for j, item in enumerate(chunk)]
-            )
-            if after_chunk is not None:
-                after_chunk()
-            self._safe_update(host)
-            await asyncio.sleep(0)
+            for j in range(0, len(chunk), cap):
+                if gen != self._generation:
+                    if on_abort is not None:
+                        on_abort()
+                    return
+                sub = chunk[j : j + cap]
+                host.controls.extend(
+                    [card_builder(item, offset + j + k) for k, item in enumerate(sub)]
+                )
+                if after_chunk is not None:
+                    after_chunk()
+                t0 = time.perf_counter()
+                self._safe_update(host)
+                self._maybe_log_chunk_perf(host, "async_tick", (time.perf_counter() - t0) * 1000.0)
+                await asyncio.sleep(0)
 
         if gen != self._generation:
             if on_abort is not None:

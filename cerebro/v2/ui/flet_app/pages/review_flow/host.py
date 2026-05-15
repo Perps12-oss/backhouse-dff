@@ -33,7 +33,9 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, paths_to_delete
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
-from cerebro.v2.ui.flet_app.services.thumbnail_cache import get_thumbnail_cache
+from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_INSPECT_EDGE, get_thumbnail_cache
+from cerebro.v2.ui.flet_app.pages.review_flow import skeletons
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
@@ -49,7 +51,7 @@ class ReviewFlowHost(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, spacing=0)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._state = ReviewFlowState()
         self._state.protected_path_prefixes = ("/windows", "/system", "c:/windows")
         self._router = ReviewFlowRouter(self._state, self._render_active_screen)
@@ -63,6 +65,8 @@ class ReviewFlowHost(ft.Column):
         self._filter_sheet: Optional[ft.BottomSheet] = None
         self._inspect_stub = False
         self._inspect_preview_generation = 0
+        self._reduce_motion = bool(bridge.is_reduce_motion_enabled())
+        self._last_render_screen: Optional[str] = None
         self.controls = [
             ft.Row(
                 [
@@ -84,6 +88,8 @@ class ReviewFlowHost(ft.Column):
         started = time.perf_counter()
         t = self._t
         screen = self._router.active_screen()
+        self._reduce_motion = bool(self._bridge.is_reduce_motion_enabled())
+        prev_screen = self._last_render_screen
         page_width = getattr(self._bridge.flet_page, "width", None)
         if is_narrow_viewport(page_width):
             self._workstation_sidebar = ft.Container(width=0)
@@ -91,7 +97,7 @@ class ReviewFlowHost(ft.Column):
             self._workstation_sidebar = build_progress_sidebar(t, screen, self._on_progress_jump)
         self.controls[0].controls[0] = self._workstation_sidebar
         if screen == "overview":
-            self._content.content = build_overview_screen(
+            overview_body = build_overview_screen(
                 t,
                 self._state.scan_results,
                 on_start_review=self._on_start_review,
@@ -100,6 +106,17 @@ class ReviewFlowHost(ft.Column):
                 on_export=self._open_export_modal,
                 recent_lines=self._recent_review_lines(),
             )
+            if len(self._state.scan_results) == 0:
+                sk = skeletons.overview_skeleton(t, reduce_motion=self._reduce_motion)
+                self._content.content = ft.Stack(
+                    [
+                        ft.Container(sk, expand=True, alignment=ft.Alignment.TOP_CENTER),
+                        ft.Container(overview_body, expand=True),
+                    ],
+                    expand=True,
+                )
+            else:
+                self._content.content = overview_body
         elif screen == "browse":
             self._browse_view = BrowseScreenView(
                 t,
@@ -109,6 +126,7 @@ class ReviewFlowHost(ft.Column):
                 on_toggle_expand=self._toggle_expand,
                 on_open_inspect=self._open_inspect,
                 on_open_cart=self._open_cart,
+                reduce_motion=self._reduce_motion,
             )
             page = getattr(self._bridge, "flet_page", None)
             if page is not None:
@@ -165,6 +183,19 @@ class ReviewFlowHost(ft.Column):
                 on_export=self._open_export_modal,
                 on_new_scan=lambda e: self._bridge.navigate("dashboard"),
             )
+        if (
+            not self._reduce_motion
+            and prev_screen is not None
+            and prev_screen != screen
+            and self._page_is_set(self._content)
+        ):
+            try:
+                self._content.opacity = 0.0
+                self._content.animate_opacity = ft.Animation(220, ft.AnimationCurve.EASE_OUT)
+                self._content.opacity = 1.0
+            except Exception:
+                self._content.opacity = 1.0
+        self._last_render_screen = screen
         self._safe_update(self)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         if elapsed_ms > _UI_SLOW_MS:
@@ -531,6 +562,7 @@ class ReviewFlowHost(ft.Column):
     ) -> None:
         loop = asyncio.get_event_loop()
         cache = get_thumbnail_cache()
+        rm = self._reduce_motion
 
         async def _decode(slot: Optional[ft.Container]) -> None:
             if slot is None or gen != self._inspect_preview_generation:
@@ -538,16 +570,43 @@ class ReviewFlowHost(ft.Column):
             path = getattr(slot, "data", None)
             if not path:
                 return
-            b64 = await loop.run_in_executor(None, cache.get_compare_preview_base64, Path(str(path)))
-            if gen != self._inspect_preview_generation or not b64:
+            p = Path(str(path))
+            tiny_b64 = await loop.run_in_executor(cache._pool, cache.get_preview_tiny_base64, p, TINY_INSPECT_EDGE)
+            if gen != self._inspect_preview_generation:
                 return
-            slot.content = ft.Image(
-                src=f"data:image/jpeg;base64,{b64}",
+            layers: list[ft.Control] = []
+            if tiny_b64:
+                layers.append(
+                    ft.Image(
+                        src=f"data:image/jpeg;base64,{tiny_b64}",
+                        width=340,
+                        height=400,
+                        fit=ft.BoxFit.CONTAIN,
+                        border_radius=8,
+                    )
+                )
+            full_img = ft.Image(
+                src=IMAGE_PLACEHOLDER_SRC,
                 width=340,
                 height=400,
                 fit=ft.BoxFit.CONTAIN,
                 border_radius=8,
             )
+            full_wrap = ft.Container(
+                content=full_img,
+                opacity=1.0 if rm else 0.0,
+                animate_opacity=None if rm else ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+            )
+            layers.append(full_wrap)
+            slot.content = ft.Stack(controls=layers, width=340, height=400)
+            self._safe_update(slot)
+
+            full_b64 = await loop.run_in_executor(cache._pool, cache.get_compare_preview_base64, p)
+            if gen != self._inspect_preview_generation or not full_b64:
+                return
+            full_img.src = f"data:image/jpeg;base64,{full_b64}"
+            if not rm:
+                full_wrap.opacity = 1.0
             self._safe_update(slot)
 
         await _decode(slot_a)
@@ -566,16 +625,32 @@ class ReviewFlowHost(ft.Column):
             path = getattr(slot, "data", None)
             if not path:
                 continue
-            b64 = cache.get_compare_preview_base64(Path(str(path)))
-            if gen != self._inspect_preview_generation or not b64:
+            p = Path(str(path))
+            tiny_b64 = cache.get_preview_tiny_base64(p, TINY_INSPECT_EDGE)
+            layers: list[ft.Control] = []
+            if tiny_b64:
+                layers.append(
+                    ft.Image(
+                        src=f"data:image/jpeg;base64,{tiny_b64}",
+                        width=340,
+                        height=400,
+                        fit=ft.BoxFit.CONTAIN,
+                        border_radius=8,
+                    )
+                )
+            full_b64 = cache.get_compare_preview_base64(p)
+            if not full_b64:
                 continue
-            slot.content = ft.Image(
-                src=f"data:image/jpeg;base64,{b64}",
+            full_img = ft.Image(
+                src=f"data:image/jpeg;base64,{full_b64}",
                 width=340,
                 height=400,
                 fit=ft.BoxFit.CONTAIN,
                 border_radius=8,
             )
+            full_wrap = ft.Container(content=full_img, opacity=1.0)
+            layers.append(full_wrap)
+            slot.content = ft.Stack(controls=layers, width=340, height=400)
             self._safe_update(slot)
 
     def _toggle_inspect_diff(self, e: ft.ControlEvent) -> None:
@@ -686,6 +761,7 @@ class ReviewFlowHost(ft.Column):
                 self._navigate_browse_after_modal_from_overview()
             elif self._browse_view:
                 self._browse_view.refresh()
+                self._schedule_browse_apply_wave()
             else:
                 self._render_active_screen()
 
@@ -698,6 +774,38 @@ class ReviewFlowHost(ft.Column):
             ],
         )
         self._show_modal(dlg)
+
+    def _schedule_browse_apply_wave(self) -> None:
+        if self._reduce_motion or self._browse_view is None:
+            return
+        page = getattr(self._bridge, "flet_page", None)
+        if page is None or not hasattr(page, "run_task"):
+            return
+        page.run_task(self._browse_apply_wave_async)
+
+    async def _browse_apply_wave_async(self) -> None:
+        view = self._browse_view
+        if view is None:
+            return
+        t = self._t
+        flash = ft.Colors.with_opacity(0.22, t.colors.success)
+        lst = view.list_host
+        prepared: list[tuple[ft.Container, object]] = []
+        for ctrl in list(lst.controls)[:40]:
+            if isinstance(ctrl, ft.Container):
+                prepared.append((ctrl, ctrl.bgcolor))
+        for row, orig in prepared:
+            try:
+                row.bgcolor = flash
+                lst.update()
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
+            try:
+                row.bgcolor = orig
+                lst.update()
+            except Exception:
+                pass
 
     def _close_filter_sheet(self) -> None:
         if self._filter_sheet is None:
