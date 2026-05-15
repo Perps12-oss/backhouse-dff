@@ -397,10 +397,16 @@ class ReviewPageGroupsGridMixin:
         self._refresh_action_bar()
         self._refresh_stats_header()
 
-    def _delete_marked_files(self, e=None) -> None:
+    def _trash_marked_files(self, e=None) -> None:
         if not self._marked_paths:
             return
-        self._show_smart_delete_dialog(sorted(self._marked_paths))
+        self._execute_smart_delete(sorted(self._marked_paths), DeletionPolicy.TRASH)
+
+    def _delete_marked_permanently(self, e=None) -> None:
+        if not self._marked_paths:
+            return
+        paths = sorted(self._marked_paths)
+        self._show_smart_delete_dialog(paths)
 
 
 class ReviewPageSmartMixin:
@@ -424,28 +430,7 @@ class ReviewPageSmartMixin:
             self._refresh_groups_overview()
 
     def _apply_smart_select_review(self, e=None):
-        rule = self._smart_rule or "keep_largest"
-        rule_lbl = dict(RULE_LABELS).get(rule, "Keep Largest")
-
-        def _apply_all(_e):
-            self._bridge.dismiss_top_dialog()
-            self._apply_rule_to_all_groups()
-
-        def _suggest_only(_e):
-            self._bridge.dismiss_top_dialog()
-            self._bridge.show_snackbar(f"Suggestion mode enabled: {rule_lbl}.", info=True)
-
-        dlg = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Apply rule"),
-            content=ft.Text(f'Use "{rule_lbl}" for all groups, or only as a suggestion while reviewing?'),
-            actions=[
-                ft.TextButton("Cancel", on_click=lambda _e: self._bridge.dismiss_top_dialog()),
-                ft.OutlinedButton("Suggest per-group", on_click=_suggest_only),
-                ft.ElevatedButton("Apply to all groups", on_click=_apply_all),
-            ],
-        )
-        self._bridge.show_modal_dialog(dlg)
+        self._apply_rule_to_all_groups()
 
     def _apply_rule_to_all_groups(self) -> None:
         page = self._bridge.flet_page

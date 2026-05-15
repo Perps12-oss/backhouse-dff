@@ -199,7 +199,8 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
     page._review_action_bar = ReviewActionBar(
         bridge,
         t,
-        on_apply=page._delete_marked_files,
+        on_trash=page._trash_marked_files,
+        on_delete=page._delete_marked_permanently,
         on_undo=page._undo_last_trash_delete,
     )
 

@@ -151,6 +151,51 @@ def _probe_windows_storage(drive: Optional[str]) -> tuple[int, str]:
     return 16, "unknown"
 
 
+def _get_system_exclude_paths(folders: List[Path]) -> set[str]:
+    """Return well-known OS system directory paths that should never be scanned.
+
+    On Windows: derives paths from environment variables (SystemRoot,
+    ProgramFiles, etc.) *and* checks each drive present in *folders* for
+    common system dir names so secondary Windows installations (e.g. D:\\Windows)
+    are caught even when they differ from the running system's env vars.
+
+    Returns an empty set on non-Windows platforms.
+    """
+    import os
+    import sys
+
+    if sys.platform != "win32":
+        return set()
+
+    result: set[str] = set()
+
+    # Env-var based paths for the running system.
+    for var in ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+        val = os.environ.get(var)
+        if val:
+            result.add(val.rstrip("\\"))
+
+    # For every drive letter that appears in the requested scan roots,
+    # also check drive-relative paths that indicate a Windows installation.
+    _system_dir_names = ("Windows", "Program Files", "Program Files (x86)", "ProgramData")
+    drives_seen: set[str] = set()
+    for f in folders:
+        try:
+            s = str(Path(f).resolve())
+            if len(s) >= 2 and s[1] == ":":
+                drives_seen.add(s[0].upper())
+        except Exception:
+            pass
+
+    for letter in drives_seen:
+        for name in _system_dir_names:
+            candidate = f"{letter}:\\{name}"
+            if os.path.isdir(candidate):
+                result.add(candidate)
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Stage -> ScanState mapping
 # ---------------------------------------------------------------------------
@@ -448,21 +493,33 @@ class TurboFileEngine(BaseEngine):
         self._ckpt_completed_offset = _ckpt_completed_offset
         self._ckpt_total = _ckpt_total
 
+        _user_exclude: set[str] = {
+            str(p)
+            for p in (opts.get("exclude_paths", []) or [])
+            if str(p).strip()
+        }
+        if opts.get("skip_system_folders", True):
+            _sys_paths = _get_system_exclude_paths(self._folders)
+            if _sys_paths:
+                logger.info(
+                    "skip_system_folders: excluding %d system paths: %s",
+                    len(_sys_paths),
+                    sorted(_sys_paths),
+                )
+            _user_exclude |= _sys_paths
+
         cfg = TurboScanConfig(
             dir_workers=dir_workers,
             hash_workers=hash_workers,
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
             skip_hidden=not bool(opts.get("include_hidden", False)),
-            exclude_paths={
-                str(p)
-                for p in (opts.get("exclude_paths", []) or [])
-                if str(p).strip()
-            },
+            exclude_paths=_user_exclude,
             recursive=bool(opts.get("include_subfolders", True)),
             use_multiprocessing=False,
             use_quick_hash=True,
             use_full_hash=True,
+            use_cache=use_cache,
             hash_algorithm=hash_algo,
             progress_callback=self._on_turbo_progress,
             cache_dir=default_cerebro_cache_dir() if use_cache else None,
@@ -622,7 +679,12 @@ class TurboFileEngine(BaseEngine):
             return
 
         state = _STAGE_MAP.get(stage, ScanState.SCANNING)
-        self._state = state
+        # Don't overwrite a user-set PAUSED state: scanner progress callbacks
+        # from in-flight workers can arrive after pause() clears the pause event
+        # but before all workers have reached the gate, causing _state to flip
+        # back to SCANNING and breaking pause-state visibility.
+        if self._state != ScanState.PAUSED:
+            self._state = state
         prev = self._progress
         prev_stage = prev.stage or ""
         metric_data = metrics or {}
@@ -660,7 +722,7 @@ class TurboFileEngine(BaseEngine):
             ft = max(ft, prev.files_total or 0)
 
         self._progress = ScanProgress(
-            state=state,
+            state=self._state,
             files_scanned=scanned,
             files_total=ft,
             stage=stage,

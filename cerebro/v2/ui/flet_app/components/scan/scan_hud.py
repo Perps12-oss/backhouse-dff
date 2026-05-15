@@ -36,6 +36,7 @@ _BAR_MARKER_TTL: float = 0.30
 @dataclass
 class ScanHUDCallbacks:
     on_cancel_scan: Callable[[ft.ControlEvent], None]
+    on_pause_scan: Callable[[ft.ControlEvent], None]
     on_view_results: Callable[[ft.ControlEvent], None]
     on_view_partial_results: Callable[[ft.ControlEvent], None]
     on_home: Callable[[ft.ControlEvent], None]
@@ -402,6 +403,17 @@ class ScanHUD(ft.Container):
             on_click=self._callbacks.on_cancel_scan,
             style=pill_outlined_button_style(t, danger=True),
         )
+        self._pause_btn = ft.OutlinedButton(
+            "Pause",
+            icon=ft.icons.Icons.PAUSE,
+            on_click=self._callbacks.on_pause_scan,
+            style=pill_outlined_button_style(t),
+        )
+        self._btn_row = ft.Row(
+            [self._pause_btn, self._cancel_btn],
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=s.md,
+        )
         self._bar_canvas = cv.Canvas(shapes=[], width=_BAR_WIDTH, height=_BAR_HEIGHT)
         self._bar_overlay = ft.Container(
             content=ft.Text(
@@ -439,7 +451,7 @@ class ScanHUD(ft.Container):
                 self._progress_detail,
                 self._path_strip,
                 self._bar_row,
-                self._cancel_btn,
+                self._btn_row,
                 self._view_results_btn,
                 self._cancel_choice_panel,
             ],
@@ -484,11 +496,13 @@ class ScanHUD(ft.Container):
         self._view_partial_btn.style = pill_outlined_button_style(t)
         self._partial_back_home_btn.style = pill_text_button_style(t, variant="muted")
         self._cancel_btn.style = pill_outlined_button_style(t, danger=True)
+        self._pause_btn.style = pill_outlined_button_style(t)
         for ctrl in (
             self._view_results_btn,
             self._view_partial_btn,
             self._partial_back_home_btn,
             self._cancel_btn,
+            self._pause_btn,
         ):
             ScanHUD._safe_update(ctrl)
 
@@ -521,6 +535,10 @@ class ScanHUD(ft.Container):
         self._cancel_btn.text = "Cancel Scan"
         self._cancel_btn.disabled = False
         self._cancel_btn.visible = True
+        self._pause_btn.text = "Pause"
+        self._pause_btn.icon = ft.icons.Icons.PAUSE
+        self._pause_btn.disabled = False
+        self._pause_btn.visible = True
         self._view_results_btn.visible = False
         self._view_partial_btn.visible = True
         self._view_partial_btn.disabled = False
@@ -539,6 +557,7 @@ class ScanHUD(ft.Container):
         ScanHUD._safe_update(self._ring_timer)
 
     def show_cancelling(self) -> None:
+        self._pause_btn.visible = False
         self._cancel_btn.text = "Cancelling…"
         self._cancel_btn.disabled = True
         self._ring_label.value = "Cancelling…"
@@ -572,6 +591,7 @@ class ScanHUD(ft.Container):
         self._scan_elapsed_clock.value = frozen_elapsed
         self._ring_path.value = ""
         self._cancel_btn.visible = False
+        self._pause_btn.visible = False
         self._view_results_btn.visible = True
         self._bar_is_complete = True
         self._bar_active_markers.clear()
@@ -637,6 +657,7 @@ class ScanHUD(ft.Container):
             self._view_results_btn.visible = False
             self._partial_results_row.visible = False
             self._cancel_btn.visible = False
+            self._pause_btn.visible = False
             self._ring_timer.value = ""
             self._scan_elapsed_clock.value = ""
             self._ring_path.value = ""
@@ -796,6 +817,28 @@ class ScanHUD(ft.Container):
     def reset_cancel_choice_for_new_scan(self) -> None:
         self._reset_cancel_choice_for_new_scan()
 
+    def sync_pause_button(self, *, is_paused: bool, is_scanning: bool) -> None:
+        """Update the pause button to reflect current scan state.
+
+        Called by the dashboard whenever scan paused/resumed state changes.
+        """
+        t = self._t
+        if not is_scanning:
+            self._pause_btn.visible = False
+            ScanHUD._safe_update(self._pause_btn)
+            return
+        if is_paused:
+            self._pause_btn.text = "Continue"
+            self._pause_btn.icon = ft.icons.Icons.PLAY_ARROW
+            self._pause_btn.style = pill_outlined_button_style(t, success=True)
+        else:
+            self._pause_btn.text = "Pause"
+            self._pause_btn.icon = ft.icons.Icons.PAUSE
+            self._pause_btn.style = pill_outlined_button_style(t)
+        self._pause_btn.visible = True
+        self._pause_btn.disabled = False
+        ScanHUD._safe_update(self._pause_btn)
+
     def _present_cancel_waiting_for_results(self, *, phase_files: int) -> None:
         """Stop UI: stay on scan surface with a clear fork until the engine reports partial groups."""
         t = self._t
@@ -816,6 +859,7 @@ class ScanHUD(ft.Container):
         self._ring_path.value = ""
         self._ring_counter_tip.visible = False
         self._cancel_btn.visible = False
+        self._pause_btn.visible = False
         self._view_results_btn.visible = False
         self._cancel_choice_headline.value = "What would you like to do next?"
         self._cancel_choice_sub.value = (
@@ -886,6 +930,7 @@ class ScanHUD(ft.Container):
         self._ring_timer.value = ""
         self._scan_mode_run_label.value = ""
         self._cancel_btn.visible = False
+        self._pause_btn.visible = False
         self._view_results_btn.visible = False
         self._partial_results_row.visible = True
         self._cancel_choice_panel.visible = True

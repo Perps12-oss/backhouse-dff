@@ -1,4 +1,4 @@
-"""Bottom sticky bar: selection summary, trust line, Apply Cleanup."""
+"""Bottom sticky bar: selection summary, trust line, Trash / Delete buttons."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from typing import Callable, Optional
 import flet as ft
 
 from cerebro.v2.ui.flet_app.pages.review.theme_detect import app_theme_is_light
-from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
+from cerebro.v2.ui.flet_app.pill_button_styles import (
+    pill_filled_accent,
+    pill_outlined_button_style,
+    pill_text_button_style,
+)
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 
@@ -17,18 +21,25 @@ class ReviewActionBar(ft.Container):
         bridge,
         t: ThemeTokens,
         *,
-        on_apply: Callable[[Optional[ft.ControlEvent]], None],
+        on_trash: Callable[[Optional[ft.ControlEvent]], None],
+        on_delete: Callable[[Optional[ft.ControlEvent]], None],
         on_undo: Callable[[Optional[ft.ControlEvent]], None],
     ) -> None:
         self._bridge = bridge
         self._t = t
         self._summary = ft.Text(size=t.typography.size_sm, color=t.colors.fg2, weight=ft.FontWeight.W_600)
         self._trust = ft.Text(size=t.typography.size_sm, color=t.colors.fg_muted)
-        self._apply_btn = ft.FilledButton(
-            "Apply Cleanup",
-            icon=ft.icons.Icons.AUTO_FIX_HIGH_OUTLINED,
-            on_click=on_apply,
+        self._trash_btn = ft.FilledButton(
+            "Move to Trash",
+            icon=ft.icons.Icons.DELETE_OUTLINE,
+            on_click=on_trash,
             style=pill_filled_accent(t, text_size=13, weight=ft.FontWeight.W_700),
+        )
+        self._delete_btn = ft.OutlinedButton(
+            "Delete",
+            icon=ft.icons.Icons.DELETE_FOREVER_OUTLINED,
+            on_click=on_delete,
+            style=pill_outlined_button_style(t, danger=True),
         )
         self._undo_btn = ft.TextButton(
             "Undo last delete",
@@ -56,7 +67,7 @@ class ReviewActionBar(ft.Container):
                         expand=2,
                     ),
                     ft.Row(
-                        [self._undo_btn, self._apply_btn],
+                        [self._undo_btn, self._delete_btn, self._trash_btn],
                         spacing=t.spacing.sm,
                         tight=True,
                     ),
@@ -86,10 +97,13 @@ class ReviewActionBar(ft.Container):
         else:
             self.opacity = 0.0
             self.visible = False
-        self._apply_btn.disabled = marked_n <= 0 or mode in ("empty", "loading")
+        disabled = marked_n <= 0 or mode in ("empty", "loading")
+        self._trash_btn.disabled = disabled
+        self._delete_btn.disabled = disabled
         ReviewActionBar._safe_update(self._summary)
         ReviewActionBar._safe_update(self._trust)
-        ReviewActionBar._safe_update(self._apply_btn)
+        ReviewActionBar._safe_update(self._trash_btn)
+        ReviewActionBar._safe_update(self._delete_btn)
         ReviewActionBar._safe_update(self)
 
     def sync_theme(self, t: ThemeTokens) -> None:
@@ -103,6 +117,7 @@ class ReviewActionBar(ft.Container):
         self._summary.size = t.typography.size_sm
         self._trust.color = t.colors.fg_muted
         self._trust.size = t.typography.size_sm
-        self._apply_btn.style = pill_filled_accent(t, text_size=13, weight=ft.FontWeight.W_700)
+        self._trash_btn.style = pill_filled_accent(t, text_size=13, weight=ft.FontWeight.W_700)
+        self._delete_btn.style = pill_outlined_button_style(t, danger=True)
         self._undo_btn.style = pill_text_button_style(t, variant="muted")
         ReviewActionBar._safe_update(self)
