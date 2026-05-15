@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from cerebro.core.paths import default_cerebro_cache_dir
+from cerebro.core.utils import DEFAULT_SKIP_DIRS
 from cerebro.core.scanners.turbo_scanner import (
     DEFAULT_DIR_WORKERS,
     DEFAULT_HASH_WORKERS,
@@ -151,12 +152,34 @@ def _probe_windows_storage(drive: Optional[str]) -> tuple[int, str]:
     return 16, "unknown"
 
 
+def _estimate_large_scan(roots: List[Path]) -> bool:
+    """Heuristic: drive roots or shallow paths likely exceed STREAMING_THRESHOLD."""
+    import sys
+
+    for root in roots:
+        try:
+            p = root.resolve()
+        except OSError:
+            p = root
+        parts = p.parts
+        if sys.platform == "win32":
+            norm = str(p).replace("/", "\\").rstrip("\\")
+            if len(norm) <= 3 and ":" in norm:
+                return True
+            if len(parts) <= 3:
+                return True
+        elif len(parts) <= 2:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Stage -> ScanState mapping
 # ---------------------------------------------------------------------------
 _STAGE_MAP: Dict[str, ScanState] = {
     ScanStage.DISCOVERING: ScanState.SCANNING,
     ScanStage.GROUPING_BY_SIZE: ScanState.SCANNING,
+    ScanStage.TIER_A_PREFILTER: ScanState.SCANNING,
     ScanStage.HASHING_PARTIAL: ScanState.SCANNING,
     ScanStage.HASHING_FULL: ScanState.SCANNING,
     ScanStage.CANCELLED: ScanState.CANCELLED,
@@ -230,6 +253,25 @@ class TurboFileEngine(BaseEngine):
                     "Extract and compare individual files inside .zip, .tar, .gz, .7z, etc. "
                     "OFF by default: archives are compared as opaque files (fast). "
                     "Enable only if you specifically need to find duplicate files hidden inside archives."
+                ),
+            ),
+            EngineOption(
+                name="verify_duplicates",
+                display_name="Deep verify (full-file hash)",
+                type="bool",
+                default=False,
+                tooltip=(
+                    "When enabled, runs an additional full-file hash pass after the quick hash. "
+                    "Slower but maximally strict. Leave off for large libraries."
+                ),
+            ),
+            EngineOption(
+                name="index_only",
+                display_name="Index only (hash later)",
+                type="bool",
+                default=False,
+                tooltip=(
+                    "Catalogue files and build size groups only; skip hashing until you resume the scan."
                 ),
             ),
         ]
@@ -390,7 +432,10 @@ class TurboFileEngine(BaseEngine):
         # quick-hash gets the full io_cap, and full-hash gets a slightly reduced cap
         # to leave headroom. All caps respect max_threads_opt when set.
         # Values of 0 fall back to hash_workers inside the scanner.
-        _enable_phase_policy = bool(opts.get("enable_phase_worker_policy", False))
+        _verify_duplicates = bool(opts.get("verify_duplicates", False))
+        _index_only = bool(opts.get("index_only", False))
+        _enable_phase_policy = bool(opts.get("enable_phase_worker_policy", True))
+        _enable_tier_a_adaptive = bool(opts.get("enable_tier_a_adaptive", True))
         if _enable_phase_policy:
             _tier_a_workers = max(2, min(hash_workers, max(4, io_cap // 2)))
             _quick_hash_workers = min(DEFAULT_HASH_WORKERS, io_cap)
@@ -406,6 +451,27 @@ class TurboFileEngine(BaseEngine):
         # Checkpoint / resume wiring.
         # Build a scope dict that uniquely identifies this scan's filter set so
         # find_resumable_manifest can match it against a prior interrupted run.
+        _skip_system = bool(opts.get("skip_system_folders", True))
+
+        # Root-path guard: should_skip_directory() only fires on *subdirectories*
+        # encountered during traversal — it never sees scan roots. If the user
+        # passes a system path (e.g. D:\Windows) as a root, it would be walked
+        # in full. Filter it out here when skip_system is active.
+        if _skip_system:
+            filtered_folders: List[Path] = []
+            for f in self._folders:
+                if f.name in DEFAULT_SKIP_DIRS:
+                    logger.warning(
+                        "Skipping system root path: %s (matches DEFAULT_SKIP_DIRS). "
+                        "To scan it anyway, disable 'Skip system folders' in Settings.",
+                        f,
+                    )
+                else:
+                    filtered_folders.append(f)
+            if not filtered_folders:
+                logger.warning("All scan roots were system paths — nothing to scan.")
+            self._folders = filtered_folders
+
         _folder_strs = sorted(str(f) for f in self._folders)
         _scope = {
             "min_size": int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
@@ -416,6 +482,9 @@ class TurboFileEngine(BaseEngine):
                 str(p) for p in (opts.get("exclude_paths", []) or []) if str(p).strip()
             ),
             "scan_archives": bool(opts.get("scan_archives", False)),
+            "skip_system_folders": _skip_system,
+            "verify_duplicates": _verify_duplicates,
+            "index_only": _index_only,
         }
         _ckpt_db = None
         _scan_id = None
@@ -448,22 +517,36 @@ class TurboFileEngine(BaseEngine):
         self._ckpt_completed_offset = _ckpt_completed_offset
         self._ckpt_total = _ckpt_total
 
+        _large_scan = _estimate_large_scan(self._folders)
+        if _large_scan or bool(opts.get("force_scale_mode", False)):
+            _enable_tier_a_adaptive = True
+            _enable_phase_policy = True
+            logger.info(
+                "Turbo scale mode: tier_a_adaptive=True phase_worker_policy=True (large_scan=%s)",
+                _large_scan,
+            )
+
         cfg = TurboScanConfig(
             dir_workers=dir_workers,
             hash_workers=hash_workers,
             min_size=int(opts.get("min_size_bytes") or opts.get("min_size") or 0),
             max_size=int(opts.get("max_size_bytes") or opts.get("max_size") or 0),
             skip_hidden=not bool(opts.get("include_hidden", False)),
+            skip_system=_skip_system,
             exclude_paths={
                 str(p)
                 for p in (opts.get("exclude_paths", []) or [])
                 if str(p).strip()
             },
             recursive=bool(opts.get("include_subfolders", True)),
-            use_multiprocessing=False,
+            use_multiprocessing=bool(
+                opts.get("use_multiprocessing", False)
+                or (len(self._folders) > 1 and not _resume_from_ckpt)
+            ),
             use_quick_hash=True,
-            use_full_hash=True,
+            use_full_hash=_verify_duplicates,
             hash_algorithm=hash_algo,
+            index_only=_index_only,
             progress_callback=self._on_turbo_progress,
             cache_dir=default_cerebro_cache_dir() if use_cache else None,
             pause_event=self._pause_event,
@@ -476,7 +559,7 @@ class TurboFileEngine(BaseEngine):
             enable_prehash_canonical_dedup=bool(
                 opts.get("enable_prehash_canonical_dedup", False)
             ),
-            enable_tier_a_adaptive=bool(opts.get("enable_tier_a_adaptive", False)),
+            enable_tier_a_adaptive=_enable_tier_a_adaptive,
             enable_phase_worker_policy=_enable_phase_policy,
             enable_resume_artifacts=bool(opts.get("enable_resume_artifacts", False)),
             # Phase-aware worker caps (0 = fall back to hash_workers in scanner)

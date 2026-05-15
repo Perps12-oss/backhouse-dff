@@ -228,6 +228,7 @@ class SettingsPage(ft.Column):
         self._general_reduce_motion.value = self._settings["accessibility"].get("reduce_motion", False)
         self._general_sound.value = self._settings["notifications"].get("sound_enabled", False)
         self._general_skip_results.value = bool(self._settings["general"].get("skip_results_after_scan", False))
+        self._general_skip_system.value = bool(self._settings["general"].get("skip_system_folders", True))
         self._general_partial_banner_autohide.value = bool(
             self._settings["general"].get("partial_results_banner_auto_hide", True)
         )
@@ -310,6 +311,10 @@ class SettingsPage(ft.Column):
             label="Skip Results page after scan (open Review directly)",
             value=bool(self._settings["general"].get("skip_results_after_scan", False)),
         )
+        self._general_skip_system = ft.Checkbox(
+            label="Skip system folders during file scans (Windows, Program Files, etc.)",
+            value=bool(self._settings["general"].get("skip_system_folders", True)),
+        )
         self._general_partial_banner_autohide = ft.Checkbox(
             label="Auto-hide partial-results banner on Home",
             value=bool(self._settings["general"].get("partial_results_banner_auto_hide", True)),
@@ -337,6 +342,7 @@ class SettingsPage(ft.Column):
             self._general_reduce_motion,
             self._general_sound,
             self._general_skip_results,
+            self._general_skip_system,
             self._general_partial_banner_autohide,
         ]:
             content.controls.append(cb)
@@ -726,6 +732,7 @@ class SettingsPage(ft.Column):
         self._settings["accessibility"]["reduce_motion"] = bool(self._general_reduce_motion.value)
         self._settings["notifications"]["sound_enabled"] = bool(self._general_sound.value)
         self._settings["general"]["skip_results_after_scan"] = bool(self._general_skip_results.value)
+        self._settings["general"]["skip_system_folders"] = bool(self._general_skip_system.value)
         self._settings["general"]["partial_results_banner_auto_hide"] = bool(
             self._general_partial_banner_autohide.value
         )

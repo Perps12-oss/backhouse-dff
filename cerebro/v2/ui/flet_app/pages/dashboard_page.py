@@ -66,6 +66,8 @@ class DashboardPage(ft.Column):
             "min_size_bytes": 0,
             "exclude_paths": [],
             "include_subfolders": True,
+            "index_only": False,
+            "verify_duplicates": False,
         }
         self._stats = {"scans": 0, "dupes": 0, "bytes_reclaimed": 0}
         self._initial_load_done = False
@@ -287,6 +289,8 @@ class DashboardPage(ft.Column):
             on_exclude_paths_blur=self._on_exclude_paths_blur,
             on_browse_exclude_path=self._browse_exclude_path,
             on_include_subfolders_change=self._on_include_subfolders_change,
+            on_index_only_change=self._on_index_only_change,
+            on_verify_duplicates_change=self._on_verify_duplicates_change,
         )
         self._mode_label = self._scan_opts.mode_label
         self._mode_row = self._scan_opts.mode_row
@@ -619,6 +623,14 @@ class DashboardPage(ft.Column):
         self._scan_options["include_subfolders"] = bool(e.control.value)
         self._save_scan_options_for_mode(self._selected_mode)
 
+    def _on_index_only_change(self, e: ft.ControlEvent) -> None:
+        self._scan_options["index_only"] = bool(e.control.value)
+        self._save_scan_options_for_mode(self._selected_mode)
+
+    def _on_verify_duplicates_change(self, e: ft.ControlEvent) -> None:
+        self._scan_options["verify_duplicates"] = bool(e.control.value)
+        self._save_scan_options_for_mode(self._selected_mode)
+
     def _browse_exclude_path(self, _e: ft.ControlEvent) -> None:
         if self._picker_active:
             return
@@ -668,6 +680,8 @@ class DashboardPage(ft.Column):
             "exclude_paths": list(self._scan_options.get("exclude_paths", []) or []),
             "scan_archives": bool(self._scan_options.get("scan_archives", False)),
             "include_subfolders": bool(self._scan_options.get("include_subfolders", True)),
+            "index_only": bool(self._scan_options.get("index_only", False)),
+            "verify_duplicates": bool(self._scan_options.get("verify_duplicates", False)),
         }
         scan_cfg["advanced_by_mode"] = adv
         settings["scan"] = scan_cfg
@@ -686,6 +700,8 @@ class DashboardPage(ft.Column):
         self._scan_options["exclude_paths"] = [str(x) for x in ex] if isinstance(ex, list) else []
         self._scan_options["scan_archives"] = bool(conf.get("scan_archives", False))
         self._scan_options["include_subfolders"] = bool(conf.get("include_subfolders", True))
+        self._scan_options["index_only"] = bool(conf.get("index_only", False))
+        self._scan_options["verify_duplicates"] = bool(conf.get("verify_duplicates", False))
 
         min_mb = max(0, min(1024, int(self._scan_options["min_size_bytes"]) // (1024 * 1024)))
         self._min_size_slider.value = min_mb
@@ -700,6 +716,10 @@ class DashboardPage(ft.Column):
         DashboardPage._safe_update(self._scan_archives_sw)
         DashboardPage._safe_update(self._archives_warning)
         DashboardPage._safe_update(self._include_subfolders_sw)
+        DashboardPage._safe_update(self._scan_opts.index_only_sw)
+        DashboardPage._safe_update(self._scan_opts.verify_duplicates_sw)
+        self._scan_opts.index_only_sw.value = bool(self._scan_options["index_only"])
+        self._scan_opts.verify_duplicates_sw.value = bool(self._scan_options["verify_duplicates"])
 
     def _effective_scan_options(self) -> dict:
         """Merge per-mode Home options with global Performance settings for the turbo file engine."""
@@ -710,13 +730,21 @@ class DashboardPage(ft.Column):
             if isinstance(perf, dict):
                 opts["max_threads"] = max(0, min(256, int(perf.get("max_threads", 0) or 0)))
                 opts["incremental_scan"] = bool(perf.get("hash_cache_enabled", True))
+            gen = s.get("general") if isinstance(s, dict) else None
+            if isinstance(gen, dict):
+                opts["skip_system_folders"] = bool(gen.get("skip_system_folders", True))
         except Exception:
             _log.debug("effective_scan_options: could not read performance settings", exc_info=True)
         opts.setdefault("max_threads", 0)
         opts.setdefault("incremental_scan", True)
         # Full-file hashing with auto pick among xxhash / blake3 / sha256 (see turbo_scanner).
         opts.setdefault("hash_algorithm", "auto")
+        opts.setdefault("skip_system_folders", True)
+        opts.setdefault("index_only", False)
+        opts.setdefault("verify_duplicates", False)
         if getattr(self, "_resume_interrupted_scan_once", False):
+            opts = dict(opts)
+            opts["index_only"] = False
             opts = dict(opts)
             opts["resume_interrupted_scan"] = True
         return opts
@@ -932,7 +960,8 @@ class DashboardPage(ft.Column):
             modal=True,
             title=ft.Text("Root drive scan warning"),
             content=ft.Text(
-                f"Scanning {drive_anchor} can take hours and include many system files. Continue?"
+                f"Scanning {drive_anchor} can take hours and includes system folders unless excluded. "
+                "Enable 'Skip system folders' in Settings → General for faster scans. Continue?"
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _e: self._bridge.dismiss_top_dialog()),

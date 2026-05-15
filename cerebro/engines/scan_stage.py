@@ -10,6 +10,7 @@ from __future__ import annotations
 class ScanStage:
     DISCOVERING = "discovering"
     GROUPING_BY_SIZE = "grouping_by_size"
+    TIER_A_PREFILTER = "tier_a_prefilter"
     HASHING_PARTIAL = "hashing_partial"
     HASHING_FULL = "hashing_full"
     COMPLETE = "complete"

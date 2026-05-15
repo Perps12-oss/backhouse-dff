@@ -27,6 +27,8 @@ class DashboardScanOptionsPanel:
         on_exclude_paths_blur: Callable[[ft.ControlEvent], None],
         on_browse_exclude_path: Callable[[ft.ControlEvent], None],
         on_include_subfolders_change: Callable[[ft.ControlEvent], None],
+        on_index_only_change: Callable[[ft.ControlEvent], None] | None = None,
+        on_verify_duplicates_change: Callable[[ft.ControlEvent], None] | None = None,
     ) -> None:
         self._t = t
         self._on_toggle_advanced = on_toggle_advanced
@@ -98,6 +100,18 @@ class DashboardScanOptionsPanel:
             value=True,
             on_change=on_include_subfolders_change,
         )
+        self.index_only_sw = ft.Switch(
+            label="Index only (hash duplicates later)",
+            value=False,
+            label_text_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
+            on_change=on_index_only_change,
+        )
+        self.verify_duplicates_sw = ft.Switch(
+            label="Deep verify (full-file hash)",
+            value=False,
+            label_text_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
+            on_change=on_verify_duplicates_change,
+        )
         self._advanced_chevron = ft.Icon(
             ft.icons.Icons.EXPAND_MORE,
             size=18,
@@ -108,6 +122,8 @@ class DashboardScanOptionsPanel:
         self.advanced_panel = ft.Column(
             [
                 self.include_subfolders_sw,
+                self.index_only_sw,
+                self.verify_duplicates_sw,
                 self.min_size_label,
                 self.min_size_slider,
                 ft.Row(

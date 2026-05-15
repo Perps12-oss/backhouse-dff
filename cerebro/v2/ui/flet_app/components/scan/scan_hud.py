@@ -72,7 +72,11 @@ class ScanHUDCallbacks:
 class ScanHUD(ft.Container):
     """Progress ring, timers, dual-phase card, chunk bar, and cancel fork UI."""
 
-    _RING_INDETERMINATE_STAGES = frozenset({ScanStage.DISCOVERING, ScanStage.GROUPING_BY_SIZE})
+    _RING_INDETERMINATE_STAGES = frozenset({
+        ScanStage.DISCOVERING,
+        ScanStage.GROUPING_BY_SIZE,
+        ScanStage.TIER_A_PREFILTER,
+    })
 
     def __init__(
         self,
@@ -669,8 +673,9 @@ class ScanHUD(ft.Container):
             return scanned / total
         if stage == ScanStage.DISCOVERING and total > 0:
             return scanned / total
-        if stage == ScanStage.GROUPING_BY_SIZE:
-            # Full file count here is not "done"; keep mid-heat until hashing ratio drives color.
+        if stage in (ScanStage.GROUPING_BY_SIZE, ScanStage.TIER_A_PREFILTER):
+            if stage == ScanStage.TIER_A_PREFILTER and total > 0:
+                return min(scanned / total, 0.95)
             return 0.34
         if stage == ScanStage.DISCOVERING:
             return 0.06
@@ -699,6 +704,7 @@ class ScanHUD(ft.Container):
             {
                 ScanStage.DISCOVERING,
                 ScanStage.GROUPING_BY_SIZE,
+                ScanStage.TIER_A_PREFILTER,
                 ScanStage.HASHING_PARTIAL,
                 ScanStage.HASHING_FULL,
                 ScanStage.COMPLETE,
@@ -708,6 +714,8 @@ class ScanHUD(ft.Container):
         if key in known:
             return key
         aliases = {
+            "tier_a": ScanStage.TIER_A_PREFILTER,
+            "tier_a_prefilter": ScanStage.TIER_A_PREFILTER,
             "comparing": ScanStage.HASHING_PARTIAL,
             "hashing": ScanStage.HASHING_PARTIAL,
             "hashingpartial": ScanStage.HASHING_PARTIAL,
@@ -745,6 +753,12 @@ class ScanHUD(ft.Container):
                 "Grouping by size…",
                 f"Sorting {scanned:,} files into size buckets to find files that might be duplicates.",
                 f"Grouped {scanned:,} files — finding same-size matches…",
+            )
+        if stage == ScanStage.TIER_A_PREFILTER:
+            return (
+                "Pre-filtering same-size files…",
+                "Reading a small prefix of each candidate to drop obvious non-matches before hashing.",
+                f"Pre-filter: {scanned:,} / {total:,} candidates" if total > 0 else "Pre-filtering candidates…",
             )
         if stage == ScanStage.HASHING_PARTIAL:
             return (
@@ -946,8 +960,24 @@ class ScanHUD(ft.Container):
                 f"Step 1 · Indexing — grouping {sc:,} files by size "
                 "(finding paths that could be duplicate candidates)."
             )
-            self._phase_hash_bar.value = None
+            self._phase_hash_bar.value = 0
             self._phase_hash_caption.value = "Not started — waits for grouping to finish."
+        elif stage == ScanStage.TIER_A_PREFILTER:
+            self._phase_prep_status.color = t.colors.success
+            self._phase_prep_status.value = (
+                f"Step 1 · Indexing — complete ({catalogued:,} paths in scope)."
+            )
+            self._phase_hash_title.value = "Step 2 — Pre-filter (prefix read)"
+            self._phase_hash_title.color = t.colors.accent
+            if tot > 0:
+                ratio = min(max(sc / tot, 0.0), 1.0)
+                self._phase_hash_bar.value = ratio
+                self._phase_hash_caption.value = (
+                    f"Pre-filter work: {sc:,} / {tot:,} ({ratio * 100:.1f}% — before content hashing)."
+                )
+            else:
+                self._phase_hash_bar.value = 0
+                self._phase_hash_caption.value = "Preparing pre-filter…"
         elif stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
             self._phase_prep_status.color = t.colors.success
             self._phase_prep_status.value = (
@@ -1007,6 +1037,8 @@ class ScanHUD(ft.Container):
                 f"Grouping by size — {scanned:,} / {tot:,} files "
                 f"(per-path lines resume as hashing reports each file)"
             )
+        if st == ScanStage.TIER_A_PREFILTER and tot > 0:
+            return f"Pre-filtering — {scanned:,} / {tot:,} same-size candidates"
         if st in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
             algo = str(snap.get("active_hash_algorithm") or "")
             suf = f" · {algo}" if algo else ""
@@ -1035,6 +1067,7 @@ class ScanHUD(ft.Container):
             {
                 ScanStage.DISCOVERING,
                 ScanStage.GROUPING_BY_SIZE,
+                ScanStage.TIER_A_PREFILTER,
                 ScanStage.HASHING_PARTIAL,
                 ScanStage.HASHING_FULL,
                 ScanStage.COMPLETE,
@@ -1123,7 +1156,11 @@ class ScanHUD(ft.Container):
             self._callbacks.on_request_page_update()
             return
 
-        if stage in (ScanStage.DISCOVERING, ScanStage.GROUPING_BY_SIZE):
+        if stage in (
+            ScanStage.DISCOVERING,
+            ScanStage.GROUPING_BY_SIZE,
+            ScanStage.TIER_A_PREFILTER,
+        ):
             self._scan_files_catalogued = max(
                 self._scan_files_catalogued, int(scanned), int(total)
             )
@@ -1390,6 +1427,12 @@ class ScanHUD(ft.Container):
                         parts.append(f"Grouping same-size candidates… {pct}%")
                 else:
                     parts.append("Grouping same-size candidates…")
+            elif st == ScanStage.TIER_A_PREFILTER:
+                if total > 0:
+                    pct = int(max(0.0, min(100.0, (float(scanned) / float(total)) * 100.0)))
+                    parts.append(f"Pre-filtering same-size files… {pct}%")
+                else:
+                    parts.append("Pre-filtering same-size files…")
             elif st == ScanStage.DISCOVERING:
                 if total > 0 and 0 < scanned < total:
                     pct = int(max(0.0, min(100.0, (float(scanned) / float(total)) * 100.0)))

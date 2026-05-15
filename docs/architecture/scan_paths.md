@@ -31,6 +31,10 @@ ScanOrchestrator.start_scan(mode, folders, …)   ← the only entrance
   single file-duplicate scan core. Reached via the thin `TurboFileEngine`
   adapter.
 
+At scale (50k+ files), discovery streams rows into `CheckpointDB` and grouping
+uses `iter_files_by_size` instead of a full in-memory catalogue. See
+`docs/architecture/scan_scale.md`.
+
 `mode="files_classic"` no longer exists. `FileDedupEngine` (the old
 independent classic pipeline, ~600 LOC) was removed in Cut 3.
 

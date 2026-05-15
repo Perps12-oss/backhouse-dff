@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 _DEFAULT_DB_PATH = Path.home() / ".cerebro" / "checkpoints.db"
 _FLUSH_INTERVAL: float = 2.0
@@ -127,6 +127,9 @@ class CheckpointDB:
                 CREATE INDEX IF NOT EXISTS idx_fc_pending_size
                     ON file_checkpoints (scan_id, hash_status, file_size);
 
+                CREATE INDEX IF NOT EXISTS idx_fc_scan_size
+                    ON file_checkpoints (scan_id, file_size);
+
                 -- Phase-level resumable artifacts (size-candidate / partial-hash stage).
                 -- version_hash is a fingerprint of scan scope + config + engine version so
                 -- stale artifacts from a different scope or algorithm are rejected on load.
@@ -186,7 +189,7 @@ class CheckpointDB:
                           status, label, total_files, completed_files
                    FROM scan_manifests
                    WHERE root_paths = ? AND scope_json = ?
-                     AND status IN ('active', 'paused', 'crashed')
+                     AND status IN ('active', 'paused', 'crashed', 'indexed')
                      AND created_at >= ?
                      AND total_files > 0
                    ORDER BY created_at DESC LIMIT 1""",
@@ -208,7 +211,7 @@ class CheckpointDB:
                 """SELECT scan_id, created_at, updated_at, root_paths, scope_json,
                           status, label, total_files, completed_files
                    FROM scan_manifests
-                   WHERE status IN ('active', 'paused', 'crashed')
+                   WHERE status IN ('active', 'paused', 'crashed', 'indexed')
                      AND created_at >= ?
                      AND total_files > 0
                    ORDER BY created_at DESC""",
@@ -277,33 +280,90 @@ class CheckpointDB:
         files: List[Tuple[str, int, float]],
     ) -> None:
         """Bulk-insert discovered files as 'pending'.  files = [(path, size, mtime)]."""
+        self.insert_pending_files_batch(scan_id, files, update_total=True)
+
+    def insert_pending_files_batch(
+        self,
+        scan_id: str,
+        files: List[Tuple[str, int, float]],
+        *,
+        update_total: bool = True,
+        chunk_size: int = 5000,
+    ) -> int:
+        """Insert a batch of pending rows; optionally refresh manifest total from DB count."""
+        if not files:
+            return 0
         now = time.time()
-        rows = [
-            (scan_id, path, size, mtime, None, "pending", None, now)
-            for path, size, mtime in files
-        ]
+        inserted = 0
         with self._lock:
-            self._conn.executemany(
-                """INSERT OR IGNORE INTO file_checkpoints
-                   (scan_id, file_path, file_size, last_modified, file_hash,
-                    hash_status, group_id, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                rows,
-            )
-            self._conn.execute(
-                "UPDATE scan_manifests SET total_files=?, updated_at=? WHERE scan_id=?",
-                (len(files), time.time(), scan_id),
-            )
+            for off in range(0, len(files), chunk_size):
+                chunk = files[off : off + chunk_size]
+                rows = [
+                    (scan_id, path, size, mtime, None, "pending", None, now)
+                    for path, size, mtime in chunk
+                ]
+                self._conn.executemany(
+                    """INSERT OR IGNORE INTO file_checkpoints
+                       (scan_id, file_path, file_size, last_modified, file_hash,
+                        hash_status, group_id, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+                inserted += len(chunk)
+            if update_total:
+                total_row = self._conn.execute(
+                    "SELECT COUNT(*) FROM file_checkpoints WHERE scan_id=?",
+                    (scan_id,),
+                ).fetchone()
+                total_n = int(total_row[0] or 0) if total_row else inserted
+                self._conn.execute(
+                    "UPDATE scan_manifests SET total_files=?, updated_at=? WHERE scan_id=?",
+                    (total_n, time.time(), scan_id),
+                )
             self._conn.commit()
-        total, pending = self.get_counts(scan_id)
-        _log.info(
-            "[Checkpoint] seed pending: scan_id=%s inserted=%d total=%d pending=%d completed=%d",
-            scan_id,
-            len(files),
-            total,
-            pending,
-            max(0, total - pending),
-        )
+        if update_total:
+            total, pending = self.get_counts(scan_id)
+            _log.info(
+                "[Checkpoint] seed pending: scan_id=%s batch=%d total=%d pending=%d completed=%d",
+                scan_id,
+                len(files),
+                total,
+                pending,
+                max(0, total - pending),
+            )
+        return inserted
+
+    def count_files(self, scan_id: str) -> int:
+        """Total file_checkpoints rows for a scan."""
+        total, _pending = self.get_counts(scan_id)
+        return total
+
+    def iter_files_by_size(
+        self,
+        scan_id: str,
+        *,
+        statuses: Tuple[str, ...] = ("pending",),
+        fetch_size: int = 5000,
+    ) -> Generator[Tuple[str, int, float], None, None]:
+        """Yield (path, size, mtime) sorted by file_size then path (streaming grouping)."""
+        if not statuses:
+            return
+        placeholders = ",".join("?" for _ in statuses)
+        params: List[Any] = [scan_id, *statuses]
+        with self._lock:
+            cur = self._conn.execute(
+                f"""SELECT file_path, file_size, last_modified
+                    FROM file_checkpoints
+                    WHERE scan_id=? AND hash_status IN ({placeholders})
+                    ORDER BY file_size, file_path""",
+                params,
+            )
+            while True:
+                rows = cur.fetchmany(fetch_size)
+                if not rows:
+                    break
+                for r in rows:
+                    yield (str(r[0]), int(r[1]), float(r[2]))
 
     # ------------------------------------------------------------------ #
     # Write-behind: async hash result persistence                          #
