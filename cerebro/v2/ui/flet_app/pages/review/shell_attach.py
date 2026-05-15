@@ -124,6 +124,32 @@ def _attach_group_overview_and_page_controls(page: Any, t: ThemeTokens, bridge: 
         scroll=ft.ScrollMode.AUTO,
         spacing=8,
     )
+
+    page._overview_grid_switch = ft.Switch(
+        value=False,
+        active_color=t.colors.accent,
+        on_change=page._on_overview_grid_switch,
+        tooltip="Switch to thumbnail grid",
+    )
+    page._overview_grid_switch_row = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.icons.Icons.GRID_VIEW_OUTLINED, size=15, color=t.colors.fg_muted),
+                ft.Text(
+                    "Grid view",
+                    size=t.typography.size_sm,
+                    color=t.colors.fg_muted,
+                    weight=ft.FontWeight.W_600,
+                ),
+                page._overview_grid_switch,
+            ],
+            spacing=t.spacing.xs,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
+        ),
+        padding=ft.padding.only(left=16, right=16, top=10, bottom=2),
+    )
+
     page._btn_view_groups = ft.TextButton(
         "Details",
         tooltip="List duplicate sets with sizes (Explorer-style Details).",

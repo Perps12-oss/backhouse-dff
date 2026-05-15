@@ -162,6 +162,12 @@ class ReviewPageModeMixin:
             self._content.controls.append(self._loading_state)
         elif mode == "groups":
             self._refresh_filter_labels()
+            switch = getattr(self, "_overview_grid_switch", None)
+            if switch is not None:
+                switch.value = False
+            switch_row = getattr(self, "_overview_grid_switch_row", None)
+            if switch_row is not None:
+                self._content.controls.append(switch_row)
             self._content.controls.append(
                 ft.Container(content=self._groups_overview, padding=ft.padding.all(16), expand=True)
             )
@@ -305,6 +311,9 @@ class ReviewPageGroupsGridMixin:
             on_complete=after_chunk,
         )
         safe_update(self._content)
+
+    def _on_overview_grid_switch(self, e: ft.ControlEvent) -> None:
+        self._enter_mode("grid" if e.control.value else "groups")
 
     def _on_group_sort_changed(self, e: ft.ControlEvent) -> None:
         self._group_sort_key = str(e.control.value or "files_desc")
