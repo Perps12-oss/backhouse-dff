@@ -12,9 +12,13 @@ from typing import List, Optional, Dict, Any, Set
 
 # --- Constants ---
 DEFAULT_SKIP_DIRS: Set[str] = {
+    # Windows OS directories — useless for duplicate-cleaning and slow to hash
     "$Recycle.Bin", "System Volume Information", "Recovery", "Windows",
+    "System32", "SysWOW64", "WinSxS", "Boot", "SystemApps", "WindowsApps",
+    # Common install directories
     "Program Files", "Program Files (x86)", "ProgramData", "AppData",
-    ".git", ".svn", ".hg", "__pycache__", "node_modules", ".vscode", ".idea"
+    # VCS and tooling
+    ".git", ".svn", ".hg", "__pycache__", "node_modules", ".vscode", ".idea",
 }
 DEFAULT_SKIP_EXTENSIONS: Set[str] = {
     ".tmp", ".temp", ".bak", ".swp", ".log", ".dmp", ".part", ".crdownload"

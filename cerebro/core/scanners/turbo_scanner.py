@@ -46,6 +46,7 @@ from cerebro.services.hash_cache import HashCache, StatSignature
 from cerebro.services.logger import get_logger
 from cerebro.core.root_dedup import dedupe_roots
 from cerebro.core.group_invariants import _assert_no_self_duplicates
+from cerebro.core.utils import DEFAULT_SKIP_DIRS, should_skip_directory
 from cerebro.engines.scan_stage import ScanStage
 
 logger = get_logger(__name__)
@@ -89,6 +90,12 @@ ARCHIVE_EXTENSIONS: frozenset[str] = frozenset({
     ".zst", ".lzma", ".cab", ".iso", ".dmg", ".pkg", ".deb", ".rpm",
     ".jar", ".war", ".ear", ".apk", ".ipa", ".crx",
 })
+
+# Scale targets: switch to checkpoint streaming / DB grouping above this catalogue size.
+STREAMING_THRESHOLD: int = 50_000
+# Pathological same-size buckets (e.g. zero-byte files under Windows) are processed in chunks.
+MAX_BUCKET_FILES: int = 10_000
+_TIER_A_SKIP_CANDIDATE_RATIO: float = 0.02
 
 
 # ============================================================================
@@ -235,10 +242,30 @@ class TurboScanConfig:
     # Durable size/partial phase artifacts for resume (Phase 4).
     enable_resume_artifacts: bool = False
 
+    # Stop after discovery + grouping (checkpoint seeded); hashing on resume only.
+    index_only: bool = False
+
     # Per-phase worker overrides — 0 means fall back to hash_workers (Phase 3).
     tier_a_workers: int = 0
     quick_hash_workers: int = 0
     full_hash_workers: int = 0
+
+
+def effective_exclude_dirs(config: TurboScanConfig) -> Set[str]:
+    """User exclude_dirs union DEFAULT_SKIP_DIRS when skip_system is enabled."""
+    dirs: Set[str] = set(config.exclude_dirs or set())
+    if config.skip_system:
+        dirs |= set(DEFAULT_SKIP_DIRS)
+    return dirs
+
+
+def _process_rss_mb() -> Optional[float]:
+    try:
+        import psutil
+
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    except (OSError, ValueError, RuntimeError, AttributeError, ImportError, TypeError):
+        return None
 
 
 # ============================================================================
@@ -464,6 +491,9 @@ def _phase_artifact_version_hash(cfg: "TurboScanConfig") -> str:
         str(cfg.recursive),
         str(sorted(cfg.exclude_paths or [])),
         str(sorted(cfg.exclude_dirs or [])),
+        str(cfg.skip_system),
+        str(cfg.use_quick_hash),
+        str(cfg.use_full_hash),
     ])
     return _hashlib.sha256(parts.encode()).hexdigest()[:16]
 
@@ -593,11 +623,25 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
 
     Returns list of (path, size, mtime) tuples.
 
-    ``args`` is either a 7-tuple ending with optional ``cancel_event``
-    (:class:`threading.Event`, same process only) or a legacy 6-tuple
-    (process pool workers — no intra-walk cancel).
+    ``args`` ends with optional ``skip_system`` and ``cancel_event`` (threads only).
+    Legacy 8/9-tuples omit ``skip_system`` (treated as False).
     """
-    if len(args) >= 9:
+    skip_system = False
+    cancel_event = None
+    if len(args) >= 10:
+        (
+            directory,
+            skip_hidden,
+            exclude_dirs,
+            exclude_paths,
+            recursive,
+            min_size,
+            max_size,
+            scan_archives,
+            skip_system,
+            cancel_event,
+        ) = args[:10]
+    elif len(args) >= 9:
         (
             directory,
             skip_hidden,
@@ -620,7 +664,6 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
             max_size,
             scan_archives,
         ) = args[:8]
-        cancel_event = None
     results: List[Tuple[Path, int, float]] = []
     listed_since_cancel_check = 0
 
@@ -672,6 +715,12 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
                             if skip_hidden and name.startswith('.'):
                                 continue
                             if name in exclude_dirs:
+                                continue
+                            if skip_system and should_skip_directory(
+                                Path(entry.path),
+                                include_hidden=not skip_hidden,
+                                include_system=False,
+                            ):
                                 continue
                             # Skip descending into dirs whose names look like
                             # archive bundles (mounted/extracted trees) unless
@@ -787,6 +836,7 @@ class TurboScanner:
             "scan_archives": bool(self.config.scan_archives),
             "skip_hidden": bool(self.config.skip_hidden),
             "recursive": bool(self.config.recursive),
+            "skip_system": bool(self.config.skip_system),
         }
 
     # Threshold for adaptive escalation: groups whose total bytes exceed this
@@ -799,6 +849,10 @@ class TurboScanner:
         size_groups: Dict[Any, List[Tuple[Path, float]]],
         algorithm: str,
         cancel_event: Optional[threading.Event],
+        *,
+        discovered_count: int = 0,
+        emit: Optional[Callable[..., None]] = None,
+        scope_total: int = 0,
     ) -> tuple[Dict[Any, List[Tuple[Path, float]]], int, int]:
         """Apply a prefix-hash pre-filter before the quick-hash phase.
 
@@ -825,6 +879,29 @@ class TurboScanner:
         if not size_groups or candidates_in < 2:
             return size_groups, candidates_in, candidates_in
 
+        if not self.config.use_quick_hash:
+            return size_groups, candidates_in, candidates_in
+        if (
+            discovered_count > 0
+            and (candidates_in / float(discovered_count)) < _TIER_A_SKIP_CANDIDATE_RATIO
+        ):
+            logger.info(
+                "[Turbo] Tier-A skipped: candidates=%d discovered=%d (ratio below %.2f)",
+                candidates_in,
+                discovered_count,
+                _TIER_A_SKIP_CANDIDATE_RATIO,
+            )
+            return size_groups, candidates_in, candidates_in
+
+        for sz, paths in size_groups.items():
+            if len(paths) > MAX_BUCKET_FILES:
+                logger.warning(
+                    "[Turbo] Large size bucket: size=%s files=%d (processing in chunks of %d)",
+                    sz,
+                    len(paths),
+                    MAX_BUCKET_FILES,
+                )
+
         # Use the configured hash algorithm for tier-A so the hasher is already warm.
         tier_algo = algorithm if algorithm not in ("auto", "") else "sha256"
         if xxhash is not None:
@@ -843,45 +920,79 @@ class TurboScanner:
         pool = ThreadPoolExecutor(max_workers=effective_workers)
         abrupt_exit = False
 
-        if not self.config.enable_tier_a_adaptive:
-            # ── Legacy flat path (default) ────────────────────────────────────
-            futures_map: Dict = {}
-            try:
-                for size_key, paths in size_groups.items():
-                    for path, mtime in paths:
-                        if cancel_event is not None and cancel_event.is_set():
-                            abrupt_exit = True
-                            return size_groups, candidates_in, candidates_in
-                        fut = pool.submit(compute_tier_a_hash, path, tier_algo)
-                        futures_map[fut] = (size_key, path, mtime)
+        def _tier_a_emit_progress(processed_jobs: int, total_jobs: int, path_hint: str) -> None:
+            if emit is None or total_jobs <= 0:
+                return
+            _now = time.monotonic()
+            if not hasattr(self, "_tier_a_last_emit_ts"):
+                self._tier_a_last_emit_ts = 0.0
+            if (
+                processed_jobs <= 1
+                or processed_jobs % 512 == 0
+                or processed_jobs >= total_jobs
+                or (_now - self._tier_a_last_emit_ts) >= 0.3
+            ):
+                self._tier_a_last_emit_ts = _now
+                try:
+                    emit(
+                        ScanStage.TIER_A_PREFILTER,
+                        processed_jobs,
+                        total_jobs,
+                        path_hint,
+                        metrics={
+                            "total_files_in_scope": scope_total or discovered_count,
+                            "files_processed": processed_jobs,
+                            "candidates_found": candidates_in,
+                        },
+                    )
+                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                    pass
 
-                keyed: Dict[tuple, list] = _dd(list)
-                total_jobs = max(1, len(futures_map))
-                processed_jobs = 0
-                next_pct_log = 10
-                for fut in as_completed(list(futures_map.keys())):
-                    size_key, path, mtime = futures_map[fut]
+        if not self.config.enable_tier_a_adaptive:
+            # Chunked flat path — bounded queue depth at scale (1M+ candidates).
+            all_jobs: List[Tuple[Any, Path, float]] = []
+            for size_key, paths in size_groups.items():
+                for path, mtime in paths:
+                    all_jobs.append((size_key, path, mtime))
+            keyed: Dict[tuple, list] = _dd(list)
+            total_jobs = max(1, len(all_jobs))
+            processed_jobs = 0
+            next_pct_log = 10
+            _submit_chunk = 4096
+            try:
+                for chunk_off in range(0, len(all_jobs), _submit_chunk):
                     if cancel_event is not None and cancel_event.is_set():
                         abrupt_exit = True
                         return size_groups, candidates_in, candidates_in
-                    try:
-                        ta_hash = fut.result()
-                    except Exception:
-                        ta_hash = None
-                    if ta_hash is None:
-                        keyed[(size_key, "__error__")].append((path, mtime))
-                    else:
-                        keyed[(size_key, ta_hash)].append((path, mtime))
-                    processed_jobs += 1
-                    pct = int((processed_jobs / total_jobs) * 100)
-                    if pct >= next_pct_log:
-                        logger.info(
-                            "[Turbo] Tier-A progress: %d%% (%d/%d)",
-                            pct,
-                            processed_jobs,
-                            total_jobs,
-                        )
-                        next_pct_log += 10
+                    chunk = all_jobs[chunk_off : chunk_off + _submit_chunk]
+                    futures_map: Dict = {}
+                    for size_key, path, mtime in chunk:
+                        fut = pool.submit(compute_tier_a_hash, path, tier_algo)
+                        futures_map[fut] = (size_key, path, mtime)
+                    for fut in as_completed(list(futures_map.keys())):
+                        size_key, path, mtime = futures_map[fut]
+                        if cancel_event is not None and cancel_event.is_set():
+                            abrupt_exit = True
+                            return size_groups, candidates_in, candidates_in
+                        try:
+                            ta_hash = fut.result()
+                        except Exception:
+                            ta_hash = None
+                        if ta_hash is None:
+                            keyed[(size_key, "__error__")].append((path, mtime))
+                        else:
+                            keyed[(size_key, ta_hash)].append((path, mtime))
+                        processed_jobs += 1
+                        pct = int((processed_jobs / total_jobs) * 100)
+                        if pct >= next_pct_log:
+                            logger.info(
+                                "[Turbo] Tier-A progress: %d%% (%d/%d)",
+                                pct,
+                                processed_jobs,
+                                total_jobs,
+                            )
+                            next_pct_log += 10
+                        _tier_a_emit_progress(processed_jobs, total_jobs, str(path))
 
                 survivors: Dict[Any, List[Tuple[Path, float]]] = {}
                 for (size_key, _), grp_paths in keyed.items():
@@ -1103,6 +1214,7 @@ class TurboScanner:
         else:
             logger.debug("[ROOT_DEDUP] user_roots=%d deduped_roots=%d (no overlap)", len(user_roots), len(scan_roots))
 
+        _stream_discovery_flag = False
         if resume_mode:
             # Load pending files first, then also load completed files from checkpoint
             # so size-grouping can detect cross-pairs across both sets.
@@ -1222,6 +1334,7 @@ class TurboScanner:
             logger.info("[Turbo] Resume: %d pending + %d completed = %d total files",
                         _pending_count, len(discovered_files) - _pending_count, len(discovered_files))
         else:
+            _stream_discovery_flag = False
             logger.info("[Turbo] Phase 1: Discovering files...")
             _emit(
                 ScanStage.DISCOVERING,
@@ -1229,36 +1342,54 @@ class TurboScanner:
                 0,
                 metrics={"total_files_in_scope": 0, "files_processed": 0, "candidates_found": 0},
             )
-            discovered_files = self._discover_files_parallel(scan_roots, emit=_emit)
+            _stream_discovery = bool(ckpt and scan_id and not resume_mode)
+            _stream_discovery_flag = _stream_discovery
+            discovered_files = self._discover_files_parallel(
+                scan_roots,
+                emit=_emit,
+                stream_to_checkpoint=_stream_discovery,
+                scan_id=scan_id if _stream_discovery else None,
+                checkpoint_db=ckpt if _stream_discovery else None,
+            )
+            if _stream_discovery and ckpt and scan_id:
+                _ckpt_total = ckpt.count_files(scan_id)
+                try:
+                    if hasattr(ckpt, "verify_consistency"):
+                        ckpt.verify_consistency(scan_id)
+                except Exception:
+                    logger.debug("[Turbo] checkpoint verify after stream failed", exc_info=True)
+            else:
+                _ckpt_total = len(discovered_files)
+                if ckpt and scan_id and discovered_files:
+                    try:
+                        ckpt.insert_pending_files(
+                            scan_id,
+                            [(str(p), sz, mt) for p, sz, mt in discovered_files],
+                        )
+                        if hasattr(ckpt, "verify_consistency"):
+                            ckpt.verify_consistency(scan_id)
+                    except Exception:
+                        logger.debug(
+                            "[Turbo] checkpoint insert_pending_files failed (non-fatal)",
+                            exc_info=True,
+                        )
             _emit(
                 ScanStage.DISCOVERING,
-                len(discovered_files),
-                len(discovered_files),
+                _ckpt_total,
+                _ckpt_total,
                 str(discovered_files[-1][0]) if discovered_files else "",
                 metrics={
-                    "total_files_in_scope": len(discovered_files),
-                    "files_processed": len(discovered_files),
+                    "total_files_in_scope": _ckpt_total,
+                    "files_processed": _ckpt_total,
                     "candidates_found": 0,
                 },
             )
             logger.info(
-                "[Turbo] Discovered %d files in %.2fs",
-                len(discovered_files),
+                "[Turbo] Discovered %d files in %.2fs (streamed=%s)",
+                _ckpt_total,
                 time.time() - start_time,
+                _stream_discovery,
             )
-            # Bulk-insert all discovered files as 'pending' so a mid-scan crash
-            # can be resumed without re-walking the filesystem.
-            if ckpt and scan_id and discovered_files:
-                try:
-                    ckpt.insert_pending_files(
-                        scan_id,
-                        [(str(p), sz, mt) for p, sz, mt in discovered_files],
-                    )
-                    if hasattr(ckpt, "verify_consistency"):
-                        ckpt.verify_consistency(scan_id)
-                except Exception:
-                    logger.debug("[Turbo] checkpoint insert_pending_files failed (non-fatal)", exc_info=True)
-            _ckpt_total = len(discovered_files)
         # True scope for UI metrics: full checkpoint total on resume, discovered count on new scan.
         _scope_total = _ckpt_total if (_ckpt_total > 0) else len(discovered_files)
         _t_discovery_end = time.perf_counter()
@@ -1275,52 +1406,30 @@ class TurboScanner:
                 "candidates_found": 0,
             },
         )
-        size_groups = defaultdict(list)
-        _ce = self.config.cancel_event
-        _group_total = max(1, len(discovered_files))
-        _next_group_pct_log = 10
-        _last_group_emit = 0
-        _cancel_log_grouping_emitted = False
-        for gi, (path, size, mtime) in enumerate(discovered_files):
-            if gi % 128 == 0 and _ce is not None and _ce.is_set():
-                if not _cancel_log_grouping_emitted:
-                    logger.info(
-                        "[Turbo] Cancel observed during grouping_by_size: processed=%d/%d groups_seen=%d",
-                        gi,
-                        _group_total,
-                        len(size_groups),
-                    )
-                    _cancel_log_grouping_emitted = True
-                return
-            size_groups[size].append((path, mtime))
-            processed = gi + 1
-            pct = int((processed / _group_total) * 100)
-            if pct >= _next_group_pct_log:
-                logger.info(
-                    "[Turbo] Grouping progress: %d%% (%d/%d)",
-                    pct,
-                    processed,
-                    _group_total,
-                )
-                _next_group_pct_log += 10
-            # Emit often enough that the UI path strip stays alive (was 5000 only).
-            if processed - _last_group_emit >= 512 or processed == _group_total:
-                _last_group_emit = processed
-                _emit(
-                    ScanStage.GROUPING_BY_SIZE,
-                    processed,
-                    _scope_total,
-                    str(path),
-                    metrics={
-                        "total_files_in_scope": _scope_total,
-                        "files_processed": processed,
-                        "candidates_found": 0,
-                    },
-                )
-        
-        # Filter out unique sizes
-        size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
-        logger.info("[Turbo] Found %d size groups with potential duplicates", len(size_groups))
+        _use_db_grouping = bool(ckpt and scan_id) and (
+            _stream_discovery_flag or (_scope_total >= STREAMING_THRESHOLD and not resume_mode)
+        )
+        size_groups = self._group_files_by_size(
+            discovered_files=discovered_files,
+            ckpt=ckpt,
+            scan_id=scan_id,
+            use_db_grouping=_use_db_grouping,
+            scope_total=_scope_total,
+            emit=_emit,
+            cancel_event=self.config.cancel_event,
+        )
+        if not size_groups and self.config.cancel_event is not None and self.config.cancel_event.is_set():
+            return
+        if not _use_db_grouping:
+            logger.info("[Turbo] Found %d size groups with potential duplicates", len(size_groups))
+        _rss = _process_rss_mb()
+        if _rss is not None:
+            logger.info(
+                "[Turbo] Post-grouping: scope=%d size_groups=%d rss_mb=%.1f",
+                _scope_total,
+                len(size_groups),
+                _rss,
+            )
 
         # Canonical-path dedup guard: suppress alias/symlink/hardlink/case variants
         # before any hash I/O.  Only activated when enable_prehash_canonical_dedup=True
@@ -1357,6 +1466,35 @@ class TurboScanner:
         _diag_size_candidates = sum(len(v) for v in size_groups.values())
         _t_grouping_end = time.perf_counter()
 
+        if self.config.index_only:
+            logger.info(
+                "[Turbo] index_only: catalogue complete (%d files, %d size groups) — skipping hash phases",
+                _scope_total,
+                len(size_groups),
+            )
+            _emit(
+                ScanStage.COMPLETE,
+                _scope_total,
+                _scope_total,
+                "",
+                metrics={
+                    "total_files_in_scope": _scope_total,
+                    "files_processed": _scope_total,
+                    "candidates_found": _diag_size_candidates,
+                    "index_only": True,
+                },
+            )
+            self._turbo_completed_normally = True
+            if _hb_thread is not None:
+                _hb_stop.set()
+            if ckpt and scan_id:
+                try:
+                    ckpt.flush_sync()
+                    ckpt.update_manifest_status(scan_id, "indexed")
+                except Exception:
+                    pass
+            return
+
         # Persist size-group artifact for resume (Phase 4).
         if self.config.enable_resume_artifacts and ckpt and scan_id and size_groups:
             try:
@@ -1389,7 +1527,12 @@ class TurboScanner:
             if _effective_algo_for_tier_a == "auto":
                 _effective_algo_for_tier_a = "xxhash" if xxhash is not None else "sha256"
             size_groups, _tier_a_in, _tier_a_out = self._apply_tier_a_filter(
-                size_groups, _effective_algo_for_tier_a, self.config.cancel_event
+                size_groups,
+                _effective_algo_for_tier_a,
+                self.config.cancel_event,
+                discovered_count=_scope_total,
+                emit=_emit,
+                scope_total=_scope_total,
             )
             _tier_a_rejected = max(0, _tier_a_in - _tier_a_out)
             logger.info(
@@ -1484,6 +1627,7 @@ class TurboScanner:
         ]
 
         # Phase 5: Yield results
+        _ce = self.config.cancel_event
         discovered_count = _scope_total
         candidate_count = sum(len(v) for v in final_groups.values()) if final_groups else 0
         emitted_count = 0
@@ -1658,10 +1802,115 @@ class TurboScanner:
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             pass
 
+    def _group_files_by_size(
+        self,
+        *,
+        discovered_files: List[Tuple[Path, int, float]],
+        ckpt: Optional[object],
+        scan_id: Optional[str],
+        use_db_grouping: bool,
+        scope_total: int,
+        emit: Callable[..., None],
+        cancel_event: Optional[threading.Event],
+    ) -> Dict[Any, List[Tuple[Path, float]]]:
+        """Build size_groups with len>=2. DB path uses O(bucket) memory."""
+        size_groups: Dict[Any, List[Tuple[Path, float]]] = {}
+        _ce = cancel_event
+        _group_total = max(1, scope_total)
+        _next_group_pct_log = 10
+        _last_group_emit = 0
+        _cancel_log_grouping_emitted = False
+        processed = 0
+
+        def _flush_bucket(size_key: int, bucket: List[Tuple[Path, float]]) -> None:
+            if len(bucket) >= 2:
+                size_groups[size_key] = bucket
+
+        if use_db_grouping and ckpt is not None and scan_id:
+            current_size: Optional[int] = None
+            bucket: List[Tuple[Path, float]] = []
+            for path_str, size, mtime in ckpt.iter_files_by_size(scan_id, statuses=("pending",)):
+                if processed % 128 == 0 and _ce is not None and _ce.is_set():
+                    if not _cancel_log_grouping_emitted:
+                        logger.info(
+                            "[Turbo] Cancel during DB grouping at %d/%d",
+                            processed,
+                            _group_total,
+                        )
+                        _cancel_log_grouping_emitted = True
+                    return {}
+                if current_size is not None and size != current_size:
+                    _flush_bucket(current_size, bucket)
+                    bucket = []
+                current_size = size
+                bucket.append((Path(path_str), mtime))
+                processed += 1
+                if processed - _last_group_emit >= 512 or processed == _group_total:
+                    _last_group_emit = processed
+                    emit(
+                        ScanStage.GROUPING_BY_SIZE,
+                        processed,
+                        _group_total,
+                        path_str,
+                        metrics={
+                            "total_files_in_scope": _group_total,
+                            "files_processed": processed,
+                            "candidates_found": 0,
+                        },
+                    )
+            if current_size is not None:
+                _flush_bucket(current_size, bucket)
+        else:
+            for gi, (path, size, mtime) in enumerate(discovered_files):
+                if gi % 128 == 0 and _ce is not None and _ce.is_set():
+                    if not _cancel_log_grouping_emitted:
+                        logger.info(
+                            "[Turbo] Cancel observed during grouping_by_size: processed=%d/%d",
+                            gi,
+                            _group_total,
+                        )
+                        _cancel_log_grouping_emitted = True
+                    return {}
+                if size not in size_groups:
+                    size_groups[size] = []
+                size_groups[size].append((path, mtime))
+                processed = gi + 1
+                pct = int((processed / _group_total) * 100)
+                if pct >= _next_group_pct_log:
+                    logger.info(
+                        "[Turbo] Grouping progress: %d%% (%d/%d)",
+                        pct,
+                        processed,
+                        _group_total,
+                    )
+                    _next_group_pct_log += 10
+                if processed - _last_group_emit >= 512 or processed == _group_total:
+                    _last_group_emit = processed
+                    emit(
+                        ScanStage.GROUPING_BY_SIZE,
+                        processed,
+                        _group_total,
+                        str(path),
+                        metrics={
+                            "total_files_in_scope": _group_total,
+                            "files_processed": processed,
+                            "candidates_found": 0,
+                        },
+                    )
+            size_groups = {k: v for k, v in size_groups.items() if len(v) >= 2}
+            return size_groups
+
+        logger.info("[Turbo] Found %d size groups with potential duplicates (DB path)", len(size_groups))
+        return size_groups
+
     def _discover_files_parallel(
         self,
         roots: List[Path],
         emit: Optional[Callable[..., None]] = None,
+        *,
+        stream_to_checkpoint: bool = False,
+        scan_id: Optional[str] = None,
+        checkpoint_db: Optional[object] = None,
     ) -> List[Tuple[Path, int, float]]:
         """
         Discover all files using parallel directory traversal.
@@ -1679,7 +1928,16 @@ class TurboScanner:
             if root.is_file():
                 try:
                     stat = root.stat()
-                    all_files.append((root, stat.st_size, stat.st_mtime))
+                    row = (root, stat.st_size, stat.st_mtime)
+                    if stream_to_checkpoint and checkpoint_db is not None and scan_id:
+                        checkpoint_db.insert_pending_files_batch(
+                            scan_id,
+                            [(str(root), stat.st_size, stat.st_mtime)],
+                            update_total=True,
+                        )
+                        discovered_so_far += 1
+                    else:
+                        all_files.append(row)
                 except OSError:
                     pass
                 continue
@@ -1689,23 +1947,33 @@ class TurboScanner:
                     cached_files = self.dir_cache.get_files(root)
                     if cached_files is not None:
                         self.stats['directories_skipped'] += 1
-                        all_files.extend(cached_files)
+                        if stream_to_checkpoint and checkpoint_db is not None and scan_id:
+                            checkpoint_db.insert_pending_files_batch(
+                                scan_id,
+                                [(str(p), sz, mt) for p, sz, mt in cached_files],
+                                update_total=True,
+                            )
+                            discovered_so_far += len(cached_files)
+                        else:
+                            all_files.extend(cached_files)
                         continue
                     # Signature unchanged but no file cache yet — fall through to scan.
 
             dirs_to_scan.append(root)
 
-        if not dirs_to_scan:
+        if not dirs_to_scan and not stream_to_checkpoint:
             return all_files
 
+        ex_dirs = effective_exclude_dirs(self.config)
         worker_tpl = (
             self.config.skip_hidden,
-            self.config.exclude_dirs,
+            ex_dirs,
             self.config.exclude_paths,
             self.config.recursive,
             self.config.min_size,
             self.config.max_size,
             self.config.scan_archives,
+            self.config.skip_system,
         )
         use_mp = bool(self.config.use_multiprocessing and len(dirs_to_scan) > 1)
         worker_args = []
@@ -1714,6 +1982,26 @@ class TurboScanner:
             if not use_mp:
                 tup = tup + (self.config.cancel_event,)
             worker_args.append(tup)
+
+        def _ingest_worker_results(results: List[Tuple[Path, int, float]], root_dir: Path) -> None:
+            nonlocal discovered_so_far
+            if stream_to_checkpoint and checkpoint_db is not None and scan_id:
+                rows = [(str(p), int(sz), float(mt)) for p, sz, mt in results]
+                if rows:
+                    checkpoint_db.insert_pending_files_batch(
+                        scan_id, rows, update_total=True
+                    )
+                discovered_so_far += len(results)
+            else:
+                all_files.extend(results)
+                discovered_so_far += len(results)
+            if emit and discovered_so_far % 100 <= max(1, len(results)):
+                emit(ScanStage.DISCOVERING, discovered_so_far, 0, str(root_dir))
+            if self.dir_cache and results and not stream_to_checkpoint:
+                sig = DirectorySignature.from_directory(root_dir)
+                if sig:
+                    self.dir_cache.put(sig)
+                    self.dir_cache.set_files(root_dir, results)
 
         def _shutdown_exec(ex: Optional[Any]) -> None:
             if ex is None:
@@ -1759,15 +2047,7 @@ class TurboScanner:
                 root_dir = future_to_root[future]
                 try:
                     results = future.result()
-                    all_files.extend(results)
-                    discovered_so_far += len(results)
-                    if emit and discovered_so_far % 100 <= len(results):
-                        emit(ScanStage.DISCOVERING, discovered_so_far, 0, str(root_dir))
-                    if self.dir_cache and results:
-                        sig = DirectorySignature.from_directory(root_dir)
-                        if sig:
-                            self.dir_cache.put(sig)
-                            self.dir_cache.set_files(root_dir, results)
+                    _ingest_worker_results(results, root_dir)
                 except OSError as e:
                     logger.warning("%s: %s", warn_prefix, e)
                     if emit:

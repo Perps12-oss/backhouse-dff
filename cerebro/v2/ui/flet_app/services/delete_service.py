@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import shutil
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from cerebro.core.deletion import DeletionEngine, DeletionPolicy, DeletionRequest
 from cerebro.engines.base_engine import DuplicateGroup
@@ -32,6 +32,17 @@ _TRASH_HISTORY: list[TrashUndoTransaction] = []
 _MAX_TRASH_HISTORY = 5
 
 
+@dataclass
+class DeleteFilesResult:
+    """Outcome of a delete batch (managed trash or engine policy)."""
+
+    deleted_count: int
+    failed_count: int
+    bytes_reclaimed: int
+    deleted_paths: List[str]
+    failures: List[Tuple[str, str]]
+
+
 class DeleteService:
     """High-level delete orchestration for the UI layer."""
 
@@ -43,36 +54,40 @@ class DeleteService:
         paths: List[str],
         policy: DeletionPolicy = DeletionPolicy.TRASH,
         progress_cb: Optional[Callable[[int, int, str], None]] = None,
-    ) -> tuple[int, int, int, list[str]]:
-        """Delete files and return (deleted_count, failed_count, bytes_reclaimed, deleted_paths)."""
+    ) -> DeleteFilesResult:
+        """Delete files and return structured counts, paths, and per-path failure reasons."""
         if not paths:
-            return 0, 0, 0, []
+            return DeleteFilesResult(0, 0, 0, [], [])
 
         existing_paths: list[str] = []
         missing_paths: list[str] = []
         sizes_by_path: dict[str, int] = {}
+        failures: list[tuple[str, str]] = []
         for p in paths:
             try:
                 pp = Path(p)
                 if not pp.exists():
                     missing_paths.append(str(p))
                     sizes_by_path[str(p)] = 0
+                    failures.append((str(p), "File not found"))
                     continue
                 sizes_by_path[str(p)] = pp.stat().st_size
                 existing_paths.append(str(p))
-            except OSError:
+            except OSError as exc:
                 sizes_by_path[str(p)] = 0
                 missing_paths.append(str(p))
+                failures.append((str(p), str(exc) or "Path not accessible"))
 
         if not existing_paths:
-            return 0, len(paths), 0, []
+            return DeleteFilesResult(0, len(paths), 0, [], failures)
 
         if policy == DeletionPolicy.TRASH:
-            deleted_paths = self._delete_to_managed_trash(existing_paths, sizes_by_path, progress_cb)
+            deleted_paths, move_failures = self._delete_to_managed_trash(existing_paths, sizes_by_path, progress_cb)
+            failures.extend(move_failures)
             deleted_n = len(deleted_paths)
             failed_n = max(0, len(existing_paths) - deleted_n) + len(missing_paths)
             reclaimed = int(sum(sizes_by_path.get(p, 0) for p in deleted_paths))
-            return deleted_n, failed_n, reclaimed, deleted_paths
+            return DeleteFilesResult(deleted_n, failed_n, reclaimed, deleted_paths, failures)
 
         operations = [SimpleNamespace(path=Path(p)) for p in existing_paths]
         plan = SimpleNamespace(
@@ -94,19 +109,22 @@ class DeleteService:
         for p in result.deleted:
             log_deletion_event(str(p), sizes_by_path.get(str(p), 0), mode_tag)
         deleted_paths = [str(p) for p in result.deleted]
+        for fp, msg in result.failed:
+            failures.append((str(fp), msg or "Deletion failed"))
         failed_n += len(missing_paths)
-        return deleted_n, failed_n, int(result.bytes_reclaimed or 0), deleted_paths
+        return DeleteFilesResult(deleted_n, failed_n, int(result.bytes_reclaimed or 0), deleted_paths, failures)
 
     def delete_and_prune(
         self,
         paths: List[str],
         groups: List[DuplicateGroup],
         policy: DeletionPolicy = DeletionPolicy.TRASH,
-    ) -> tuple[List[DuplicateGroup], int, int, int]:
-        """Delete files, prune groups, return (new_groups, deleted, failed, bytes)."""
-        deleted_n, failed_n, bytes_reclaimed, deleted_paths = self.delete_files(paths, policy)
-        new_groups = prune_paths_from_groups(groups, deleted_paths)
-        return new_groups, deleted_n, failed_n, bytes_reclaimed
+        progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    ) -> tuple[List[DuplicateGroup], DeleteFilesResult]:
+        """Delete files, prune groups, return (new_groups, delete result)."""
+        dfr = self.delete_files(paths, policy, progress_cb)
+        new_groups = prune_paths_from_groups(groups, dfr.deleted_paths)
+        return new_groups, dfr
 
     def delete_and_prune_async(
         self,
@@ -132,14 +150,14 @@ class DeleteService:
                         last_reported = i
                         progress_callback(i, t, name)
 
-                deleted_n, failed_n, bytes_reclaimed, deleted_paths = self.delete_files(
+                dfr = self.delete_files(
                     paths,
                     policy,
                     progress_cb=_progress,
                 )
-                new_groups = prune_paths_from_groups(groups, deleted_paths)
+                new_groups = prune_paths_from_groups(groups, dfr.deleted_paths)
                 if done_callback:
-                    done_callback(new_groups, deleted_n, failed_n, bytes_reclaimed, None)
+                    done_callback(new_groups, dfr.deleted_count, dfr.failed_count, dfr.bytes_reclaimed, None)
             except Exception as exc:  # pragma: no cover - defensive
                 _log.exception("delete_and_prune_async failed")
                 if done_callback:
@@ -179,7 +197,7 @@ class DeleteService:
         paths: list[str],
         sizes_by_path: dict[str, int],
         progress_cb: Optional[Callable[[int, int, str], None]],
-    ) -> list[str]:
+    ) -> tuple[list[str], list[tuple[str, str]]]:
         trash_root = Path.home() / ".cerebro" / "trash" / "managed"
         trash_root.mkdir(parents=True, exist_ok=True)
         tx_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -188,6 +206,7 @@ class DeleteService:
 
         moved: list[tuple[str, str]] = []
         deleted_paths: list[str] = []
+        failures: list[tuple[str, str]] = []
         events_to_log: list[tuple[str, int, str]] = []
         total = len(paths)
         for i, raw in enumerate(paths):
@@ -198,6 +217,7 @@ class DeleteService:
                 except Exception:
                     pass
             if not src.exists():
+                failures.append((str(src), "File disappeared before move"))
                 continue
             try:
                 rel = src.drive.replace(":", "") + src.as_posix().replace(":", "")
@@ -210,8 +230,9 @@ class DeleteService:
                 moved.append((str(src), str(dst)))
                 deleted_paths.append(str(src))
                 events_to_log.append((str(src), sizes_by_path.get(str(src), 0), DeletionPolicy.TRASH.value))
-            except (OSError, shutil.Error):
+            except (OSError, shutil.Error) as exc:
                 _log.exception("Managed trash move failed for %s", src)
+                failures.append((str(src), str(exc) or "Move to managed storage failed"))
 
         if moved:
             _TRASH_HISTORY.append(TrashUndoTransaction(
@@ -226,4 +247,4 @@ class DeleteService:
                 log_deletion_event(path, size, mode_tag)
             except Exception:
                 _log.debug("Failed to log deletion event for %s", path, exc_info=True)
-        return deleted_paths
+        return deleted_paths, failures

@@ -11,6 +11,7 @@ import flet as ft
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
@@ -46,11 +47,12 @@ class SettingsPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._settings: Dict[str, Any] = {}  # loaded from bridge
         
         # UI References
         self._header: ft.Container
+        self._page_header: PageHeaderBlock
         self._tabs: ft.SegmentedButton
         self._tab_keys: tuple[str, ...]
         self._tab_contents: Dict[str, ft.Container]
@@ -111,11 +113,13 @@ class SettingsPage(ft.Column):
         t = self._t
         self._load_settings()
 
-        # Header
-        self._header = ft.Container(
-            content=ft.Text("Settings", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
-            padding=ft.padding.only(left=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
+        self._page_header = build_page_header(
+            t,
+            "Settings",
+            subtitle="Preferences, appearance, and safety",
+            padding=ft.padding.only(left=t.spacing.xl, right=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
         )
+        self._header = self._page_header.root
 
         # Section switcher (replaces legacy Tabs(tabs=...) — Flet 0.25+ Tabs use content+length+TabBar/TabBarView)
         self._tab_keys = ("general", "appearance", "performance", "deletion", "about")
@@ -224,6 +228,7 @@ class SettingsPage(ft.Column):
         self._general_reduce_motion.value = self._settings["accessibility"].get("reduce_motion", False)
         self._general_sound.value = self._settings["notifications"].get("sound_enabled", False)
         self._general_skip_results.value = bool(self._settings["general"].get("skip_results_after_scan", False))
+        self._general_skip_system.value = bool(self._settings["general"].get("skip_system_folders", True))
         self._general_partial_banner_autohide.value = bool(
             self._settings["general"].get("partial_results_banner_auto_hide", True)
         )
@@ -306,6 +311,10 @@ class SettingsPage(ft.Column):
             label="Skip Results page after scan (open Review directly)",
             value=bool(self._settings["general"].get("skip_results_after_scan", False)),
         )
+        self._general_skip_system = ft.Checkbox(
+            label="Skip system folders during file scans (Windows, Program Files, etc.)",
+            value=bool(self._settings["general"].get("skip_system_folders", True)),
+        )
         self._general_partial_banner_autohide = ft.Checkbox(
             label="Auto-hide partial-results banner on Home",
             value=bool(self._settings["general"].get("partial_results_banner_auto_hide", True)),
@@ -333,6 +342,7 @@ class SettingsPage(ft.Column):
             self._general_reduce_motion,
             self._general_sound,
             self._general_skip_results,
+            self._general_skip_system,
             self._general_partial_banner_autohide,
         ]:
             content.controls.append(cb)
@@ -519,7 +529,7 @@ class SettingsPage(ft.Column):
             value=default_criteria,
         )
         content.controls.append(self._criteria_radio)
-        content.controls.append(ft.Divider(height=1, color=ft.Colors.with_opacity(0.10, ft.Colors.WHITE)))
+        content.controls.append(ft.Divider(height=1, color=t.colors.border3))
 
         # Deletion method
         content.controls.append(ft.Text("Deletion Method", weight=ft.FontWeight.W_600, color=t.colors.fg))
@@ -633,7 +643,7 @@ class SettingsPage(ft.Column):
                     text_align=ft.TextAlign.CENTER,
                     size=t.typography.size_base,
                 ),
-                ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
+                ft.Divider(color=t.colors.border3, height=1),
                 ft.Text("Thanks for using Cerebro. ✨", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
             ],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -722,6 +732,7 @@ class SettingsPage(ft.Column):
         self._settings["accessibility"]["reduce_motion"] = bool(self._general_reduce_motion.value)
         self._settings["notifications"]["sound_enabled"] = bool(self._general_sound.value)
         self._settings["general"]["skip_results_after_scan"] = bool(self._general_skip_results.value)
+        self._settings["general"]["skip_system_folders"] = bool(self._general_skip_system.value)
         self._settings["general"]["partial_results_banner_auto_hide"] = bool(
             self._general_partial_banner_autohide.value
         )
@@ -750,6 +761,14 @@ class SettingsPage(ft.Column):
             # Show error feedback
             self._bridge.show_snackbar(f"Save failed: {exc}", error=True)
             return
+        try:
+            from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
+
+            page = getattr(self._bridge, "flet_page", None)
+            if page is not None:
+                sync_reduce_motion_storage(page, self._bridge)
+        except Exception:
+            _log.debug("sync_reduce_motion_storage after settings save failed", exc_info=True)
         self._apply_font_size_to_page(self._settings["appearance"]["font_size"])
         # Close any modal overlay first (e.g. theme chooser opened as a dialog).
         try:
@@ -828,8 +847,10 @@ class SettingsPage(ft.Column):
         self._t = theme_for_mode(mode)
         
         # Update Header
-        self._header.content.color = self._t.colors.fg
-        
+        self._page_header.title.color = self._t.colors.fg
+        if self._page_header.subtitle is not None:
+            self._page_header.subtitle.color = self._t.colors.fg_muted
+
         # Update all Tab Containers (Glass styles)
         for container in self._tab_contents.values():
             container.bgcolor = self._t.colors.glass_bg

@@ -48,17 +48,30 @@ def pill_text_button_style(
     elif variant == "primary":
         fg = c.fg
         icon_c = c.accent
+    elif variant == "danger":
+        fg = c.danger
+        icon_c = c.danger
     else:
         fg = c.fg2
         icon_c = c.fg_muted
+    overlay = (
+        ft.Colors.with_opacity(0.12, c.danger)
+        if variant == "danger"
+        else ft.Colors.with_opacity(0.08, c.accent)
+    )
+    side = (
+        ft.BorderSide(1, ft.Colors.with_opacity(0.28, c.danger))
+        if variant == "danger"
+        else ft.BorderSide(1, ft.Colors.with_opacity(0.20, c.border))
+    )
     return ft.ButtonStyle(
         color=fg,
         icon_color=icon_c,
         bgcolor=ft.Colors.TRANSPARENT,
-        overlay_color=ft.Colors.with_opacity(0.08, c.accent),
+        overlay_color=overlay,
         padding=_PILL_PAD,
         shape=_PILL_SHAPE,
-        side=ft.BorderSide(1, ft.Colors.with_opacity(0.20, c.border)),
+        side=side,
         text_style=ft.TextStyle(size=11, weight=ft.FontWeight.W_600),
     )
 

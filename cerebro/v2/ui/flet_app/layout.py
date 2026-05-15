@@ -6,6 +6,7 @@ are swapped into. All pages receive the same consistent chrome.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Callable
 
@@ -13,11 +14,17 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.utils.motion import should_animate
+from cerebro.v2.ui.flet_app.utils.shortcuts import format_nav_shortcut_label
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 
 _log = logging.getLogger(__name__)
+
+_GRID_LINE_SPACING_PX = 40
+_GRID_LINE_COUNT = 36
+_GRID_DRIFT_MS = 3000
 
 
 def _control_on_page(ctrl: ft.Control | None) -> bool:
@@ -28,6 +35,20 @@ def _control_on_page(ctrl: ft.Control | None) -> bool:
         return ctrl.page is not None
     except RuntimeError:
         return False
+
+
+def _build_home_grid_column(line_color: str, *, count: int = _GRID_LINE_COUNT) -> ft.Column:
+    """Horizontal rules every 40px at ~4% opacity (Home background only)."""
+    rows: list[ft.Control] = []
+    for _ in range(count):
+        rows.append(
+            ft.Container(
+                height=_GRID_LINE_SPACING_PX,
+                alignment=ft.Alignment(0, 1),
+                content=ft.Divider(height=1, color=line_color),
+            )
+        )
+    return ft.Column(rows, spacing=0, expand=True)
 
 
 class AppLayout(ft.Column):
@@ -51,7 +72,12 @@ class AppLayout(ft.Column):
         # Plain container (not AnimatedSwitcher): with singleton tab pages, the
         # switcher often failed to replace visible content while the rail updated.
         # Clip so wide / overflowing results subtree cannot sit on top of the rail in hit-testing.
-        self._content_host = ft.Container(expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
+        self._content_host = ft.Container(
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            padding=ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0),
+            bgcolor=ft.Colors.TRANSPARENT,
+        )
         self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
         # Keep power-user pages routable but remove low-frequency pages from top-level navbar.
@@ -71,15 +97,20 @@ class AppLayout(ft.Column):
         self._nav_labels: dict[str, ft.Text] = {}
         self._nav_icons: dict[str, ft.Icon] = {}
         self._nav_hover_key: str | None = None
+        self._nav_pill_stride = 106
+        self._grid_drift_generation = 0
         nav_button_row = ft.Row(spacing=6, tight=True)
-        for route in self._nav_routes:
+        for idx, route in enumerate(self._nav_routes):
             icon = ft.Icon(route.icon, size=16)
             label = ft.Text(route.label, size=11, weight=ft.FontWeight.W_600)
+            shortcut = format_nav_shortcut_label(page, idx + 1)
             pill = ft.Container(
-                border_radius=999,
+                border_radius=16,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=7),
                 ink=True,
+                bgcolor=ft.Colors.TRANSPARENT,
                 animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+                tooltip=f"{route.label} ({shortcut})",
                 content=ft.Row(
                     [icon, label],
                     spacing=6,
@@ -94,6 +125,32 @@ class AppLayout(ft.Column):
             self._nav_icons[route.key] = icon
             nav_button_row.controls.append(pill)
 
+        self._nav_indicator = ft.Container(
+            height=34,
+            width=self._nav_pill_stride,
+            border_radius=16,
+            left=0,
+            animate_position=ft.Animation(300, ft.AnimationCurve.EASE_OUT_CUBIC),
+        )
+        nav_track = ft.Container(
+            border_radius=24,
+            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+            content=ft.Stack([self._nav_indicator, nav_button_row]),
+        )
+
+        self._grid_bg = ft.Container(
+            expand=True,
+            visible=False,
+            clip_behavior=ft.ClipBehavior.NONE,
+            content=_build_home_grid_column(
+                ft.Colors.with_opacity(0.04, self._t.colors.fg_muted),
+            ),
+        )
+        self._content_stack = ft.Stack(
+            [self._grid_bg, self._content_host],
+            expand=True,
+        )
+
         self._top_nav = ft.Container(
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
@@ -101,7 +158,7 @@ class AppLayout(ft.Column):
                 [
                     self._brand_block,
                     ft.Container(width=12),
-                    nav_button_row,
+                    nav_track,
                     ft.Container(expand=True),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -110,13 +167,13 @@ class AppLayout(ft.Column):
 
         self.controls = [
             self._top_nav,
-            self._content_host,
+            self._content_stack,
         ]
         self._apply_nav_theme()
 
     def _on_nav_click(self, key: str) -> None:
         if key == "review" and not bool(self._bridge.state.groups):
-            self._bridge.show_snackbar("Run a scan first to unlock Results and Review.", info=True)
+            self._bridge.show_snackbar("Run a scan first to open Review.", info=True)
             self.navigate_to("dashboard")
             return
         self.navigate_to(key)
@@ -136,6 +193,13 @@ class AppLayout(ft.Column):
         c = self._t.colors
         self._top_nav.bgcolor = c.nav_bg
         self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
+        if hasattr(self, "_grid_bg"):
+            line_color = ft.Colors.with_opacity(0.04, c.fg_muted)
+            grid_col = self._grid_bg.content
+            if isinstance(grid_col, ft.Column):
+                for row in grid_col.controls:
+                    if isinstance(row, ft.Container) and isinstance(row.content, ft.Divider):
+                        row.content.color = line_color
         self._brand_icon.color = c.accent
         self._brand_text.color = c.fg
         self._sync_nav_selection()
@@ -143,51 +207,77 @@ class AppLayout(ft.Column):
     def _sync_nav_selection(self) -> None:
         c = self._t.colors
         selected_key = "settings" if self._current_key == "exclude" else self._current_key
+        sel_idx = self._selected_nav_index_for_key(selected_key or "dashboard")
+        self._nav_indicator.left = sel_idx * self._nav_pill_stride
+        self._nav_indicator.bgcolor = ft.Colors.with_opacity(0.15, c.accent)
+        self._nav_indicator.border = ft.border.all(1, ft.Colors.with_opacity(0.28, c.accent))
+        self._nav_indicator.shadow = ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=14,
+            color=ft.Colors.with_opacity(0.22, c.accent),
+            offset=ft.Offset(0, 2),
+        )
+        if not should_animate(self._bridge):
+            self._nav_indicator.animate_position = None
+
         for key, pill in self._nav_pills.items():
             is_selected = key == selected_key
             is_hovered = (self._nav_hover_key == key) and not is_selected
             label = self._nav_labels[key]
             icon = self._nav_icons[key]
-            label.color = c.fg if (is_selected or is_hovered) else c.fg2
+            label.color = c.accent if is_selected else (c.fg if is_hovered else c.fg2)
             icon.color = c.accent if is_selected else (c.fg if is_hovered else c.fg_muted)
-            pill.bgcolor = (
-                ft.Colors.with_opacity(0.18, c.accent)
-                if is_selected
-                else ft.Colors.with_opacity(0.08, c.accent)
-                if is_hovered
-                else ft.Colors.TRANSPARENT
-            )
-            pill.border = ft.border.all(
-                1,
-                ft.Colors.with_opacity(0.44, c.accent)
-                if is_selected
-                else ft.Colors.with_opacity(0.26, c.accent)
-                if is_hovered
-                else ft.Colors.with_opacity(0.20, c.border),
-            )
-            pill.shadow = (
-                ft.BoxShadow(
-                    spread_radius=0,
-                    blur_radius=12,
-                    color=ft.Colors.with_opacity(0.18, c.accent),
-                    offset=ft.Offset(0, 2),
-                )
-                if is_selected
-                else ft.BoxShadow(
-                    spread_radius=0,
-                    blur_radius=8,
-                    color=ft.Colors.with_opacity(0.12, c.accent),
-                    offset=ft.Offset(0, 1),
-                )
-                if is_hovered
-                else None
-            )
+            pill.bgcolor = ft.Colors.TRANSPARENT
+            pill.border = None
+            pill.shadow = None
+
+    def _sync_grid_bg(self) -> None:
+        """Show the Home grid only on dashboard; optional 1px vertical drift."""
+        on_home = self._current_key == "dashboard"
+        self._grid_bg.visible = on_home
+        self._grid_drift_generation += 1
+        if not on_home or not should_animate(self._bridge):
+            self._grid_bg.animate_offset = None
+            self._grid_bg.offset = ft.Offset(0, 0)
+            return
+        self._grid_bg.animate_offset = ft.Animation(
+            _GRID_DRIFT_MS,
+            ft.AnimationCurve.EASE_IN_OUT,
+        )
+        self._grid_bg.offset = ft.Offset(0, 0)
+        if self._page is not None:
+            self._page.run_task(self._grid_drift_loop, self._grid_drift_generation)
+
+    async def _grid_drift_loop(self, generation: int) -> None:
+        """Ping-pong _grid_bg by 1px when motion is enabled (3s per half-cycle)."""
+        while (
+            generation == self._grid_drift_generation
+            and self._current_key == "dashboard"
+            and should_animate(self._bridge)
+        ):
+            self._grid_bg.offset = ft.Offset(0, 1)
+            if _control_on_page(self._grid_bg):
+                self._grid_bg.update()
+            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
+            if (
+                generation != self._grid_drift_generation
+                or self._current_key != "dashboard"
+                or not should_animate(self._bridge)
+            ):
+                break
+            self._grid_bg.offset = ft.Offset(0, 0)
+            if _control_on_page(self._grid_bg):
+                self._grid_bg.update()
+            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
 
     def apply_theme(self, mode: str) -> None:
         """Repaint shell controls when the app theme changes."""
         self._theme_mode = "dark" if (mode or "").lower() == "dark" else "light"
         self._t = theme_for_mode(self._theme_mode)
+        self._content_host.padding = ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0)
+        self._content_host.bgcolor = ft.Colors.TRANSPARENT
         self._apply_nav_theme()
+        self._sync_grid_bg()
         if self.page is not None:
             self.update()
 
@@ -199,6 +289,8 @@ class AppLayout(ft.Column):
         runs before Review paints — otherwise ``on_show`` sees empty ``_groups`` and Flet
         can miss the follow-up subtree updates.
         """
+        if key == "duplicates":
+            key = "review"
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return
@@ -223,6 +315,15 @@ class AppLayout(ft.Column):
         self._current_key = key
         _ = self._selected_nav_index_for_key(key)
         self._sync_nav_selection()
+        self._sync_grid_bg()
+        if key == "dashboard":
+            from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
+
+            TimeKeeper.instance().resume()
+        else:
+            from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
+
+            TimeKeeper.instance().pause()
         if self.page is not None:
             self.update()
 

@@ -22,6 +22,9 @@ from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
+from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
+from cerebro.v2.ui.flet_app.utils.shortcuts import register_global_shortcuts
+from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +87,8 @@ def _main(page: ft.Page) -> None:
     page.window.min_width = 800
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
-    page.bgcolor = "#0A0E14"
+    # Filled from apply_preset_theme once settings are loaded.
+    page.bgcolor = "#060B14"
     page.padding = 0
     page.spacing = 0
 
@@ -198,9 +202,21 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
-    from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+    def _review_flow_v2_enabled() -> bool:
+        try:
+            general = (bridge.get_settings().get("general") or {})
+            return bool(general.get("review_flow_v2", True))
+        except Exception:
+            return True
 
-    _ReviewTabCls = ReviewPage
+    if _review_flow_v2_enabled():
+        from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
+
+        _ReviewTabCls = ReviewFlowHost
+    else:
+        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
+
+        _ReviewTabCls = ReviewPage
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -213,6 +229,9 @@ def _main(page: ft.Page) -> None:
     if isinstance(_appear0, dict):
         _fs0 = int(_appear0.get("font_size", 13) or 13)
     set_ui_font_size_px(_fs0)
+
+    _preset_id = str((_appear0 or {}).get("ui_theme_preset", "count_byteula"))
+    bridge.apply_preset_theme(_preset_id)
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
@@ -260,6 +279,7 @@ def _main(page: ft.Page) -> None:
     }
 
     layout = AppLayout(page, bridge, builders)
+    sync_reduce_motion_storage(page, bridge)
     _log.info("init: layout built  +%.0fms", (_time.monotonic() - _t0) * 1000)
 
     page.window.title_bar_hidden = True
@@ -364,7 +384,6 @@ def _main(page: ft.Page) -> None:
 
         actions: list[tuple[str, Callable[[], None]]] = [
             ("Go to Home", lambda: layout.navigate_to("dashboard")),
-            ("Go to Workspace", lambda: layout.navigate_to("review")),
             ("Go to Review", lambda: layout.navigate_to("review")),
             ("Go to History", lambda: layout.navigate_to("history")),
             ("Go to Exclude", lambda: layout.navigate_to("exclude")),
@@ -583,7 +602,10 @@ def _main(page: ft.Page) -> None:
             idx = 0
         layout.navigate_to(keys[(idx + step) % len(keys)])
 
-    def _on_key_event(e: ft.KeyboardEvent) -> None:
+    time_keeper = TimeKeeper.instance()
+    time_keeper.attach(page, is_home_active=lambda: layout.current_key == "dashboard")
+
+    def _on_other_keyboard(e: ft.KeyboardEvent) -> None:
         key = (e.key or "").lower().replace(" ", "")
         ctrl = bool(getattr(e, "ctrl", False) or getattr(e, "meta", False))
         if key in ("?", "slash") and bool(getattr(e, "shift", False)):
@@ -606,8 +628,14 @@ def _main(page: ft.Page) -> None:
             bridge.open_last_session()
             return
         if ctrl and key == "k":
+            if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
+                if review_page.handle_keyboard("k", ctrl=ctrl):
+                    return
             _show_command_palette()
             return
+        if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
+            if review_page.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
+                return
         if key in ("arrowleft", "left"):
             _cycle_tab(-1)
             return
@@ -621,7 +649,7 @@ def _main(page: ft.Page) -> None:
             except Exception:
                 _log.exception("Failed opening Review from Space shortcut")
 
-    page.on_keyboard_event = _on_key_event
+    register_global_shortcuts(page, layout, bridge, on_unhandled=_on_other_keyboard)
 
     def _on_window_event(e: ft.WindowEvent) -> None:
         if e.data in {"close", "resized", "moved", "maximize", "unmaximize"}:
@@ -631,6 +659,10 @@ def _main(page: ft.Page) -> None:
 
     def _on_route_change(e: ft.RouteChangeEvent) -> None:
         key = key_for_route(e.route)
+        if key == "dashboard":
+            time_keeper.resume()
+        else:
+            time_keeper.pause()
         layout.navigate_to(key)
 
     page.on_route_change = _on_route_change

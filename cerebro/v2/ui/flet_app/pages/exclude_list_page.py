@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, List
 import flet as ft
 
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
@@ -22,7 +24,7 @@ class ExcludeListPage(ft.Column):
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=ft.ScrollMode.AUTO)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._paths: List[str] = []
         self._folder_picker: ft.FilePicker
         self._list_col: ft.Column
@@ -43,47 +45,30 @@ class ExcludeListPage(ft.Column):
     def _build_ui(self) -> None:
         t = self._t
 
-        header = glass_container(
-            content=ft.Row(
-                [
-                    ft.Column(
-                        [
-                            ft.Text("Exclude List", size=t.typography.size_xl, weight=ft.FontWeight.BOLD, color=t.colors.fg),
-                            ft.Text(
-                                "Folders listed here are skipped during every scan.",
-                                size=t.typography.size_sm, color=t.colors.fg_muted,
-                            ),
-                        ],
-                        spacing=4, expand=True,
-                    ),
-                    ft.FilledButton(
-                        "Add Folder",
-                        icon=ft.icons.Icons.CREATE_NEW_FOLDER,
-                        on_click=self._on_add_folder,
-                        style=ft.ButtonStyle(
-                            bgcolor="#00BFA5",
-                            color="#0A0E14",
-                            shape=ft.RoundedRectangleBorder(radius=8),
-                        ),
-                    ),
-                    ft.OutlinedButton(
-                        "Clear All",
-                        icon=ft.icons.Icons.DELETE_SWEEP,
-                        on_click=self._on_clear_all,
-                        style=ft.ButtonStyle(
-                            color=t.colors.danger,
-                            side=ft.BorderSide(1, t.colors.danger),
-                            shape=ft.RoundedRectangleBorder(radius=8),
-                        ),
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                vertical_alignment=ft.CrossAxisAlignment.START,
-                spacing=t.spacing.md,
+        add_btn = ft.FilledButton(
+            "Add folder",
+            icon=ft.icons.Icons.CREATE_NEW_FOLDER,
+            on_click=self._on_add_folder,
+            style=pill_filled_accent(t, text_size=t.typography.size_sm, border_radius=t.border_radius),
+        )
+        clear_btn = ft.OutlinedButton(
+            "Clear all",
+            icon=ft.icons.Icons.DELETE_SWEEP,
+            on_click=self._on_clear_all,
+            style=ft.ButtonStyle(
+                color=t.colors.danger,
+                side=ft.BorderSide(1, t.colors.danger),
+                shape=ft.RoundedRectangleBorder(radius=t.border_radius),
             ),
-            t=t,
+        )
+        self._page_header = build_page_header(
+            t,
+            "Exclude list",
+            subtitle="Folders listed here are skipped during every scan.",
+            trailing=ft.Row([add_btn, clear_btn], spacing=t.spacing.sm),
             padding=ft.padding.only(left=t.spacing.xl, right=t.spacing.xl, top=t.spacing.xl, bottom=t.spacing.md),
         )
+        header = glass_container(content=self._page_header.root, t=t, padding=0)
 
         self._list_col = ft.Column(spacing=t.spacing.sm)
         self._list_container = ft.Container(
@@ -96,8 +81,8 @@ class ExcludeListPage(ft.Column):
             content=ft.Column(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.BLOCK, size=44, color="#FBBF24"),
-                        bgcolor=ft.Colors.with_opacity(0.08, "#FBBF24"),
+                        content=ft.Icon(ft.icons.Icons.BLOCK, size=44, color=t.colors.warning),
+                        bgcolor=ft.Colors.with_opacity(0.08, t.colors.warning),
                         border_radius=14, padding=18,
                     ),
                     ft.Text("No exclusions yet", size=t.typography.size_lg, weight=ft.FontWeight.W_600, color=t.colors.fg),
@@ -131,8 +116,8 @@ class ExcludeListPage(ft.Column):
             content=ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.FOLDER_OFF, size=18, color="#FBBF24"),
-                        bgcolor=ft.Colors.with_opacity(0.10, "#FBBF24"),
+                        content=ft.Icon(ft.icons.Icons.FOLDER_OFF, size=18, color=t.colors.warning),
+                        bgcolor=ft.Colors.with_opacity(0.10, t.colors.warning),
                         border_radius=6, padding=8,
                     ),
                     ft.Text(path, size=t.typography.size_sm, color=t.colors.fg2, expand=True, overflow=ft.TextOverflow.ELLIPSIS),
@@ -222,4 +207,7 @@ class ExcludeListPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         self._t = theme_for_mode(mode)
+        self._page_header.title.color = self._t.colors.fg
+        if self._page_header.subtitle is not None:
+            self._page_header.subtitle.color = self._t.colors.fg_muted
         self._safe_update(self)

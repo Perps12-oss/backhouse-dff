@@ -37,6 +37,7 @@ def test_chunked_view_presets_match_live_thresholds() -> None:
     assert RESULTS_GRID_CHUNK.async_threshold == 36
     assert REVIEW_GROUPS_CHUNK.first_sync_count == 40
     assert REVIEW_GRID_FILES_CHUNK.batch_size == 30
+    assert REVIEW_GROUPS_CHUNK.max_builds_per_tick == 20
 
 
 def test_group_duplicate_summary_exact_copies() -> None:

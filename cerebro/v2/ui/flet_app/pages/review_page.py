@@ -57,7 +57,7 @@ class ReviewPage(
     def __init__(self, bridge: "StateBridge"):
         super().__init__(expand=True, scroll=None)
         self._bridge = bridge
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._groups: List[DuplicateGroup] = []
         self._group_index: dict[int, int] = {}
         self._group_files: dict[int, List[DuplicateFile]] = {}

@@ -22,6 +22,20 @@ from cerebro.engines.orchestrator import ScanOrchestrator
 _log = logging.getLogger(__name__)
 
 
+def _flet_page_session_alive(page: ft.Page) -> bool:
+    """True if the Flet page still has a live transport (window not closed mid-scan)."""
+    try:
+        sess = getattr(page, "session", None)
+        if sess is None:
+            return False
+        _ = sess.connection  # noqa: SLF001 — public Flet API surface
+        return True
+    except RuntimeError as exc:
+        if "destroyed session" in str(exc).lower():
+            return False
+        raise
+
+
 class BackendService:
     """Facade over ScanOrchestrator with threaded execution and Flet-safe callbacks."""
 
@@ -194,6 +208,13 @@ class BackendService:
             fn(*args)
             return
 
+        if not _flet_page_session_alive(page):
+            _log.debug(
+                "Skipping UI marshal (Flet session ended): %s",
+                getattr(fn, "__name__", repr(fn)),
+            )
+            return
+
         async def _run_ui() -> None:
             fn(*args)
             try:
@@ -209,6 +230,14 @@ class BackendService:
 
         try:
             page.run_task(_run_ui)
+        except RuntimeError as exc:
+            if "destroyed session" in str(exc).lower():
+                _log.debug(
+                    "Skipping UI marshal (Flet session ended): %s",
+                    getattr(fn, "__name__", repr(fn)),
+                )
+                return
+            _log.exception("Failed to schedule UI callback via page.run_task")
         except Exception:
             _log.exception("Failed to schedule UI callback via page.run_task")
             try:

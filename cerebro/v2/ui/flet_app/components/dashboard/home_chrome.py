@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.components.dashboard.hero_button import HeroScanButton
+from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
+from cerebro.v2.ui.flet_app.design_system.tokens import NEON_DARK
 from cerebro.v2.ui.flet_app.pill_button_styles import (
-    pill_filled_accent,
     pill_outlined_button_style,
     pill_text_button_style,
 )
-from cerebro.v2.ui.flet_app.theme import ThemeTokens
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
+from cerebro.v2.ui.flet_app.utils.motion import should_animate
+
+if TYPE_CHECKING:
+    from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
+
+_TAGLINE = "Scan intelligently. Review safely."
 
 
 @dataclass
@@ -21,7 +29,7 @@ class DashboardHomeChrome:
     hero: ft.Container
     hero_tagline_icon: ft.Icon
     last_session_btn: ft.TextButton
-    start_btn: ft.FilledButton
+    start_btn: HeroScanButton
     pause_scan_btn: ft.OutlinedButton
     scan_safety_note: ft.Text
     actions: ft.Column
@@ -35,7 +43,9 @@ class DashboardHomeChrome:
     @classmethod
     def build(
         cls,
+        bridge: "StateBridge",
         t: ThemeTokens,
+        page: ft.Page | None,
         *,
         on_open_last_session: Callable[[ft.ControlEvent | None], None],
         on_start_scan: Callable[[ft.ControlEvent], None],
@@ -44,30 +54,42 @@ class DashboardHomeChrome:
         set_container_glow: Callable[..., None],
     ) -> "DashboardHomeChrome":
         s = t.spacing
+        amber = str(NEON_DARK.get("accent_secondary", t.colors.warning))
         last_session_btn = ft.TextButton(
             "Open Last Session",
             icon=ft.icons.Icons.HISTORY,
             on_click=on_open_last_session,
             style=pill_text_button_style(t, variant="muted"),
         )
-        hero_tagline_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color=t.colors.accent)
-        hero = glass_container(
+        hero_tagline_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color=amber)
+        tagline = ft.Text(
+            _TAGLINE if not should_animate(bridge) else "",
+            size=t.typography.size_base,
+            weight=ft.FontWeight.W_600,
+            color=t.colors.fg,
+            font_family="Consolas",
+            expand=True,
+        )
+        tagline_cursor = ft.Text(
+            "|",
+            size=t.typography.size_base,
+            weight=ft.FontWeight.W_300,
+            color=amber,
+            visible=should_animate(bridge),
+        )
+        hero = adaptive_glass(
             content=ft.Row(
                 [
                     hero_tagline_icon,
-                    ft.Text(
-                        "Scan intelligently. Review safely.",
-                        size=t.typography.size_base,
-                        weight=ft.FontWeight.W_600,
-                        color=t.colors.fg,
-                        expand=True,
-                    ),
+                    tagline,
+                    tagline_cursor,
                     last_session_btn,
                 ],
                 spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             t=t,
+            page=page,
             padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
             width=860,
         )
@@ -78,21 +100,7 @@ class DashboardHomeChrome:
             visible=False,
             style=pill_outlined_button_style(t),
         )
-        start_btn = ft.FilledButton(
-            "START SCAN",
-            icon=ft.icons.Icons.ROCKET_LAUNCH,
-            on_click=on_start_scan,
-            style=pill_filled_accent(
-                t,
-                padding=ft.Padding.symmetric(horizontal=56, vertical=28),
-                text_size=t.typography.size_xl,
-                weight=ft.FontWeight.W_800,
-                border_radius=14,
-            ),
-            disabled=False,
-            width=368,
-            height=74,
-        )
+        start_btn = HeroScanButton(t, bridge=bridge, on_tap=on_start_scan, width=368)
         scan_safety_note = ft.Text(
             "Nothing is deleted automatically • Content-aware matching enabled",
             size=t.typography.size_xs,
@@ -100,12 +108,8 @@ class DashboardHomeChrome:
             text_align=ft.TextAlign.CENTER,
             italic=True,
         )
-        start_wrap = ft.Container(content=start_btn, border_radius=14)
-        start_wrap.on_hover = lambda e, c=start_wrap: set_container_glow(
-            c, e.data == "true", variant="primary", strong=True
-        )
         actions = ft.Column(
-            [start_wrap, scan_safety_note, pause_scan_btn],
+            [start_btn, scan_safety_note, pause_scan_btn],
             horizontal_alignment=ft.CrossAxisAlignment.START,
             spacing=s.xs,
         )
@@ -125,7 +129,7 @@ class DashboardHomeChrome:
         cancelled_results_banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color="#F59E0B", size=18),
+                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color=amber, size=18),
                     cancelled_results_text,
                     ft.Container(expand=True),
                     cancelled_results_btn,
@@ -134,17 +138,23 @@ class DashboardHomeChrome:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#F59E0B")),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, amber)),
             border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.08, "#F59E0B"),
+            bgcolor=ft.Colors.with_opacity(0.08, amber),
             visible=False,
         )
         paused_scans_col = ft.Column([], spacing=s.xs, visible=False)
-        paused_scans_section = ft.Container(
+        paused_scans_section = adaptive_glass(
             content=ft.Column(
                 [
                     ft.Row(
                         [
+                            ft.Container(
+                                width=4,
+                                height=18,
+                                border_radius=2,
+                                bgcolor=t.colors.warning,
+                            ),
                             ft.Icon(ft.icons.Icons.PAUSE_CIRCLE, size=16, color=t.colors.warning),
                             ft.Text(
                                 "CHECKPOINT RESTORE",
@@ -157,16 +167,15 @@ class DashboardHomeChrome:
                     ),
                     paused_scans_col,
                 ],
-                spacing=s.xs,
+                spacing=s.sm,
             ),
+            t=t,
+            page=page,
             width=620,
             padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
-            border_radius=10,
-            border=ft.border.all(1, ft.Colors.with_opacity(0.4, t.colors.warning)),
-            bgcolor=ft.Colors.with_opacity(0.07, t.colors.warning),
             visible=False,
         )
-        return cls(
+        built = cls(
             hero=hero,
             hero_tagline_icon=hero_tagline_icon,
             last_session_btn=last_session_btn,
@@ -181,11 +190,62 @@ class DashboardHomeChrome:
             paused_scans_col=paused_scans_col,
             paused_scans_section=paused_scans_section,
         )
+        built._tagline = tagline
+        built._tagline_cursor = tagline_cursor
+        built._bridge = bridge
+        if should_animate(bridge) and page is not None:
+            page.run_task(built._tagline_typewriter_loop)
+        return built
+
+    def _amber(self) -> str:
+        return str(NEON_DARK.get("accent_secondary", self._bridge and "#F59E0B"))
+
+    async def _tagline_typewriter_loop(self) -> None:
+        cursor_on = True
+        chars = 0
+        while chars <= len(_TAGLINE):
+            self._tagline.value = _TAGLINE[:chars]
+            self._tagline_cursor.visible = cursor_on
+            try:
+                if self._tagline.page is not None:
+                    self._tagline.update()
+                    self._tagline_cursor.update()
+            except RuntimeError:
+                return
+            if chars >= len(_TAGLINE):
+                await asyncio.sleep(0.55)
+                cursor_on = not cursor_on
+                continue
+            chars += 1
+            cursor_on = True
+            await asyncio.sleep(0.045)
 
     def sync_theme(self, t: ThemeTokens) -> None:
-        self.hero.bgcolor = t.colors.glass_bg
-        self.hero.border = ft.border.all(1, t.colors.glass_border)
-        self.hero_tagline_icon.color = t.colors.accent
+        apply_glass_style(self.hero, t)
+        apply_glass_style(self.paused_scans_section, t)
+        amber = self._amber()
+        self.hero_tagline_icon.color = amber
+        self._tagline_cursor.color = amber
         self.last_session_btn.style = pill_text_button_style(t, variant="muted")
         self.pause_scan_btn.style = pill_outlined_button_style(t)
         self.cancelled_results_btn.style = pill_text_button_style(t, variant="primary")
+
+    def set_reduce_motion(self, enabled: bool) -> None:
+        self.start_btn.set_reduce_motion(enabled)
+        amber = self._amber()
+        self.hero_tagline_icon.color = amber
+        if enabled:
+            self._tagline.value = _TAGLINE
+            self._tagline_cursor.visible = False
+        else:
+            self._tagline.value = ""
+            self._tagline_cursor.visible = True
+            page = getattr(self._bridge, "flet_page", None)
+            if page is not None:
+                page.run_task(self._tagline_typewriter_loop)
+        try:
+            if self._tagline.page is not None:
+                self._tagline.update()
+                self._tagline_cursor.update()
+        except RuntimeError:
+            pass

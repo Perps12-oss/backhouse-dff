@@ -289,8 +289,14 @@ def dark_theme() -> ThemeTokens:
     return ThemeTokens(colors=DarkColorTokens())
 
 
-def theme_for_mode(mode: str) -> ThemeTokens:
-    """Return theme tokens for the given mode string."""
+def theme_for_mode(mode: str, preset_id: str | None = None) -> ThemeTokens:
+    """Return theme tokens for the given mode string and optional palette preset id."""
+    if preset_id:
+        from cerebro.v2.ui.flet_app.palette_themes import preset_by_id
+
+        found = preset_by_id(preset_id)
+        if found is not None:
+            set_active_preset(found)
     p = _active_preset
     if p is not None:
         tokens = ThemeTokens(colors=_tokens_from_preset(p))
@@ -421,6 +427,41 @@ def build_flet_theme(mode: str, seed: str | None = None) -> ft.Theme:
 
 
 # ---------------------------------------------------------------------------
+# Glass surface helpers (theme-aware; avoids light cards on dark shell)
+# ---------------------------------------------------------------------------
+
+def _hex_channel(hex_color: str, start: int) -> int:
+    h = (hex_color or "#000000").lstrip("#")
+    if len(h) > 6:
+        h = h[-6:]
+    return int(h[start : start + 2], 16)
+
+
+def is_dark_theme(t: ThemeTokens) -> bool:
+    """True when the active palette base background reads as dark."""
+    bg = t.colors.bg
+    lum = (
+        0.299 * _hex_channel(bg, 0)
+        + 0.587 * _hex_channel(bg, 2)
+        + 0.114 * _hex_channel(bg, 4)
+    )
+    return lum < 140
+
+
+def glass_surface_bg(t: ThemeTokens) -> str:
+    """Semi-opaque surface aligned with preset bg hierarchy."""
+    if is_dark_theme(t):
+        return ft.Colors.with_opacity(0.82, t.colors.bg2)
+    return ft.Colors.with_opacity(0.96, t.colors.bg2)
+
+
+def apply_glass_style(container: ft.Container, t: ThemeTokens) -> None:
+    """Repaint an existing glass container after theme / preset change."""
+    container.bgcolor = glass_surface_bg(t)
+    container.border = ft.border.all(1, t.colors.glass_border)
+
+
+# ---------------------------------------------------------------------------
 # Utility: glass container
 # ---------------------------------------------------------------------------
 
@@ -436,20 +477,24 @@ def glass_container(
 ) -> ft.Container:
     """Create a glassmorphism-styled container."""
     br = border_radius or t.border_radius
+    shadow = kwargs.pop(
+        "shadow",
+        ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=t.shadow_blur,
+            offset=ft.Offset(0, t.shadow_offset_y),
+            color=ft.Colors.with_opacity(0.12, "#000000" if is_dark_theme(t) else "#94A3B8"),
+        ),
+    )
     container_kwargs: dict = dict(
         content=content,
         padding=padding,
         border_radius=br,
-        bgcolor=t.colors.glass_bg,
+        bgcolor=glass_surface_bg(t),
         border=ft.border.all(1, t.colors.glass_border),
-        shadow=ft.BoxShadow(
-            spread_radius=0,
-            blur_radius=t.shadow_blur,
-            offset=ft.Offset(0, t.shadow_offset_y),
-            color="#00000015",
-        ),
+        shadow=shadow,
         expand=expand,
-        **kwargs
+        **kwargs,
     )
     if blur > 0:
         container_kwargs["blur"] = ft.Blur(blur, blur)

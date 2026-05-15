@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
+from cerebro.v2.ui.flet_app.design_system.tokens import HERO_RADIAL_OPACITY
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
 
@@ -15,6 +16,7 @@ class DashboardHomeShell:
     def build_workflow_stack(
         t: ThemeTokens,
         *,
+        page: ft.Page | None = None,
         hero: ft.Container,
         folder_panel: ft.Container,
         actions: ft.Column,
@@ -40,24 +42,43 @@ class DashboardHomeShell:
             color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
         )
-        return glass_container(
+        radial = ft.Container(
+            gradient=ft.RadialGradient(
+                center=ft.Alignment(0, 0),
+                radius=1.2,
+                colors=[
+                    ft.Colors.with_opacity(HERO_RADIAL_OPACITY, t.colors.accent),
+                    ft.Colors.TRANSPARENT,
+                ],
+            ),
+            expand=True,
+        )
+        stack = ft.Stack(
+            [
+                radial,
+                ft.Column(
+                    [
+                        hero,
+                        folder_panel_host,
+                        ft.Container(
+                            content=scan_options_toggle_btn,
+                            width=620,
+                            padding=ft.padding.only(top=s.sm),
+                            alignment=ft.Alignment(0.16, 0),
+                        ),
+                        scan_options_dropdown,
+                        capability_hint,
+                    ],
+                    spacing=s.xs,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+            ],
+            expand=False,
+        )
+        return adaptive_glass(
             width=840,
             padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.md),
             t=t,
-            content=ft.Column(
-                [
-                    hero,
-                    folder_panel_host,
-                    ft.Container(
-                        content=scan_options_toggle_btn,
-                        width=620,
-                        padding=ft.padding.only(top=s.sm),
-                        alignment=ft.Alignment(0.16, 0),
-                    ),
-                    scan_options_dropdown,
-                    capability_hint,
-                ],
-                spacing=s.xs,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
+            page=page,
+            content=stack,
         )

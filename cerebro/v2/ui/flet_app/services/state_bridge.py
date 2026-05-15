@@ -54,7 +54,7 @@ class StateBridge:
         self._unsubscribe: Optional[Callable[[], None]] = None
         self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
         self._on_theme_change: Optional[Callable[[str], None]] = None
-        self._visual_theme: str = "light"
+        self._visual_theme: str = "dark"
         self._scan_session: Dict[str, Any] = {}
         self._suppress_page_update: bool = False
         self._last_page_update_ts: float = 0.0  # B3: throttle progress-tick updates
@@ -240,6 +240,7 @@ class StateBridge:
         self._page.theme_mode = ft.ThemeMode.DARK if preset.is_dark else ft.ThemeMode.LIGHT
         self._page.theme = build_flet_theme(mode_str, seed=preset.seed)
         self._page.dark_theme = build_flet_theme(mode_str, seed=preset.seed)
+        self._page.bgcolor = preset.bg
         self._visual_theme = mode_str
 
         try:
