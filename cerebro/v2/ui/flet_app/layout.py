@@ -199,6 +199,8 @@ class AppLayout(ft.Column):
         runs before Review paints — otherwise ``on_show`` sees empty ``_groups`` and Flet
         can miss the follow-up subtree updates.
         """
+        if key == "duplicates":
+            key = "review"
         if key not in ROUTE_MAP:
             _log.warning("Unknown route key: %s", key)
             return

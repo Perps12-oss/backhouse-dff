@@ -21,7 +21,15 @@ from cerebro.v2.ui.flet_app.pages.review_flow.screens.execute import build_execu
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.inspect import build_inspect_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.overview import build_overview_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.report import build_report_screen
-from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState, SetSelection
+from cerebro.v2.ui.flet_app.pages.review_flow.state import (
+    ReviewFlowState,
+    SetSelection,
+    inspect_left_right_indices,
+    make_index_reference,
+    normalize_inspect_ref_cmp,
+    pin_compare_as_new_reference,
+    step_inspect_cmp,
+)
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, paths_to_delete
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
@@ -109,17 +117,23 @@ class ReviewFlowHost(ft.Column):
             self._grid = self._browse_view.list_host
             self._browse_view.refresh()
         elif screen == "inspect":
+            self._repair_inspect_indices_for_selection()
             inspect_col, slot_a, slot_b = build_inspect_screen(
                 t,
                 self._state,
                 on_back=self._on_back,
                 on_prev_set=self._inspect_prev,
                 on_next_set=self._inspect_next,
-                on_keep_a=lambda e: self._inspect_keep_side(0),
-                on_keep_b=lambda e: self._inspect_keep_side(1),
+                on_keep_left=lambda e: self._inspect_keep_physical_side(0),
+                on_keep_right=lambda e: self._inspect_keep_physical_side(1),
                 on_keep_both=lambda e: self._inspect_keep_both(),
                 on_delete_all=lambda e: self._inspect_delete_all(),
                 on_mark_next=lambda e: self._inspect_mark_next(),
+                on_strip_tap=self._inspect_strip_tap,
+                on_strip_long_make_reference=self._inspect_strip_make_reference,
+                on_swap_panels=self._inspect_swap_panels,
+                on_pin_compare_as_reference=self._inspect_pin_compare_as_reference,
+                on_step_compare=self._inspect_step_compare,
                 on_toggle_diff=self._toggle_inspect_diff,
                 on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
@@ -157,7 +171,7 @@ class ReviewFlowHost(ft.Column):
             _log.debug("[UI_SLOW] review_flow render %s took %.1f ms", screen, elapsed_ms)
 
     def on_show(self) -> None:
-        self._t = theme_for_mode("dark")
+        self._t = theme_for_mode(self._bridge.app_theme)
         self._state.marked_paths = set(self._bridge.state.selected_files)
         store_groups = list(getattr(self._bridge.state, "groups", []) or [])
         if store_groups:
@@ -168,6 +182,17 @@ class ReviewFlowHost(ft.Column):
             self._seed_mock_results()
         self._try_resume_session()
         self._render_active_screen()
+
+    def apply_theme(self, mode: str) -> None:
+        """Sync review-flow tokens when global light/dark (or preset) changes; rebuilds the active screen."""
+        m = "dark" if (mode or "").lower() == "dark" else "light"
+        self._t = theme_for_mode(m)
+        self._render_active_screen()
+        if self._page_is_set(self):
+            try:
+                self.update()
+            except Exception:
+                pass
 
     def get_groups(self) -> List[DuplicateGroup]:
         return list(self._state.scan_results)
@@ -214,7 +239,50 @@ class ReviewFlowHost(ft.Column):
                     self._open_inspect(groups[idx].group_id)
                 return True
         if screen == "inspect" and not self._inspect_stub:
+            group = self._state.group_by_id(self._state.inspect_set_id or -1)
+            n = len(group.files) if group else 0
+            if key in ("bracketleft", "[", "pageup"):
+                self._inspect_prev()
+                return True
+            if key in ("bracketright", "]", "pagedown"):
+                self._inspect_next()
+                return True
+            if key in ("arrowleft", "left", "arrowup", "up"):
+                if shift:
+                    self._inspect_swap_panels()
+                    return True
+                if n > 2:
+                    self._state.inspect_cmp_index = step_inspect_cmp(
+                        n, self._state.inspect_ref_index, self._state.inspect_cmp_index, -1
+                    )
+                    self._persist_inspect_layout()
+                    self._render_active_screen()
+                return True
+            if key in ("arrowright", "right", "arrowdown", "down"):
+                if shift:
+                    self._inspect_swap_panels()
+                    return True
+                if n > 2:
+                    self._state.inspect_cmp_index = step_inspect_cmp(
+                        n, self._state.inspect_ref_index, self._state.inspect_cmp_index, 1
+                    )
+                    self._persist_inspect_layout()
+                    self._render_active_screen()
+                return True
+            if key == "p":
+                self._inspect_pin_compare_as_reference()
+                return True
+            if key == "1":
+                self._inspect_keep_physical_side(0)
+                return True
+            if key == "2":
+                self._inspect_keep_physical_side(1)
+                return True
+            if key == "b":
+                self._inspect_keep_both()
+                return True
             if key == "d":
+                self._toggle_inspect_diff_keyboard()
                 return True
         if ctrl and key == "z" and not shift:
             self._undo()
@@ -259,9 +327,57 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.refresh()
 
+    def _persist_inspect_layout(self) -> None:
+        gid = self._state.inspect_set_id
+        if gid is None:
+            return
+        self._state.inspect_layout_by_set_id[gid] = (
+            self._state.inspect_ref_index,
+            self._state.inspect_cmp_index,
+            self._state.inspect_swap_panels,
+        )
+
+    def _restore_inspect_layout_for_set(self, group_id: int) -> None:
+        group = self._state.group_by_id(group_id)
+        n = len(group.files) if group else 0
+        if group_id in self._state.inspect_layout_by_set_id:
+            ref, cmp_i, swap = self._state.inspect_layout_by_set_id[group_id]
+            self._state.inspect_ref_index = ref
+            self._state.inspect_cmp_index = cmp_i
+            self._state.inspect_swap_panels = swap
+        else:
+            self._state.inspect_ref_index = 0
+            self._state.inspect_cmp_index = 1 if n > 1 else 0
+            self._state.inspect_swap_panels = False
+        self._state.inspect_ref_index, self._state.inspect_cmp_index = normalize_inspect_ref_cmp(
+            n, self._state.inspect_ref_index, self._state.inspect_cmp_index
+        )
+
+    def _repair_inspect_indices_for_selection(self) -> None:
+        gid = self._state.inspect_set_id
+        group = self._state.group_by_id(gid or -1)
+        if not group or not group.files:
+            return
+        n = len(group.files)
+        sel = self._state.set_selections.get(group.group_id)
+        ref_i, cmp_i = self._state.inspect_ref_index, self._state.inspect_cmp_index
+        ref_i, cmp_i = normalize_inspect_ref_cmp(n, ref_i, cmp_i)
+        if sel:
+            ref_path = str(group.files[ref_i].path)
+            if ref_path in sel.deleted_paths or ref_path in self._state.marked_paths:
+                for j, f in enumerate(group.files):
+                    p = str(f.path)
+                    if p not in sel.deleted_paths and p not in self._state.marked_paths:
+                        ref_i = j
+                        cmp_i = step_inspect_cmp(n, ref_i, ref_i, 1)
+                        self._show_toast("Reference was marked for deletion; re-anchored to another file.")
+                        break
+        self._state.inspect_ref_index, self._state.inspect_cmp_index = normalize_inspect_ref_cmp(n, ref_i, cmp_i)
+        self._persist_inspect_layout()
+
     def _open_inspect(self, group_id: int) -> None:
         self._state.inspect_set_id = group_id
-        self._state.inspect_file_index = 0
+        self._restore_inspect_layout_for_set(group_id)
         self._router.navigate("inspect")
 
     def _open_cart(self, _e=None) -> None:
@@ -278,6 +394,7 @@ class ReviewFlowHost(ft.Column):
             idx = 0
         idx = max(0, idx - 1)
         self._state.inspect_set_id = ids[idx]
+        self._restore_inspect_layout_for_set(ids[idx])
         self._render_active_screen()
 
     def _inspect_next(self, _e=None) -> None:
@@ -291,6 +408,63 @@ class ReviewFlowHost(ft.Column):
             idx = 0
         idx = min(len(ids) - 1, idx + 1)
         self._state.inspect_set_id = ids[idx]
+        self._restore_inspect_layout_for_set(ids[idx])
+        self._render_active_screen()
+
+    def _inspect_strip_tap(self, member_index: int) -> None:
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if not group or not group.files:
+            return
+        n = len(group.files)
+        i = max(0, min(int(member_index), n - 1))
+        if i == self._state.inspect_ref_index:
+            return
+        self._state.inspect_cmp_index = i
+        self._state.inspect_ref_index, self._state.inspect_cmp_index = normalize_inspect_ref_cmp(
+            n, self._state.inspect_ref_index, self._state.inspect_cmp_index
+        )
+        self._persist_inspect_layout()
+        self._render_active_screen()
+
+    def _inspect_strip_make_reference(self, member_index: int) -> None:
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if not group or not group.files:
+            return
+        n = len(group.files)
+        new_ref = max(0, min(int(member_index), n - 1))
+        r, c = make_index_reference(n, self._state.inspect_ref_index, self._state.inspect_cmp_index, new_ref)
+        self._state.inspect_ref_index, self._state.inspect_cmp_index = r, c
+        self._persist_inspect_layout()
+        self._render_active_screen()
+
+    def _inspect_swap_panels(self, _e=None) -> None:
+        self._state.inspect_swap_panels = not self._state.inspect_swap_panels
+        self._persist_inspect_layout()
+        self._render_active_screen()
+
+    def _inspect_pin_compare_as_reference(self, _e=None) -> None:
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if not group or not group.files:
+            return
+        n = len(group.files)
+        if n < 2:
+            return
+        r, c = pin_compare_as_new_reference(n, self._state.inspect_ref_index, self._state.inspect_cmp_index)
+        self._state.inspect_ref_index, self._state.inspect_cmp_index = r, c
+        self._persist_inspect_layout()
+        self._render_active_screen()
+
+    def _inspect_step_compare(self, delta: int) -> None:
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if not group or not group.files:
+            return
+        n = len(group.files)
+        if n <= 2:
+            return
+        self._state.inspect_cmp_index = step_inspect_cmp(
+            n, self._state.inspect_ref_index, self._state.inspect_cmp_index, int(delta)
+        )
+        self._persist_inspect_layout()
         self._render_active_screen()
 
     def _apply_paths_for_group(self, group: DuplicateGroup, delete_paths: set[str]) -> None:
@@ -301,11 +475,19 @@ class ReviewFlowHost(ft.Column):
         self._state.marked_paths.update(delete_paths)
         self._push_marked_paths_to_store()
 
-    def _inspect_keep_side(self, side_index: int) -> None:
+    def _inspect_keep_physical_side(self, physical_side: int) -> None:
+        """physical_side 0 = left column file, 1 = right column file (after swap)."""
         group = self._state.group_by_id(self._state.inspect_set_id or -1)
         if not group or not group.files:
             return
-        keep = group.files[min(side_index, len(group.files) - 1)]
+        n = len(group.files)
+        left_i, right_i = inspect_left_right_indices(
+            self._state.inspect_swap_panels,
+            self._state.inspect_ref_index,
+            self._state.inspect_cmp_index,
+        )
+        pick_i = left_i if physical_side == 0 else right_i
+        keep = group.files[pick_i]
         delete_paths = {str(f.path) for f in group.files if str(f.path) != str(keep.path)}
         self._apply_paths_for_group(group, delete_paths)
         self._inspect_next()
@@ -361,8 +543,8 @@ class ReviewFlowHost(ft.Column):
                 return
             slot.content = ft.Image(
                 src=f"data:image/jpeg;base64,{b64}",
-                width=280,
-                height=300,
+                width=340,
+                height=400,
                 fit=ft.BoxFit.CONTAIN,
                 border_radius=8,
             )
@@ -389,8 +571,8 @@ class ReviewFlowHost(ft.Column):
                 continue
             slot.content = ft.Image(
                 src=f"data:image/jpeg;base64,{b64}",
-                width=280,
-                height=300,
+                width=340,
+                height=400,
                 fit=ft.BoxFit.CONTAIN,
                 border_radius=8,
             )
@@ -398,12 +580,25 @@ class ReviewFlowHost(ft.Column):
 
     def _toggle_inspect_diff(self, e: ft.ControlEvent) -> None:
         self._state.inspect_diff_enabled = bool(getattr(e.control, "value", False))
-        group = self._state.group_by_id(self._state.inspect_set_id or -1)
-        if group and len(group.files) >= 2 and self._state.inspect_diff_enabled:
-            from cerebro.v2.ui.flet_app.pages.review_flow.image_diff import build_diff_heatmap_path
-
-            build_diff_heatmap_path(group.files[0].path, group.files[1].path)
+        self._run_inspect_diff_if_enabled()
         self._render_active_screen()
+
+    def _toggle_inspect_diff_keyboard(self) -> None:
+        self._state.inspect_diff_enabled = not self._state.inspect_diff_enabled
+        self._run_inspect_diff_if_enabled()
+        self._render_active_screen()
+
+    def _run_inspect_diff_if_enabled(self) -> None:
+        group = self._state.group_by_id(self._state.inspect_set_id or -1)
+        if not group or len(group.files) < 2 or not self._state.inspect_diff_enabled:
+            return
+        from cerebro.v2.ui.flet_app.pages.review_flow.image_diff import build_diff_heatmap_path
+
+        n = len(group.files)
+        ref_i, cmp_i = normalize_inspect_ref_cmp(
+            n, self._state.inspect_ref_index, self._state.inspect_cmp_index
+        )
+        build_diff_heatmap_path(group.files[ref_i].path, group.files[cmp_i].path)
 
     def _toggle_inspect_blink(self, e: ft.ControlEvent) -> None:
         self._state.inspect_blink_enabled = bool(getattr(e.control, "value", False))
@@ -686,6 +881,17 @@ class ReviewFlowHost(ft.Column):
             return
         self._state.marked_paths = set(payload.get("marked_paths", []))
         self._state.selected_set_ids = set(payload.get("selected_set_ids", []))
+        layout_raw = payload.get("inspect_layout_by_set", {})
+        if isinstance(layout_raw, dict):
+            parsed: dict[int, tuple[int, int, bool]] = {}
+            for k, v in layout_raw.items():
+                try:
+                    gid = int(k)
+                    if isinstance(v, (list, tuple)) and len(v) >= 3:
+                        parsed[gid] = (int(v[0]), int(v[1]), bool(v[2]))
+                except (TypeError, ValueError):
+                    continue
+            self._state.inspect_layout_by_set_id = parsed
         screen = payload.get("active_screen")
         if screen in {"overview", "browse", "inspect", "cart", "execute", "report"}:
             self._router.reset_to_overview()
@@ -697,6 +903,10 @@ class ReviewFlowHost(ft.Column):
             "active_screen": self._router.active_screen(),
             "marked_paths": sorted(self._state.marked_paths),
             "selected_set_ids": sorted(self._state.selected_set_ids),
+            "inspect_layout_by_set": {
+                str(gid): [ref, cmp_i, swap]
+                for gid, (ref, cmp_i, swap) in sorted(self._state.inspect_layout_by_set_id.items())
+            },
         }
         path = Path(".") / "review_session.v1.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
