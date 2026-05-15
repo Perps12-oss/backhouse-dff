@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Callable
@@ -9,7 +10,8 @@ from typing import TYPE_CHECKING, Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style, fmt_size
+from cerebro.v2.ui.flet_app.utils.motion import should_animate
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -36,6 +38,9 @@ class DashboardStatsPresence:
       self._set_container_glow = set_container_glow
       self._stats_row_signature: tuple[int, int, int] | None = None
       self._presence_refresh_last_mon: float = 0.0
+      self._stat_value_texts: list[ft.Text] = []
+      self._stat_count_targets: list[tuple[int, str]] = []
+      self._countup_done: bool = False
 
       s = t.spacing
       self._presence_title = ft.Text(
@@ -95,6 +100,10 @@ class DashboardStatsPresence:
 
   def sync_theme(self, t: ThemeTokens) -> None:
       self._t = t
+      apply_glass_style(self._presence_row, t)
+      for ctrl in self._stats_row.controls:
+          if isinstance(ctrl, ft.GestureDetector) and isinstance(ctrl.content, ft.Container):
+              apply_glass_style(ctrl.content, t)
 
   def set_mtime_caption(self, value: str) -> None:
       self._presence_mtime.value = value
@@ -110,12 +119,14 @@ class DashboardStatsPresence:
       self._stats_row_signature = new_sig
       self._stats_row.visible = (scans_n > 0) or (dupes_n > 0) or (bytes_n > 0)
       cards = [
-          (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", f"{scans_n:,}"),
-          (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", f"{dupes_n:,}"),
-          (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", fmt_size(bytes_n)),
+          (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", scans_n, f"{scans_n:,}"),
+          (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", dupes_n, f"{dupes_n:,}"),
+          (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", bytes_n, fmt_size(bytes_n)),
       ]
+      self._stat_value_texts = []
+      self._stat_count_targets = []
       controls: list[ft.Control] = []
-      for icon, accent, label, value in cards:
+      for icon, accent, label, numeric_target, value in cards:
           tile = glass_container(
               content=ft.Row(
                   [
@@ -128,12 +139,12 @@ class DashboardStatsPresence:
                       ),
                       ft.Column(
                           [
-                              ft.Text(
+                              (value_text := ft.Text(
                                   value,
                                   size=24,
                                   weight=ft.FontWeight.W_700,
                                   color=t.colors.fg,
-                              ),
+                              )),
                               ft.Text(
                                   label.upper(),
                                   size=11,
@@ -151,6 +162,11 @@ class DashboardStatsPresence:
               t=self._t,
               padding=ft.Padding.symmetric(horizontal=14, vertical=10),
           )
+          self._stat_value_texts.append(value_text)
+          if label == "Space Recovered":
+              self._stat_count_targets.append((numeric_target, "size"))
+          else:
+              self._stat_count_targets.append((numeric_target, "int"))
           tile.ink = True
           tile.on_hover = lambda e, c=tile: self._set_container_glow(
               c, e.data == "true", variant="secondary"
@@ -164,6 +180,8 @@ class DashboardStatsPresence:
           )
       self._stats_row.controls = controls
       self._safe_update(self._stats_row)
+      if sig_changed and should_animate(self._bridge):
+          self._countup_done = False
       self._maybe_refresh_presence(force=bool(refresh_presence_force or sig_changed))
 
   def _maybe_refresh_presence(self, *, force: bool = False) -> None:
@@ -249,8 +267,7 @@ class DashboardStatsPresence:
               )
 
       self._insights_row.controls = chips
-      self._presence_row.bgcolor = self._t.colors.glass_bg
-      self._presence_row.border = ft.border.all(1, self._t.colors.glass_border)
+      apply_glass_style(self._presence_row, t)
       self._presence_row.visible = True
       self._safe_update(self._presence_title)
       self._safe_update(self._presence_body)
@@ -274,6 +291,38 @@ class DashboardStatsPresence:
           border_radius=999,
           bgcolor=ft.Colors.with_opacity(0.1, accent),
       )
+
+  def animate_stat_counts_on_first_expand(self) -> None:
+      """Step numeric stat labels from zero on first Summary expand (motion only)."""
+      if self._countup_done or not should_animate(self._bridge):
+          return
+      if not self._stat_value_texts or not self._stat_count_targets:
+          return
+      self._countup_done = True
+      page = getattr(self._bridge, "flet_page", None)
+      if page is not None:
+          page.run_task(self._run_stat_countup)
+
+  async def _run_stat_countup(self) -> None:
+      import asyncio
+
+      steps = 12
+      for step in range(1, steps + 1):
+          await asyncio.sleep(0.05)
+          for idx, (target, kind) in enumerate(self._stat_count_targets):
+              if idx >= len(self._stat_value_texts):
+                  continue
+              current = int(target * step / steps)
+              if kind == "size":
+                  self._stat_value_texts[idx].value = fmt_size(current)
+              else:
+                  self._stat_value_texts[idx].value = f"{current:,}"
+          for txt in self._stat_value_texts:
+              try:
+                  if txt.page is not None:
+                      txt.update()
+              except RuntimeError:
+                  return
 
   @staticmethod
   def _short_folder_label(path: str, max_len: int = 40) -> str:

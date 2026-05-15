@@ -8,6 +8,7 @@ from typing import Callable
 import flet as ft
 
 from cerebro.v2.core.index_presence import format_relative_past
+from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_outlined_button_style, pill_text_button_style
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
@@ -56,6 +57,7 @@ def build_checkpoint_restore_card(
     created_at: float,
     on_discard: Callable[[ft.ControlEvent], None],
     on_restore: Callable[[ft.ControlEvent], None],
+    page: ft.Page | None = None,
     reduce_motion: bool = False,
 ) -> CheckpointRestoreCard:
     s = t.spacing
@@ -70,12 +72,19 @@ def build_checkpoint_restore_card(
         size=t.typography.size_xs,
         color=t.colors.fg_muted,
     )
+    pulse_up = True
 
     def _update_relative() -> None:
+        nonlocal pulse_up
         rel_text.value = format_relative_past(created_at)
+        if pending > 0 and not reduce_motion:
+            pulse.scale = 1.35 if pulse_up else 1.0
+            pulse_up = not pulse_up
         try:
             if rel_text.page is not None:
                 rel_text.update()
+            if pending > 0 and pulse.page is not None:
+                pulse.update()
         except RuntimeError:
             pass
 
@@ -85,10 +94,10 @@ def build_checkpoint_restore_card(
         border_radius=4,
         bgcolor=t.colors.warning,
         visible=pending > 0,
+        scale=1.0,
     )
     if pending > 0 and not reduce_motion:
-        pulse.animate_scale = ft.Animation(2000, ft.AnimationCurve.EASE_IN_OUT)
-        pulse.scale = 1.0
+        pulse.animate_scale = ft.Animation(1000, ft.AnimationCurve.EASE_IN_OUT)
 
     timeline_bar = ft.Container(
         width=4,
@@ -129,7 +138,7 @@ def build_checkpoint_restore_card(
             ft.TextButton(
                 "Discard",
                 on_click=on_discard,
-                style=pill_text_button_style(t, variant="muted"),
+                style=pill_text_button_style(t, variant="danger"),
             ),
             ft.OutlinedButton(
                 f"Restore ({pending:,} left)",
@@ -146,12 +155,11 @@ def build_checkpoint_restore_card(
         spacing=s.md,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
-    card = ft.Container(
+    card = adaptive_glass(
         content=inner,
+        t=t,
+        page=page,
         padding=ft.Padding.symmetric(horizontal=s.sm, vertical=s.sm),
-        border_radius=t.border_radius,
-        bgcolor=ft.Colors.with_opacity(0.55, t.colors.glass_bg),
-        border=ft.border.all(1, ft.Colors.with_opacity(0.12, t.colors.border)),
     )
     _ = scan_id
     return CheckpointRestoreCard(container=card, update_relative=_update_relative)

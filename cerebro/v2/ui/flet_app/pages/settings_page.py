@@ -754,6 +754,14 @@ class SettingsPage(ft.Column):
             # Show error feedback
             self._bridge.show_snackbar(f"Save failed: {exc}", error=True)
             return
+        try:
+            from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
+
+            page = getattr(self._bridge, "flet_page", None)
+            if page is not None:
+                sync_reduce_motion_storage(page, self._bridge)
+        except Exception:
+            _log.debug("sync_reduce_motion_storage after settings save failed", exc_info=True)
         self._apply_font_size_to_page(self._settings["appearance"]["font_size"])
         # Close any modal overlay first (e.g. theme chooser opened as a dialog).
         try:

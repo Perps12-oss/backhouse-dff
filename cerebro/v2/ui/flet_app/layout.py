@@ -6,6 +6,7 @@ are swapped into. All pages receive the same consistent chrome.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Callable
 
@@ -21,6 +22,10 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+_GRID_LINE_SPACING_PX = 40
+_GRID_LINE_COUNT = 36
+_GRID_DRIFT_MS = 3000
+
 
 def _control_on_page(ctrl: ft.Control | None) -> bool:
     """True if *ctrl* is attached to a Page (Flet raises RuntimeError if not)."""
@@ -30,6 +35,20 @@ def _control_on_page(ctrl: ft.Control | None) -> bool:
         return ctrl.page is not None
     except RuntimeError:
         return False
+
+
+def _build_home_grid_column(line_color: str, *, count: int = _GRID_LINE_COUNT) -> ft.Column:
+    """Horizontal rules every 40px at ~4% opacity (Home background only)."""
+    rows: list[ft.Control] = []
+    for _ in range(count):
+        rows.append(
+            ft.Container(
+                height=_GRID_LINE_SPACING_PX,
+                alignment=ft.Alignment(0, 1),
+                content=ft.Divider(height=1, color=line_color),
+            )
+        )
+    return ft.Column(rows, spacing=0, expand=True)
 
 
 class AppLayout(ft.Column):
@@ -57,6 +76,7 @@ class AppLayout(ft.Column):
             expand=True,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
             padding=ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0),
+            bgcolor=ft.Colors.TRANSPARENT,
         )
         self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
@@ -78,6 +98,7 @@ class AppLayout(ft.Column):
         self._nav_icons: dict[str, ft.Icon] = {}
         self._nav_hover_key: str | None = None
         self._nav_pill_stride = 106
+        self._grid_drift_generation = 0
         nav_button_row = ft.Row(spacing=6, tight=True)
         for idx, route in enumerate(self._nav_routes):
             icon = ft.Icon(route.icon, size=16)
@@ -119,14 +140,10 @@ class AppLayout(ft.Column):
 
         self._grid_bg = ft.Container(
             expand=True,
-            gradient=ft.LinearGradient(
-                begin=ft.Alignment(0, -1),
-                end=ft.Alignment(0, 1),
-                colors=[
-                    ft.Colors.with_opacity(0.04, "#94A3B8"),
-                    ft.Colors.TRANSPARENT,
-                ],
-                stops=[0.0, 0.08],
+            visible=False,
+            clip_behavior=ft.ClipBehavior.NONE,
+            content=_build_home_grid_column(
+                ft.Colors.with_opacity(0.04, self._t.colors.fg_muted),
             ),
         )
         self._content_stack = ft.Stack(
@@ -177,15 +194,12 @@ class AppLayout(ft.Column):
         self._top_nav.bgcolor = c.nav_bg
         self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
         if hasattr(self, "_grid_bg"):
-            self._grid_bg.gradient = ft.LinearGradient(
-                begin=ft.Alignment(0, -1),
-                end=ft.Alignment(0, 1),
-                colors=[
-                    ft.Colors.with_opacity(0.04, c.fg_muted),
-                    ft.Colors.TRANSPARENT,
-                ],
-                stops=[0.0, 0.08],
-            )
+            line_color = ft.Colors.with_opacity(0.04, c.fg_muted)
+            grid_col = self._grid_bg.content
+            if isinstance(grid_col, ft.Column):
+                for row in grid_col.controls:
+                    if isinstance(row, ft.Container) and isinstance(row.content, ft.Divider):
+                        row.content.color = line_color
         self._brand_icon.color = c.accent
         self._brand_text.color = c.fg
         self._sync_nav_selection()
@@ -217,12 +231,53 @@ class AppLayout(ft.Column):
             pill.border = None
             pill.shadow = None
 
+    def _sync_grid_bg(self) -> None:
+        """Show the Home grid only on dashboard; optional 1px vertical drift."""
+        on_home = self._current_key == "dashboard"
+        self._grid_bg.visible = on_home
+        self._grid_drift_generation += 1
+        if not on_home or not should_animate(self._bridge):
+            self._grid_bg.animate_offset = None
+            self._grid_bg.offset = ft.Offset(0, 0)
+            return
+        self._grid_bg.animate_offset = ft.Animation(
+            _GRID_DRIFT_MS,
+            ft.AnimationCurve.EASE_IN_OUT,
+        )
+        self._grid_bg.offset = ft.Offset(0, 0)
+        if self._page is not None:
+            self._page.run_task(self._grid_drift_loop, self._grid_drift_generation)
+
+    async def _grid_drift_loop(self, generation: int) -> None:
+        """Ping-pong _grid_bg by 1px when motion is enabled (3s per half-cycle)."""
+        while (
+            generation == self._grid_drift_generation
+            and self._current_key == "dashboard"
+            and should_animate(self._bridge)
+        ):
+            self._grid_bg.offset = ft.Offset(0, 1)
+            if _control_on_page(self._grid_bg):
+                self._grid_bg.update()
+            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
+            if (
+                generation != self._grid_drift_generation
+                or self._current_key != "dashboard"
+                or not should_animate(self._bridge)
+            ):
+                break
+            self._grid_bg.offset = ft.Offset(0, 0)
+            if _control_on_page(self._grid_bg):
+                self._grid_bg.update()
+            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
+
     def apply_theme(self, mode: str) -> None:
         """Repaint shell controls when the app theme changes."""
         self._theme_mode = "dark" if (mode or "").lower() == "dark" else "light"
         self._t = theme_for_mode(self._theme_mode)
         self._content_host.padding = ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0)
+        self._content_host.bgcolor = ft.Colors.TRANSPARENT
         self._apply_nav_theme()
+        self._sync_grid_bg()
         if self.page is not None:
             self.update()
 
@@ -260,6 +315,7 @@ class AppLayout(ft.Column):
         self._current_key = key
         _ = self._selected_nav_index_for_key(key)
         self._sync_nav_selection()
+        self._sync_grid_bg()
         if key == "dashboard":
             from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 

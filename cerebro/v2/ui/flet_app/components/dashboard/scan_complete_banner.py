@@ -9,7 +9,7 @@ import flet as ft
 from cerebro.v2.ui.flet_app.design_system.animations import slide_in
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_text_button_style
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style, fmt_size
 
 
 class ScanCompleteBanner:
@@ -94,3 +94,11 @@ class ScanCompleteBanner:
                 self.container.update()
         except RuntimeError:
             pass
+
+    def sync_theme(self, t: ThemeTokens) -> None:
+        self._t = t
+        apply_glass_style(self.container, t)
+        self._title.color = t.colors.fg
+        self._body.color = t.colors.fg_muted
+        self._open_btn.style = pill_filled_accent(t, text_size=12, weight=ft.FontWeight.W_700)
+        self._dismiss_btn.style = pill_text_button_style(t, variant="muted")

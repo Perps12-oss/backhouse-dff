@@ -31,7 +31,7 @@ from cerebro.v2.ui.flet_app.components.dashboard.scan_complete_banner import Sca
 from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import DashboardScanOptionsPanel
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.theme import apply_glass_style, theme_for_mode, fmt_size, SCAN_MODES
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 if TYPE_CHECKING:
@@ -73,6 +73,7 @@ class DashboardPage(ft.Column):
         self._last_on_show_ts = 0.0
         # Initial Theme Load
         self._t = theme_for_mode(self._bridge.app_theme)
+        self._reduce_motion: bool = self._bridge.is_reduce_motion_enabled()
 
         # UI References (to update without rebuilding)
         self._hero: ft.Container
@@ -95,11 +96,10 @@ class DashboardPage(ft.Column):
         self._cancelled_results_text: ft.Text
         self._cancelled_results_btn: ft.TextButton
         self._main_panels: list
-        self._scan_archives_cb: ft.Checkbox
+        self._scan_archives_sw: ft.Switch
         self._archives_warning: ft.Text
         self._advanced_options_visible: bool
         self._scan_options_dropdown_open: bool
-        self._advanced_toggle_btn: ft.IconButton
         self._scan_options_toggle_btn: ft.OutlinedButton
         self._scan_options_dropdown: ft.Container
         self._advanced_panel: ft.Container
@@ -239,8 +239,11 @@ class DashboardPage(ft.Column):
         t = self._t
         s = t.spacing
 
+        page = self._bridge.flet_page
         chrome = DashboardHomeChrome.build(
+            self._bridge,
             t,
+            page,
             on_open_last_session=self._open_last_session,
             on_start_scan=self._start_scan,
             on_pause_scan=self._on_hero_pause_toggle,
@@ -279,7 +282,6 @@ class DashboardPage(ft.Column):
         self._scan_opts = DashboardScanOptionsPanel(
             t,
             on_archives_change=self._on_archives_cb_change,
-            on_toggle_advanced=self._toggle_advanced_panel,
             on_toggle_dropdown=self._toggle_scan_options_dropdown,
             on_min_size_change=self._on_min_size_change,
             on_exclude_paths_blur=self._on_exclude_paths_blur,
@@ -289,7 +291,7 @@ class DashboardPage(ft.Column):
         self._mode_label = self._scan_opts.mode_label
         self._mode_row = self._scan_opts.mode_row
         self._scan_type_summary = self._scan_opts.scan_type_summary
-        self._scan_archives_cb = self._scan_opts.scan_archives_cb
+        self._scan_archives_sw = self._scan_opts.scan_archives_sw
         self._archives_warning = self._scan_opts.archives_warning
         self._advanced_panel = self._scan_opts.advanced_panel
         self._min_size_slider = self._scan_opts.min_size_slider
@@ -298,7 +300,6 @@ class DashboardPage(ft.Column):
         self._exclude_paths_browse_btn = self._scan_opts.exclude_paths_browse_btn
         self._include_subfolders_sw = self._scan_opts.include_subfolders_sw
         self._scan_options_row = self._scan_opts.scan_options_row
-        self._advanced_toggle_btn = self._scan_opts.advanced_toggle_btn
         self._scan_options_toggle_btn = self._scan_opts.scan_options_toggle_btn
         self._scan_options_dropdown = self._scan_opts.scan_options_dropdown
         self._advanced_options_visible = False
@@ -307,11 +308,15 @@ class DashboardPage(ft.Column):
         self._update_modes_ui()
 
         self._folder_panel = DashboardFolderPanel(
+            self._bridge,
             t,
+            page,
             on_browse=self._browse_folders,
             on_quick_add=self._quick_add_desktop_downloads,
             on_hover=lambda e, _panel=None: self._set_container_glow(
-                self._folder_container, e.data == "true", variant="primary"
+                self._folder_panel._inner_container,
+                e.data == "true",
+                variant="primary",
             ),
             on_remove_folder=self._remove_folder,
         )
@@ -319,8 +324,9 @@ class DashboardPage(ft.Column):
         self._folder_chips_row = self._folder_panel.chips_row
         self._folder_section_icon = self._folder_panel.section_icon
 
-        workflow_stack = DashboardHomeShell.build_workflow_stack(
+        self._workflow_stack = DashboardHomeShell.build_workflow_stack(
             t,
+            page=page,
             hero=self._hero,
             folder_panel=self._folder_container,
             actions=self._actions,
@@ -333,8 +339,11 @@ class DashboardPage(ft.Column):
             on_open_workspace=self._open_workspace_from_scan_complete,
         )
 
-        scan_section = CollapsibleSection(t, "Scan", workflow_stack, expanded=True)
-        recent_section = CollapsibleSection(
+        self._scan_section = CollapsibleSection(
+            self._bridge, t, "Scan", self._workflow_stack, expanded=True
+        )
+        self._recent_section = CollapsibleSection(
+            self._bridge,
             t,
             "Recent activity",
             ft.Column(
@@ -347,7 +356,8 @@ class DashboardPage(ft.Column):
             ),
             expanded=True,
         )
-        summary_section = CollapsibleSection(
+        self._summary_section = CollapsibleSection(
+            self._bridge,
             t,
             "Summary",
             ft.Column(
@@ -358,6 +368,7 @@ class DashboardPage(ft.Column):
                 spacing=s.xs,
             ),
             expanded=False,
+            on_toggle=self._on_summary_section_toggle,
         )
 
         home_content = ft.Container(
@@ -366,9 +377,9 @@ class DashboardPage(ft.Column):
             content=ft.Column(
                 [
                     ft.Container(content=self._scan_complete_banner.container, width=840),
-                    scan_section,
-                    recent_section,
-                    summary_section,
+                    self._scan_section,
+                    self._recent_section,
+                    self._summary_section,
                 ],
                 spacing=s.sm,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -583,8 +594,9 @@ class DashboardPage(ft.Column):
         DashboardPage._safe_update(self._archives_warning)
         self._save_scan_options_for_mode(self._selected_mode)
 
-    def _toggle_advanced_panel(self, _e: ft.ControlEvent) -> None:
-        self._scan_opts.toggle_advanced_panel(DashboardPage._safe_update)
+    def _on_summary_section_toggle(self, expanded: bool) -> None:
+        if expanded:
+            self._stats_presence.animate_stat_counts_on_first_expand()
 
     def _toggle_scan_options_dropdown(self, _e: ft.ControlEvent) -> None:
         self._scan_opts.toggle_dropdown(DashboardPage._safe_update)
@@ -679,13 +691,13 @@ class DashboardPage(ft.Column):
         self._min_size_slider.value = min_mb
         self._min_size_label.value = f"Min file size: {min_mb} MB"
         self._exclude_paths_tf.value = "\n".join(self._scan_options["exclude_paths"])
-        self._scan_archives_cb.value = bool(self._scan_options["scan_archives"])
+        self._scan_archives_sw.value = bool(self._scan_options["scan_archives"])
         self._archives_warning.visible = bool(self._scan_options["scan_archives"])
         self._include_subfolders_sw.value = bool(self._scan_options["include_subfolders"])
         DashboardPage._safe_update(self._min_size_slider)
         DashboardPage._safe_update(self._min_size_label)
         DashboardPage._safe_update(self._exclude_paths_tf)
-        DashboardPage._safe_update(self._scan_archives_cb)
+        DashboardPage._safe_update(self._scan_archives_sw)
         DashboardPage._safe_update(self._archives_warning)
         DashboardPage._safe_update(self._include_subfolders_sw)
 
@@ -800,15 +812,16 @@ class DashboardPage(ft.Column):
             self._bridge.show_snackbar("No quick-add folders found.", info=True)
 
     async def _flash_folder_validation(self) -> None:
-        original = self._folder_container.border
-        original_bg = self._folder_container.bgcolor
-        self._folder_container.border = ft.border.all(2, "#EF4444")
-        self._folder_container.bgcolor = ft.Colors.with_opacity(0.12, "#EF4444")
-        DashboardPage._safe_update(self._folder_container)
+        inner = self._folder_panel._inner_container
+        original = inner.border
+        original_bg = inner.bgcolor
+        inner.border = ft.border.all(2, "#EF4444")
+        inner.bgcolor = ft.Colors.with_opacity(0.12, "#EF4444")
+        DashboardPage._safe_update(inner)
         await asyncio.sleep(0.35)
-        self._folder_container.border = original
-        self._folder_container.bgcolor = original_bg
-        DashboardPage._safe_update(self._folder_container)
+        inner.border = original
+        inner.bgcolor = original_bg
+        DashboardPage._safe_update(inner)
 
     def _start_scan(self, e: ft.ControlEvent) -> None:
         if not self._folders:
@@ -1033,6 +1046,7 @@ class DashboardPage(ft.Column):
                 created_at=float(m.created_at),
                 on_discard=_make_discard_cb(),
                 on_restore=_make_resume_cb(),
+                page=self._bridge.flet_page,
                 reduce_motion=reduce_motion,
             )
             timer_id = f"ckpt_{m.scan_id}"
@@ -1117,7 +1131,7 @@ class DashboardPage(ft.Column):
             self._min_size_slider.value = min_mb
             self._min_size_label.value = f"Min file size: {min_mb} MB"
             self._exclude_paths_tf.value = "\n".join(merged["exclude_paths"])
-            self._scan_archives_cb.value = merged["scan_archives"]
+            self._scan_archives_sw.value = merged["scan_archives"]
             self._archives_warning.visible = merged["scan_archives"]
             self._include_subfolders_sw.value = merged["include_subfolders"]
         except Exception:
@@ -1171,7 +1185,7 @@ class DashboardPage(ft.Column):
         self._min_size_slider.value = min_mb
         self._min_size_label.value = f"Min file size: {min_mb} MB"
         self._exclude_paths_tf.value = "\n".join(self._scan_options.get("exclude_paths", []))
-        self._scan_archives_cb.value = bool(self._scan_options.get("scan_archives", False))
+        self._scan_archives_sw.value = bool(self._scan_options.get("scan_archives", False))
         self._archives_warning.visible = bool(self._scan_options.get("scan_archives", False))
         self._include_subfolders_sw.value = bool(self._scan_options.get("include_subfolders", True))
         self._refresh_folder_chips()
@@ -1639,8 +1653,21 @@ class DashboardPage(ft.Column):
         tail = max_len - head - 3
         return f"Current: {p[:head]}...{p[-tail:]}"
 
+    def _refresh_reduce_motion(self) -> None:
+        """Re-read accessibility.reduce_motion and push to motion-gated Home controls."""
+        enabled = self._bridge.is_reduce_motion_enabled()
+        if enabled == self._reduce_motion:
+            return
+        self._reduce_motion = enabled
+        self._home_chrome.set_reduce_motion(enabled)
+        self._folder_panel.set_reduce_motion(enabled)
+        for section in (self._scan_section, self._recent_section, self._summary_section):
+            section.set_reduce_motion(enabled)
+
     def on_show(self) -> None:
         import time
+
+        self._refresh_reduce_motion()
 
         # Home is a singleton page. If a scan already finished, returning to Home
         # from top navigation should always restore the normal dashboard shell.
@@ -1672,16 +1699,21 @@ class DashboardPage(ft.Column):
 
     def apply_theme(self, mode: str) -> None:
         """Updates theme properties without destroying UI controls."""
-        self._t = theme_for_mode(mode)
-        
-        # Update styles and colors on existing controls
-        self._hero.bgcolor = self._t.colors.glass_bg
-        self._hero.border = ft.border.all(1, self._t.colors.glass_border)
+        preset_id = None
+        try:
+            appearance = (self._bridge.get_settings() or {}).get("appearance") or {}
+            preset_id = str(appearance.get("ui_theme_preset", "") or "") or None
+        except Exception:
+            preset_id = None
+        self._t = theme_for_mode(mode, preset_id)
+        self._refresh_reduce_motion()
+
         self._home_chrome.sync_theme(self._t)
-        
-        # Re-apply styles to containers
-        self._folder_container.bgcolor = self._t.colors.glass_bg
-        self._folder_container.border = ft.border.all(1, self._t.colors.glass_border)
+        apply_glass_style(self._workflow_stack, self._t)
+        self._scan_section.sync_theme(self._t)
+        self._recent_section.sync_theme(self._t)
+        self._summary_section.sync_theme(self._t)
+        self._scan_complete_banner.sync_theme(self._t)
 
         # Refresh text colors and stats to match new theme
         self._mode_label.color = self._t.colors.fg_muted
@@ -1693,7 +1725,6 @@ class DashboardPage(ft.Column):
         self._folder_panel.sync_theme(self._t)
         self._refresh_folder_chips()
         self._apply_dashboard_pill_chrome()
-        self._hero_tagline_icon.color = self._t.colors.accent
         self._folder_section_icon.color = self._t.colors.accent
         DashboardPage._safe_update(self._hero_tagline_icon)
         DashboardPage._safe_update(self._folder_section_icon)

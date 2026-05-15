@@ -16,6 +16,7 @@ class DashboardHomeShell:
     def build_workflow_stack(
         t: ThemeTokens,
         *,
+        page: ft.Page | None = None,
         hero: ft.Container,
         folder_panel: ft.Container,
         actions: ft.Column,
@@ -78,5 +79,6 @@ class DashboardHomeShell:
             width=840,
             padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.md),
             t=t,
+            page=page,
             content=stack,
         )

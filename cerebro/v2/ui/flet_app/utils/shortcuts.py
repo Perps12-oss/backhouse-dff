@@ -77,3 +77,20 @@ def try_handle_nav_digit_shortcut(
         page.route = info.route
         layout.navigate_to(route_key)
     return True
+
+
+def register_global_shortcuts(
+    page: ft.Page,
+    layout: "AppLayout",
+    bridge: "StateBridge",
+    *,
+    on_unhandled: Callable[[ft.KeyboardEvent], None] | None = None,
+) -> None:
+    """Install ``page.on_keyboard_event``; nav digit shortcuts run first."""
+    def _handler(e: ft.KeyboardEvent) -> None:
+        if try_handle_nav_digit_shortcut(e, page=page, layout=layout, bridge=bridge):
+            return
+        if on_unhandled is not None:
+            on_unhandled(e)
+
+    page.on_keyboard_event = _handler

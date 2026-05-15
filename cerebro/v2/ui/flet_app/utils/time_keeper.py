@@ -48,8 +48,14 @@ class TimeKeeper:
     def register(self, banner_id: str, callback: Callable[[], None]) -> None:
         self._callbacks[banner_id] = callback
 
+    def register_banner(self, banner_id: str, callback: Callable[[], None]) -> None:
+        self.register(banner_id, callback)
+
     def unregister(self, banner_id: str) -> None:
         self._callbacks.pop(banner_id, None)
+
+    def unregister_banner(self, banner_id: str) -> None:
+        self.unregister(banner_id)
 
     def pause(self) -> None:
         self._paused = True

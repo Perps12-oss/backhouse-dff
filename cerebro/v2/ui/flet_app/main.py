@@ -22,7 +22,8 @@ from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
-from cerebro.v2.ui.flet_app.utils.shortcuts import try_handle_nav_digit_shortcut
+from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
+from cerebro.v2.ui.flet_app.utils.shortcuts import register_global_shortcuts
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 _log = logging.getLogger(__name__)
@@ -86,7 +87,8 @@ def _main(page: ft.Page) -> None:
     page.window.min_width = 800
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
-    page.bgcolor = "#0A0E14"
+    # Filled from apply_preset_theme once settings are loaded.
+    page.bgcolor = "#060B14"
     page.padding = 0
     page.spacing = 0
 
@@ -228,6 +230,9 @@ def _main(page: ft.Page) -> None:
         _fs0 = int(_appear0.get("font_size", 13) or 13)
     set_ui_font_size_px(_fs0)
 
+    _preset_id = str((_appear0 or {}).get("ui_theme_preset", "count_byteula"))
+    bridge.apply_preset_theme(_preset_id)
+
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     review_page = _ReviewTabCls(bridge)
@@ -274,6 +279,7 @@ def _main(page: ft.Page) -> None:
     }
 
     layout = AppLayout(page, bridge, builders)
+    sync_reduce_motion_storage(page, bridge)
     _log.info("init: layout built  +%.0fms", (_time.monotonic() - _t0) * 1000)
 
     page.window.title_bar_hidden = True
@@ -599,9 +605,7 @@ def _main(page: ft.Page) -> None:
     time_keeper = TimeKeeper.instance()
     time_keeper.attach(page, is_home_active=lambda: layout.current_key == "dashboard")
 
-    def _on_key_event(e: ft.KeyboardEvent) -> None:
-        if try_handle_nav_digit_shortcut(e, page=page, layout=layout, bridge=bridge):
-            return
+    def _on_other_keyboard(e: ft.KeyboardEvent) -> None:
         key = (e.key or "").lower().replace(" ", "")
         ctrl = bool(getattr(e, "ctrl", False) or getattr(e, "meta", False))
         if key in ("?", "slash") and bool(getattr(e, "shift", False)):
@@ -645,7 +649,7 @@ def _main(page: ft.Page) -> None:
             except Exception:
                 _log.exception("Failed opening Review from Space shortcut")
 
-    page.on_keyboard_event = _on_key_event
+    register_global_shortcuts(page, layout, bridge, on_unhandled=_on_other_keyboard)
 
     def _on_window_event(e: ft.WindowEvent) -> None:
         if e.data in {"close", "resized", "moved", "maximize", "unmaximize"}:
