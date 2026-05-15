@@ -174,6 +174,7 @@ class DashboardPage(ft.Column):
     def _scan_hud_callbacks(self) -> ScanHUDCallbacks:
         return ScanHUDCallbacks(
             on_cancel_scan=self._stop_scan,
+            on_pause_scan=self._on_hero_pause_toggle,
             on_view_results=self._go_to_results,
             on_view_partial_results=self._go_to_partial_results,
             on_home=self._go_to_home,
@@ -1345,6 +1346,10 @@ class DashboardPage(ft.Column):
         btn.visible = True
         btn.disabled = False
         DashboardPage._safe_update(btn)
+        try:
+            self._scan_hud.sync_pause_button(is_paused=paused, is_scanning=show)
+        except Exception:
+            pass
 
     def _on_hero_pause_toggle(self, _e: ft.ControlEvent) -> None:
         if self._was_cancelled:
