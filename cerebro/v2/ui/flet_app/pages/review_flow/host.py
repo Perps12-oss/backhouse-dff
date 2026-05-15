@@ -489,11 +489,14 @@ class ReviewFlowHost(ft.Column):
         )
         self._apply_progress = ft.ProgressBar(value=0, width=400)
         self._apply_progress_label = ft.Text("Preparing…", size=self._t.typography.size_xs)
-        self._apply_outer = ft.Container(padding=16)
+        self._apply_outer = ft.Container(padding=16, width=480)
         self._apply_refresh_body()
         self._apply_sheet = ft.BottomSheet(
             content=self._apply_outer,
             on_dismiss=lambda e: self._apply_sheet_closed(),
+            scrollable=True,
+            bgcolor=self._t.colors.bg2,
+            show_drag_handle=True,
         )
         self._bridge.show_modal_dialog(self._apply_sheet)
 
@@ -1061,8 +1064,12 @@ class ReviewFlowHost(ft.Column):
                     tight=True,
                 ),
                 padding=16,
+                width=400,
             ),
             on_dismiss=lambda e: setattr(self, "_filter_sheet", None),
+            scrollable=True,
+            bgcolor=self._t.colors.bg2,
+            show_drag_handle=True,
         )
         self._filter_sheet = sheet
         self._bridge.show_modal_dialog(sheet)
