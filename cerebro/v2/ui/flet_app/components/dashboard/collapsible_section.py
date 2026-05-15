@@ -26,9 +26,11 @@ class CollapsibleSection(ft.Container):
         self._on_toggle = on_toggle
         self._body_host = ft.Container(content=body, visible=expanded)
         self._chevron = ft.Icon(
-            ft.icons.Icons.EXPAND_LESS if expanded else ft.icons.Icons.EXPAND_MORE,
+            ft.icons.Icons.EXPAND_MORE,
             size=18,
             color=t.colors.fg_muted,
+            animate_rotation=ft.Animation(250, ft.AnimationCurve.EASE_IN_OUT),
+            rotate=ft.Rotate(3.14159 if expanded else 0, alignment=ft.Alignment(0, 0)),
         )
         header = ft.Row(
             [
@@ -59,8 +61,9 @@ class CollapsibleSection(ft.Container):
     def _toggle(self, _e: ft.ControlEvent | None = None) -> None:
         self._expanded = not self._expanded
         self._body_host.visible = self._expanded
-        self._chevron.name = (
-            ft.icons.Icons.EXPAND_LESS if self._expanded else ft.icons.Icons.EXPAND_MORE
+        self._chevron.rotate = ft.Rotate(
+            3.14159 if self._expanded else 0,
+            alignment=ft.Alignment(0, 0),
         )
         if self._on_toggle is not None:
             self._on_toggle(self._expanded)

@@ -22,6 +22,8 @@ from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
+from cerebro.v2.ui.flet_app.utils.shortcuts import try_handle_nav_digit_shortcut
+from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 _log = logging.getLogger(__name__)
 
@@ -594,7 +596,12 @@ def _main(page: ft.Page) -> None:
             idx = 0
         layout.navigate_to(keys[(idx + step) % len(keys)])
 
+    time_keeper = TimeKeeper.instance()
+    time_keeper.attach(page, is_home_active=lambda: layout.current_key == "dashboard")
+
     def _on_key_event(e: ft.KeyboardEvent) -> None:
+        if try_handle_nav_digit_shortcut(e, page=page, layout=layout, bridge=bridge):
+            return
         key = (e.key or "").lower().replace(" ", "")
         ctrl = bool(getattr(e, "ctrl", False) or getattr(e, "meta", False))
         if key in ("?", "slash") and bool(getattr(e, "shift", False)):
@@ -648,6 +655,10 @@ def _main(page: ft.Page) -> None:
 
     def _on_route_change(e: ft.RouteChangeEvent) -> None:
         key = key_for_route(e.route)
+        if key == "dashboard":
+            time_keeper.resume()
+        else:
+            time_keeper.pause()
         layout.navigate_to(key)
 
     page.on_route_change = _on_route_change

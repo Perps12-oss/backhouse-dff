@@ -262,6 +262,26 @@ PRESET_THEMES: Tuple[PalettePreset, ...] = (
         border="#C8BEB0", nav_bg="#2C3E50",
         seed="#E76F51",
     ),
+    PalettePreset(
+        id="neon_void",
+        name="Neon Void",                           # futuristic dark cyan home preset
+        is_dark=True,
+        bg="#0A0E17", bg2="#101624", bg3="#182034",
+        fg="#F1F5F9", fg2="#94A3B8", fg_muted="#64748B",
+        primary="#06B6D4", danger="#F87171", success="#34D399", warning="#F59E0B",
+        border="#1E293B", nav_bg="#080C11",
+        seed="#06B6D4",
+    ),
+    PalettePreset(
+        id="glass_day",
+        name="Glass Day",                           # light futuristic cyan-on-glass preset
+        is_dark=False,
+        bg="#F0F9FF", bg2="#E0F2FE", bg3="#BAE6FD",
+        fg="#0F172A", fg2="#334155", fg_muted="#64748B",
+        primary="#06B6D4", danger="#EF4444", success="#10B981", warning="#F59E0B",
+        border="#CBD5E1", nav_bg="#0F172A",
+        seed="#06B6D4",
+    ),
 )
 
 

@@ -7,7 +7,7 @@ from typing import Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
 
@@ -30,7 +30,7 @@ class DashboardFolderPanel:
         self._folder_section_icon = ft.Icon(
             ft.icons.Icons.FOLDER_OPEN, size=18, color=t.colors.accent
         )
-        self._folder_container = glass_container(
+        self._folder_container = adaptive_glass(
             content=ft.Column(
                 [
                     ft.Row(
@@ -85,21 +85,31 @@ class DashboardFolderPanel:
 
     def refresh_chips(self, folders: list[Path], *, mounted: bool) -> None:
         t = self._t
+        accent = t.colors.accent
         if not folders:
             self._folder_container.height = 108
-            self._folder_container.border = ft.border.all(1, ft.Colors.with_opacity(0.40, "#22D3EE"))
+            self._folder_container.border = ft.border.all(
+                2, ft.Colors.with_opacity(0.35, accent)
+            )
             self._folder_container.border_radius = 12
+            drop_icon = ft.Icon(
+                ft.icons.Icons.FOLDER_OPEN,
+                size=28,
+                color=accent,
+                animate_offset=ft.Animation(3000, ft.AnimationCurve.EASE_IN_OUT),
+                offset=ft.Offset(0, 0),
+            )
             self._folder_chips_row.controls = [
                 ft.Container(
                     border=ft.border.all(1, ft.Colors.with_opacity(0.52, t.colors.border)),
                     border_radius=10,
                     padding=ft.Padding.symmetric(horizontal=12, vertical=14),
-                    bgcolor=ft.Colors.with_opacity(0.07, t.colors.primary),
+                    bgcolor=ft.Colors.with_opacity(0.07, accent),
                     content=ft.Column(
                         [
                             ft.Row(
                                 [
-                                    ft.Icon(ft.icons.Icons.FILE_UPLOAD_OUTLINED, size=24, color="#22D3EE"),
+                                    drop_icon,
                                     ft.Text(
                                         "Drop a folder here or click to browse",
                                         color=t.colors.fg2,
@@ -122,7 +132,7 @@ class DashboardFolderPanel:
             ]
         else:
             self._folder_container.height = None
-            self._folder_container.border = ft.border.all(1, ft.Colors.with_opacity(0.35, "#22D3EE"))
+            self._folder_container.border = ft.border.all(1, ft.Colors.with_opacity(0.35, accent))
             self._folder_chips_row.controls = [
                 ft.Chip(
                     label=ft.Text(str(folder), size=t.typography.size_sm),

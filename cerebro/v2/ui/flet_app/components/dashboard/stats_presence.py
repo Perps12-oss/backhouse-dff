@@ -130,13 +130,14 @@ class DashboardStatsPresence:
                           [
                               ft.Text(
                                   value,
-                                  size=t.typography.size_lg,
+                                  size=24,
                                   weight=ft.FontWeight.W_700,
                                   color=t.colors.fg,
                               ),
                               ft.Text(
-                                  label,
-                                  size=t.typography.size_sm,
+                                  label.upper(),
+                                  size=11,
+                                  weight=ft.FontWeight.W_500,
                                   color=t.colors.fg_muted,
                               ),
                           ],

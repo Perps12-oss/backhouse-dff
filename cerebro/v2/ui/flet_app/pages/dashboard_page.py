@@ -19,7 +19,11 @@ from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_text_button_style,
 )
 from cerebro.v2.ui.flet_app.components.scan.scan_hud import ScanHUD, ScanHUDCallbacks
+from cerebro.v2.ui.flet_app.components.dashboard.checkpoint_restore_card import (
+    build_checkpoint_restore_card,
+)
 from cerebro.v2.ui.flet_app.components.dashboard.collapsible_section import CollapsibleSection
+from cerebro.v2.ui.flet_app.components.dashboard.hero_button import HeroScanButton
 from cerebro.v2.ui.flet_app.components.dashboard.folder_panel import DashboardFolderPanel
 from cerebro.v2.ui.flet_app.components.dashboard.home_chrome import DashboardHomeChrome
 from cerebro.v2.ui.flet_app.components.dashboard.home_shell import DashboardHomeShell
@@ -28,6 +32,7 @@ from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import Dashb
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
 from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -83,7 +88,7 @@ class DashboardPage(ft.Column):
         self._folder_container: ft.Container
         self._actions: ft.Row
         self._last_session_btn: ft.TextButton
-        self._start_btn: ft.FilledButton
+        self._start_btn: HeroScanButton
         self._pause_scan_btn: ft.OutlinedButton
         self._status: ft.Text
         self._cancelled_results_banner: ft.Container
@@ -256,6 +261,7 @@ class DashboardPage(ft.Column):
         self._paused_scans_col = chrome.paused_scans_col
         self._paused_scans_section = chrome.paused_scans_section
         self._home_chrome = chrome
+        self._checkpoint_timer_ids = []
 
         # Stat cards and operational presence
         self._stats_presence = DashboardStatsPresence(
@@ -752,14 +758,7 @@ class DashboardPage(ft.Column):
         self._refresh_folder_chips()
 
     def _sync_start_button_state(self) -> None:
-        self._start_btn.disabled = False
-        self._start_btn.style = pill_filled_accent(
-            self._t,
-            padding=ft.Padding.symmetric(horizontal=56, vertical=28),
-            text_size=self._t.typography.size_xl,
-            weight=ft.FontWeight.W_800,
-            border_radius=14,
-        )
+        self._start_btn.set_disabled(False)
         DashboardPage._safe_update(self._start_btn)
 
     def _apply_dashboard_pill_chrome(self) -> None:
@@ -983,8 +982,15 @@ class DashboardPage(ft.Column):
         except OSError:
             _log.exception("Failed clearing incomplete scan snapshot")
 
+    def _sync_checkpoint_timers(self) -> None:
+        keeper = TimeKeeper.instance()
+        for tid in self._checkpoint_timer_ids:
+            keeper.unregister(tid)
+        self._checkpoint_timer_ids.clear()
+
     def _refresh_paused_scans(self) -> None:
         """Populate the checkpoint-restore cards from checkpoint DB (non-blocking)."""
+        self._sync_checkpoint_timers()
         try:
             from cerebro.v2.core.checkpoint_db import get_checkpoint_db
             ckpt = get_checkpoint_db()
@@ -993,8 +999,9 @@ class DashboardPage(ft.Column):
             manifests = []
 
         t = self._t
-        s = t.spacing
+        reduce_motion = self._bridge.is_reduce_motion_enabled()
         self._paused_scans_col.controls.clear()
+        keeper = TimeKeeper.instance()
 
         for m in manifests:
             total, pending = 0, 0
@@ -1006,8 +1013,6 @@ class DashboardPage(ft.Column):
             if total == 0:
                 continue
             completed = total - pending
-            pct = int(completed / total * 100) if total else 0
-            stamp = time.strftime("%b %d %H:%M", time.localtime(m.created_at))
             folders_preview = ", ".join(Path(p).name for p in m.root_paths[:2])
             if len(m.root_paths) > 2:
                 folders_preview += f" +{len(m.root_paths) - 2}"
@@ -1018,61 +1023,22 @@ class DashboardPage(ft.Column):
             def _make_discard_cb(manifest=m):
                 return lambda _e: self._discard_checkpoint_manifest(manifest)
 
-            card = ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    folders_preview,
-                                    size=t.typography.size_sm,
-                                    weight=ft.FontWeight.W_600,
-                                    color=t.colors.fg,
-                                    no_wrap=True,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
-                                ),
-                                ft.Text(
-                                    f"{completed:,} of {total:,} files hashed ({pct}%) • {stamp}",
-                                    size=t.typography.size_xs,
-                                    color=t.colors.fg_muted,
-                                ),
-                                ft.ProgressBar(
-                                    value=completed / max(1, total),
-                                    width=240,
-                                    height=4,
-                                    color=t.colors.accent,
-                                    bgcolor=ft.Colors.with_opacity(0.2, t.colors.accent),
-                                ),
-                            ],
-                            spacing=3,
-                            expand=True,
-                        ),
-                        ft.Row(
-                            [
-                                ft.TextButton(
-                                    "Discard",
-                                    on_click=_make_discard_cb(),
-                                    style=ft.ButtonStyle(color=t.colors.fg_muted),
-                                ),
-                                ft.FilledButton(
-                                    f"Restore checkpoint ({pending:,} left)",
-                                    on_click=_make_resume_cb(),
-                                    style=ft.ButtonStyle(
-                                        shape=ft.RoundedRectangleBorder(radius=8),
-                                    ),
-                                ),
-                            ],
-                            spacing=s.xs,
-                        ),
-                    ],
-                    spacing=s.md,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.Padding.symmetric(horizontal=s.sm, vertical=s.xs),
-                border_radius=8,
-                bgcolor=ft.Colors.with_opacity(0.06, t.colors.fg),
+            built = build_checkpoint_restore_card(
+                t,
+                scan_id=m.scan_id,
+                folders_preview=folders_preview,
+                completed=completed,
+                total=total,
+                pending=pending,
+                created_at=float(m.created_at),
+                on_discard=_make_discard_cb(),
+                on_restore=_make_resume_cb(),
+                reduce_motion=reduce_motion,
             )
-            self._paused_scans_col.controls.append(card)
+            timer_id = f"ckpt_{m.scan_id}"
+            keeper.register(timer_id, built.update_relative)
+            self._checkpoint_timer_ids.append(timer_id)
+            self._paused_scans_col.controls.append(built.container)
 
         has_items = bool(self._paused_scans_col.controls)
         self._paused_scans_section.visible = has_items
@@ -1697,6 +1663,10 @@ class DashboardPage(ft.Column):
         should_refresh_lists = (not self._initial_load_done) or ((now - self._last_on_show_ts) > 1.5)
         if should_refresh_lists:
             self._last_on_show_ts = now
+            try:
+                self._refresh_paused_scans()
+            except Exception:
+                _log.debug("checkpoint refresh on show failed", exc_info=True)
         self._initial_load_done = True
         # Do not call super().update() here unnecessarily if _fetch handled updates
 

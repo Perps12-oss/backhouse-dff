@@ -13,6 +13,8 @@ import flet as ft
 
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.utils.motion import should_animate
+from cerebro.v2.ui.flet_app.utils.shortcuts import format_nav_shortcut_label
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -75,15 +77,19 @@ class AppLayout(ft.Column):
         self._nav_labels: dict[str, ft.Text] = {}
         self._nav_icons: dict[str, ft.Icon] = {}
         self._nav_hover_key: str | None = None
+        self._nav_pill_stride = 106
         nav_button_row = ft.Row(spacing=6, tight=True)
-        for route in self._nav_routes:
+        for idx, route in enumerate(self._nav_routes):
             icon = ft.Icon(route.icon, size=16)
             label = ft.Text(route.label, size=11, weight=ft.FontWeight.W_600)
+            shortcut = format_nav_shortcut_label(page, idx + 1)
             pill = ft.Container(
-                border_radius=999,
+                border_radius=16,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=7),
                 ink=True,
+                bgcolor=ft.Colors.TRANSPARENT,
                 animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+                tooltip=f"{route.label} ({shortcut})",
                 content=ft.Row(
                     [icon, label],
                     spacing=6,
@@ -98,6 +104,36 @@ class AppLayout(ft.Column):
             self._nav_icons[route.key] = icon
             nav_button_row.controls.append(pill)
 
+        self._nav_indicator = ft.Container(
+            height=34,
+            width=self._nav_pill_stride,
+            border_radius=16,
+            left=0,
+            animate_position=ft.Animation(300, ft.AnimationCurve.EASE_OUT_CUBIC),
+        )
+        nav_track = ft.Container(
+            border_radius=24,
+            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+            content=ft.Stack([self._nav_indicator, nav_button_row]),
+        )
+
+        self._grid_bg = ft.Container(
+            expand=True,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(0, -1),
+                end=ft.Alignment(0, 1),
+                colors=[
+                    ft.Colors.with_opacity(0.04, "#94A3B8"),
+                    ft.Colors.TRANSPARENT,
+                ],
+                stops=[0.0, 0.08],
+            ),
+        )
+        self._content_stack = ft.Stack(
+            [self._grid_bg, self._content_host],
+            expand=True,
+        )
+
         self._top_nav = ft.Container(
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
@@ -105,7 +141,7 @@ class AppLayout(ft.Column):
                 [
                     self._brand_block,
                     ft.Container(width=12),
-                    nav_button_row,
+                    nav_track,
                     ft.Container(expand=True),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -114,7 +150,7 @@ class AppLayout(ft.Column):
 
         self.controls = [
             self._top_nav,
-            self._content_host,
+            self._content_stack,
         ]
         self._apply_nav_theme()
 
@@ -140,6 +176,16 @@ class AppLayout(ft.Column):
         c = self._t.colors
         self._top_nav.bgcolor = c.nav_bg
         self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
+        if hasattr(self, "_grid_bg"):
+            self._grid_bg.gradient = ft.LinearGradient(
+                begin=ft.Alignment(0, -1),
+                end=ft.Alignment(0, 1),
+                colors=[
+                    ft.Colors.with_opacity(0.04, c.fg_muted),
+                    ft.Colors.TRANSPARENT,
+                ],
+                stops=[0.0, 0.08],
+            )
         self._brand_icon.color = c.accent
         self._brand_text.color = c.fg
         self._sync_nav_selection()
@@ -147,45 +193,29 @@ class AppLayout(ft.Column):
     def _sync_nav_selection(self) -> None:
         c = self._t.colors
         selected_key = "settings" if self._current_key == "exclude" else self._current_key
+        sel_idx = self._selected_nav_index_for_key(selected_key or "dashboard")
+        self._nav_indicator.left = sel_idx * self._nav_pill_stride
+        self._nav_indicator.bgcolor = ft.Colors.with_opacity(0.15, c.accent)
+        self._nav_indicator.border = ft.border.all(1, ft.Colors.with_opacity(0.28, c.accent))
+        self._nav_indicator.shadow = ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=14,
+            color=ft.Colors.with_opacity(0.22, c.accent),
+            offset=ft.Offset(0, 2),
+        )
+        if not should_animate(self._bridge):
+            self._nav_indicator.animate_position = None
+
         for key, pill in self._nav_pills.items():
             is_selected = key == selected_key
             is_hovered = (self._nav_hover_key == key) and not is_selected
             label = self._nav_labels[key]
             icon = self._nav_icons[key]
-            label.color = c.fg if (is_selected or is_hovered) else c.fg2
+            label.color = c.accent if is_selected else (c.fg if is_hovered else c.fg2)
             icon.color = c.accent if is_selected else (c.fg if is_hovered else c.fg_muted)
-            pill.bgcolor = (
-                ft.Colors.with_opacity(0.18, c.accent)
-                if is_selected
-                else ft.Colors.with_opacity(0.08, c.accent)
-                if is_hovered
-                else ft.Colors.TRANSPARENT
-            )
-            pill.border = ft.border.all(
-                1,
-                ft.Colors.with_opacity(0.44, c.accent)
-                if is_selected
-                else ft.Colors.with_opacity(0.26, c.accent)
-                if is_hovered
-                else ft.Colors.with_opacity(0.20, c.border),
-            )
-            pill.shadow = (
-                ft.BoxShadow(
-                    spread_radius=0,
-                    blur_radius=12,
-                    color=ft.Colors.with_opacity(0.18, c.accent),
-                    offset=ft.Offset(0, 2),
-                )
-                if is_selected
-                else ft.BoxShadow(
-                    spread_radius=0,
-                    blur_radius=8,
-                    color=ft.Colors.with_opacity(0.12, c.accent),
-                    offset=ft.Offset(0, 1),
-                )
-                if is_hovered
-                else None
-            )
+            pill.bgcolor = ft.Colors.TRANSPARENT
+            pill.border = None
+            pill.shadow = None
 
     def apply_theme(self, mode: str) -> None:
         """Repaint shell controls when the app theme changes."""
@@ -230,6 +260,14 @@ class AppLayout(ft.Column):
         self._current_key = key
         _ = self._selected_nav_index_for_key(key)
         self._sync_nav_selection()
+        if key == "dashboard":
+            from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
+
+            TimeKeeper.instance().resume()
+        else:
+            from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
+
+            TimeKeeper.instance().pause()
         if self.page is not None:
             self.update()
 
