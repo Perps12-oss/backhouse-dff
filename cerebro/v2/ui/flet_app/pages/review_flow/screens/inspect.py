@@ -302,7 +302,6 @@ def build_inspect_screen(
     on_swap_panels,
     on_pin_compare_as_reference,
     on_step_compare,
-    on_proceed_execute,
     on_toggle_diff=None,
     on_toggle_blink=None,
     stub_only: bool = False,
@@ -327,17 +326,7 @@ def build_inspect_screen(
                     alignment=ft.Alignment.CENTER,
                     content=ft.Text("Inspect screen stub — comparison arrives in Slice 2"),
                 ),
-                ft.Row(
-                    [
-                        ft.FilledButton("Back to Browse", on_click=on_back),
-                        ft.IconButton(
-                            icon=ft.icons.Icons.PLAY_ARROW,
-                            tooltip="Apply cleanup — confirm in sheet",
-                            on_click=on_proceed_execute,
-                        ),
-                    ],
-                    spacing=8,
-                ),
+                ft.Row([ft.FilledButton("Back to Browse", on_click=on_back)], spacing=8),
             ],
             expand=True,
         ), None, None
@@ -354,11 +343,6 @@ def build_inspect_screen(
             ft.Container(expand=True),
             ft.IconButton(icon=ft.icons.Icons.ARROW_BACK, tooltip="Previous set ([ or PgUp)", on_click=on_prev_set),
             ft.IconButton(icon=ft.icons.Icons.ARROW_FORWARD, tooltip="Next set (] or PgDn)", on_click=on_next_set),
-            ft.IconButton(
-                icon=ft.icons.Icons.PLAY_ARROW,
-                tooltip="Apply cleanup — confirm in sheet",
-                on_click=on_proceed_execute,
-            ),
         ],
     )
     panel_left, slot_left = _preview_panel(t, left, role_label=left_role, panel_label="A (left)")
@@ -423,15 +407,25 @@ def build_inspect_screen(
             expand=True,
         ),
     )
-    actions = ft.Row(
+    actions = ft.Column(
         [
-            ft.OutlinedButton("Keep left file", on_click=on_keep_left),
-            ft.OutlinedButton("Keep right file", on_click=on_keep_right),
-            ft.OutlinedButton("Keep both", on_click=on_keep_both),
-            ft.FilledButton("Delete all in set", on_click=on_delete_all),
-            ft.FilledButton("Mark & next set", on_click=on_mark_next),
+            ft.Row(
+                [
+                    ft.OutlinedButton("Keep left file", on_click=on_keep_left),
+                    ft.OutlinedButton("Keep right file", on_click=on_keep_right),
+                    ft.OutlinedButton("Keep both", on_click=on_keep_both),
+                    ft.FilledButton("Delete all in set", on_click=on_delete_all),
+                    ft.FilledButton("Mark & next set", on_click=on_mark_next),
+                ],
+                wrap=True,
+            ),
+            ft.Text(
+                "Bulk deletion (managed storage): go to Browse and tap Apply cleanup.",
+                size=_META_CELL_SIZE - 1,
+                color=t.colors.fg_muted,
+            ),
         ],
-        wrap=True,
+        spacing=4,
     )
     inspect_body: List[ft.Control] = [header, previews, cmp_nav]
     if strip is not None:

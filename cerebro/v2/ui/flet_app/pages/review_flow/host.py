@@ -130,7 +130,13 @@ class ReviewFlowHost(ft.Column):
                     expand=True,
                 )
             else:
-                self._content.content = overview_body
+                # Plain Column(expand=True) as the only child of Container(expand=True) can get
+                # zero height on some Flet builds (blank after Apply → "Back to review").
+                self._content.content = ft.Container(
+                    expand=True,
+                    alignment=ft.Alignment.TOP_CENTER,
+                    content=overview_body,
+                )
         elif screen == "browse":
             self._browse_view = BrowseScreenView(
                 t,
@@ -169,7 +175,6 @@ class ReviewFlowHost(ft.Column):
                 on_swap_panels=self._inspect_swap_panels,
                 on_pin_compare_as_reference=self._inspect_pin_compare_as_reference,
                 on_step_compare=self._inspect_step_compare,
-                on_proceed_execute=self._open_apply_sheet,
                 on_toggle_diff=self._toggle_inspect_diff,
                 on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
@@ -443,7 +448,7 @@ class ReviewFlowHost(ft.Column):
         self._apply_sheet_closed()
 
     def _apply_refresh_body(self) -> None:
-        if self._apply_sheet is None or self._apply_outer is None:
+        if self._apply_outer is None:
             return
         t = self._t
         buckets = self._state.cart_buckets()
@@ -598,8 +603,22 @@ class ReviewFlowHost(ft.Column):
 
     def _apply_finish_overview(self, _e=None) -> None:
         self._apply_close_sheet()
-        self._router.reset_to_overview()
+        self._state.browse_detail_group_id = None
+        if len(self._state.scan_results) > 0:
+            # Go straight to Browse — avoid overview→browse in one click (double opacity transition
+            # on _content can leave the page stuck transparent / blank on some Flet builds).
+            self._state.screen_stack = ["overview", "browse"]
+            self._state.active_screen = "browse"
+        else:
+            self._state.screen_stack = ["overview"]
+            self._state.active_screen = "overview"
         self._render_active_screen()
+        try:
+            self._content.opacity = 1.0
+            self._content.animate_opacity = None
+        except Exception:
+            pass
+        self._safe_update(self._content)
 
     def _apply_finish_new_scan(self, _e=None) -> None:
         self._apply_close_sheet()
@@ -653,7 +672,20 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.refresh()
         self._rebuild_sidebar_in_place()
-        self._safe_update(self._content)
+        self._defer_safe_update_content()
+
+    def _defer_safe_update_content(self) -> None:
+        """Defer parent content paint one frame — avoids blank main after heavy Browse refresh + dialog."""
+        page = getattr(self._bridge, "flet_page", None)
+        if page is None or not hasattr(page, "run_task"):
+            self._safe_update(self._content)
+            return
+
+        async def _tick() -> None:
+            await asyncio.sleep(0)
+            self._safe_update(self._content)
+
+        page.run_task(_tick)
 
     def _inspect_prev(self, _e=None) -> None:
         groups = self._state.visible_groups()
