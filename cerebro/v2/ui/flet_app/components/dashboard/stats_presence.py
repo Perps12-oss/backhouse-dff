@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style, fmt_size
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
+from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 from cerebro.v2.ui.flet_app.utils.motion import should_animate
 
 if TYPE_CHECKING:
@@ -48,17 +48,20 @@ class DashboardStatsPresence:
           size=t.typography.size_sm,
           weight=ft.FontWeight.W_700,
           color=t.colors.fg,
+          text_align=ft.TextAlign.CENTER,
       )
       self._presence_body = ft.Text(
           "",
           size=t.typography.size_xs,
           color=t.colors.fg2,
+          text_align=ft.TextAlign.CENTER,
       )
       self._presence_mtime = ft.Text(
           "",
           size=t.typography.size_xs,
           color=t.colors.fg_muted,
           italic=True,
+          text_align=ft.TextAlign.CENTER,
       )
       self._insights_row = ft.Row(
           [],
@@ -67,11 +70,10 @@ class DashboardStatsPresence:
           wrap=True,
           alignment=ft.MainAxisAlignment.CENTER,
       )
-      self._presence_row = glass_container(
+      self._presence_row = minimal_surface(
           visible=False,
           width=620,
           padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
-          t=t,
           content=ft.Column(
               [
                   self._presence_title,
@@ -82,6 +84,7 @@ class DashboardStatsPresence:
               ],
               spacing=2,
               tight=True,
+              horizontal_alignment=ft.CrossAxisAlignment.CENTER,
           ),
       )
       self._stats_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=s.md)
@@ -100,10 +103,10 @@ class DashboardStatsPresence:
 
   def sync_theme(self, t: ThemeTokens) -> None:
       self._t = t
-      apply_glass_style(self._presence_row, t)
+      apply_minimal_style(self._presence_row)
       for ctrl in self._stats_row.controls:
           if isinstance(ctrl, ft.GestureDetector) and isinstance(ctrl.content, ft.Container):
-              apply_glass_style(ctrl.content, t)
+              apply_minimal_style(ctrl.content)
 
   def set_mtime_caption(self, value: str) -> None:
       self._presence_mtime.value = value
@@ -127,16 +130,10 @@ class DashboardStatsPresence:
       self._stat_count_targets = []
       controls: list[ft.Control] = []
       for icon, accent, label, numeric_target, value in cards:
-          tile = glass_container(
+          tile = minimal_surface(
               content=ft.Row(
                   [
-                      ft.Container(
-                          content=ft.Icon(icon, size=20, color=accent),
-                          bgcolor=ft.Colors.with_opacity(0.18, accent),
-                          border=ft.border.all(1, ft.Colors.with_opacity(0.24, accent)),
-                          border_radius=8,
-                          padding=8,
-                      ),
+                      ft.Icon(icon, size=22, color=accent),
                       ft.Column(
                           [
                               (value_text := ft.Text(
@@ -144,23 +141,26 @@ class DashboardStatsPresence:
                                   size=24,
                                   weight=ft.FontWeight.W_700,
                                   color=t.colors.fg,
+                                  text_align=ft.TextAlign.CENTER,
                               )),
                               ft.Text(
                                   label.upper(),
                                   size=11,
                                   weight=ft.FontWeight.W_500,
                                   color=t.colors.fg_muted,
+                                  text_align=ft.TextAlign.CENTER,
                               ),
                           ],
                           spacing=2,
                           tight=True,
+                          horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                       ),
                   ],
                   vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                  alignment=ft.MainAxisAlignment.CENTER,
                   spacing=10,
               ),
-              t=self._t,
-              padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+              padding=ft.Padding.symmetric(horizontal=14, vertical=6),
           )
           self._stat_value_texts.append(value_text)
           if label == "Space Recovered":
@@ -267,7 +267,7 @@ class DashboardStatsPresence:
               )
 
       self._insights_row.controls = chips
-      apply_glass_style(self._presence_row, t)
+      apply_minimal_style(self._presence_row)
       self._presence_row.visible = True
       self._safe_update(self._presence_title)
       self._safe_update(self._presence_body)
@@ -287,9 +287,9 @@ class DashboardStatsPresence:
               spacing=4,
               vertical_alignment=ft.CrossAxisAlignment.CENTER,
           ),
-          padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+          padding=ft.Padding.symmetric(horizontal=10, vertical=4),
           border_radius=999,
-          bgcolor=ft.Colors.with_opacity(0.1, accent),
+          border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent)),
       )
 
   def animate_stat_counts_on_first_expand(self) -> None:

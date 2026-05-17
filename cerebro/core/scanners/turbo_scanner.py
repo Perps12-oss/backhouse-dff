@@ -624,7 +624,9 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
     Returns list of (path, size, mtime) tuples.
 
     ``args`` ends with optional ``skip_system`` and ``cancel_event`` (threads only).
-    Legacy 8/9-tuples omit ``skip_system`` (treated as False).
+    Legacy 8-tuples omit ``skip_system`` (treated as False).
+    Multiprocessing discovery passes 9 fields (ends with ``skip_system`` bool, no cancel).
+    Legacy 9-tuples with only ``cancel_event`` (no ``skip_system``) are still accepted.
     """
     skip_system = False
     cancel_event = None
@@ -641,7 +643,7 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
             skip_system,
             cancel_event,
         ) = args[:10]
-    elif len(args) >= 9:
+    elif len(args) == 9 and hasattr(args[8], "is_set"):
         (
             directory,
             skip_hidden,
@@ -652,6 +654,18 @@ def walk_directory_worker(args: Tuple[Any, ...]) -> List[Tuple[Path, int, float]
             max_size,
             scan_archives,
             cancel_event,
+        ) = args[:9]
+    elif len(args) >= 9:
+        (
+            directory,
+            skip_hidden,
+            exclude_dirs,
+            exclude_paths,
+            recursive,
+            min_size,
+            max_size,
+            scan_archives,
+            skip_system,
         ) = args[:9]
     else:
         (

@@ -134,26 +134,32 @@ class ReviewFlowHost(ft.Column):
                 # zero height on some Flet builds (blank after Apply → "Back to review").
                 self._content.content = ft.Container(
                     expand=True,
-                    alignment=ft.Alignment.TOP_CENTER,
+                    alignment=ft.Alignment(0, 0),
                     content=overview_body,
                 )
         elif screen == "browse":
-            self._browse_view = BrowseScreenView(
-                t,
-                self._state,
-                on_back=self._on_back,
-                on_open_inspect=self._open_inspect,
-                on_open_group_detail=self._browse_open_detail,
-                on_close_group_detail=self._browse_close_detail,
-                on_toggle_file_mark=self._browse_toggle_file_mark,
-                on_apply_smart_rule_all=self._apply_smart_rule_all_visible,
-                on_start_delete_ceremony=self._open_apply_sheet,
-                on_proceed_execute=self._open_apply_sheet,
-                reduce_motion=self._reduce_motion,
-            )
             page = getattr(self._bridge, "flet_page", None)
-            if page is not None:
-                self._browse_view.attach_page(page)
+            if self._browse_view is None:
+                self._browse_view = BrowseScreenView(
+                    t,
+                    self._state,
+                    on_back=self._on_back,
+                    on_open_inspect=self._open_inspect,
+                    on_open_group_detail=self._browse_open_detail,
+                    on_close_group_detail=self._browse_close_detail,
+                    on_toggle_file_mark=self._browse_toggle_file_mark,
+                    on_apply_smart_rule_all=self._apply_smart_rule_all_visible,
+                    on_start_delete_ceremony=self._open_apply_sheet,
+                    on_proceed_execute=self._open_apply_sheet,
+                    reduce_motion=self._reduce_motion,
+                )
+                if page is not None:
+                    self._browse_view.attach_page(page)
+            else:
+                self._browse_view.apply_theme(t)
+                self._browse_view.set_reduce_motion(self._reduce_motion)
+                if page is not None:
+                    self._browse_view.attach_page(page)
             self._content.content = self._browse_view.root
             self._grid = self._browse_view.list_host
             self._browse_view.refresh()
@@ -652,7 +658,7 @@ class ReviewFlowHost(ft.Column):
             sel.deleted_paths.discard(p)
         self._push_marked_paths_to_store()
         if self._browse_view:
-            self._browse_view.refresh()
+            self._browse_view.sync_checkbox_marks()
 
     def _apply_smart_rule_all_visible(self, rule: str) -> None:
         """Mark delete candidates in every visible duplicate group using the smart rule."""
@@ -675,7 +681,8 @@ class ReviewFlowHost(ft.Column):
         else:
             self._show_toast("Nothing to mark — adjust filters or pick another rule.")
         if self._browse_view:
-            self._browse_view.refresh()
+            self._browse_view.sync_checkbox_marks()
+            self._browse_view.refresh(rebuild=False)
         self._rebuild_sidebar_in_place()
         self._defer_safe_update_content()
 

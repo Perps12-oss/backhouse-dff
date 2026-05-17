@@ -52,11 +52,11 @@ def _register_presets() -> None:
         max_builds_per_tick=20,
     )
     _PRESETS[REVIEW_GROUPS_CHUNK_CONFIG] = ChunkedViewConfig(
-        async_threshold=40,
-        first_sync_count=40,
-        batch_size=40,
-        max_items=None,
-        max_builds_per_tick=20,
+        async_threshold=48,
+        first_sync_count=12,
+        batch_size=24,
+        max_items=MAX_RENDERED_GROUPS,
+        max_builds_per_tick=16,
     )
     _PRESETS[REVIEW_GRID_FILES_CHUNK_CONFIG] = ChunkedViewConfig(
         async_threshold=220,

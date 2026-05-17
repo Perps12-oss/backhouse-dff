@@ -67,32 +67,42 @@ def build_overview_screen(
         )
         icon = ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=56, color=t.colors.fg_muted)
 
-    def metric_card(label: str, value: str) -> ft.Container:
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(value, size=t.typography.size_xl, weight=ft.FontWeight.W_700, color=t.colors.fg),
-                    ft.Text(label, size=t.typography.size_xs, color=t.colors.fg_muted),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=2,
-            ),
-            padding=16,
-            border_radius=8,
-            border=ft.border.all(1, t.colors.border),
-            bgcolor=t.colors.bg2,
-            expand=True,
+    def metric_stat(label: str, value: str) -> ft.Column:
+        return ft.Column(
+            [
+                ft.Text(
+                    value,
+                    size=t.typography.size_xl,
+                    weight=ft.FontWeight.W_700,
+                    color=t.colors.fg,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Text(
+                    label,
+                    size=t.typography.size_xs,
+                    color=t.colors.fg_muted,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=2,
+            tight=True,
         )
 
-    card_controls: list[ft.Container] = [
-        metric_card("duplicate sets", f"{metrics['set_count']:,}"),
-        metric_card("files in groups", f"{metrics['file_count']:,}"),
-        metric_card("reclaimable", fmt_size(int(metrics["reclaimable_bytes"]))),
+    stat_controls: list[ft.Column] = [
+        metric_stat("duplicate sets", f"{metrics['set_count']:,}"),
+        metric_stat("files in groups", f"{metrics['file_count']:,}"),
+        metric_stat("reclaimable", fmt_size(int(metrics["reclaimable_bytes"]))),
     ]
     if scan_elapsed_seconds is not None and scan_elapsed_seconds > 0:
-        card_controls.append(metric_card("last scan", _format_elapsed(float(scan_elapsed_seconds))))
+        stat_controls.append(metric_stat("last scan", _format_elapsed(float(scan_elapsed_seconds))))
 
-    cards = ft.Row(card_controls, spacing=12)
+    cards = ft.Row(
+        stat_controls,
+        spacing=32,
+        alignment=ft.MainAxisAlignment.CENTER,
+        wrap=True,
+    )
 
     start_btn = ft.FilledButton(
         "Start review",
@@ -111,13 +121,24 @@ def build_overview_screen(
             ft.Container(height=24),
             start_btn,
             ft.Container(height=32),
-            ft.Text("Recent reviews", size=t.typography.size_sm, color=t.colors.fg_muted),
+            ft.Text(
+                "Recent reviews",
+                size=t.typography.size_sm,
+                color=t.colors.fg_muted,
+                text_align=ft.TextAlign.CENTER,
+            ),
             ft.Column(
                 [
-                    ft.Text(line, size=t.typography.size_xs, color=t.colors.fg_muted)
+                    ft.Text(
+                        line,
+                        size=t.typography.size_xs,
+                        color=t.colors.fg_muted,
+                        text_align=ft.TextAlign.CENTER,
+                    )
                     for line in (recent_lines or ["No saved sessions yet"])
                 ],
                 spacing=2,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,

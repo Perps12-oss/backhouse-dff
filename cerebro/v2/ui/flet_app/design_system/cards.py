@@ -39,3 +39,34 @@ def apply_flat_style(container: ft.Container, t: ThemeTokens) -> None:
     container.shadow = None
     if getattr(container, "blur", None) is not None:
         container.blur = None
+
+
+def minimal_surface(
+    content: ft.Control,
+    *,
+    padding: int | ft.Padding | float = 0,
+    width: int | float | None = None,
+    alignment: ft.Alignment | None = None,
+    expand: bool | int = False,
+    **kwargs,
+) -> ft.Container:
+    """Transparent wrapper — dotted shell background shows through."""
+    return ft.Container(
+        content=content,
+        bgcolor=None,
+        border=None,
+        shadow=None,
+        padding=padding,
+        width=width,
+        alignment=alignment,
+        expand=expand,
+        **kwargs,
+    )
+
+
+def apply_minimal_style(container: ft.Container) -> None:
+    """Remove solid card fill so only content and optional borders remain."""
+    container.bgcolor = None
+    container.shadow = None
+    if getattr(container, "blur", None) is not None:
+        container.blur = None

@@ -20,9 +20,9 @@ def overview_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Colu
     cards = []
     for _ in range(3):
         c = ft.Container(
-            height=88,
-            expand=True,
-            border_radius=8,
+            height=12,
+            width=96,
+            border_radius=4,
             bgcolor=t.colors.border,
             opacity=op,
             animate_opacity=anim,
@@ -34,9 +34,9 @@ def overview_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Colu
             ft.Row(cards, spacing=12),
             ft.Container(height=16),
             ft.Container(
-                width=280,
-                height=40,
-                border_radius=8,
+                width=200,
+                height=10,
+                border_radius=4,
                 bgcolor=t.colors.border,
                 opacity=op,
                 animate_opacity=anim,
@@ -52,12 +52,12 @@ def browse_skeleton(t: ThemeTokens, *, reduce_motion: bool = False) -> ft.Column
     for _ in range(8):
         rows.append(
             ft.Container(
-                height=BROWSE_SKELETON_ROW_H,
-                border_radius=8,
+                height=10,
+                width=220,
+                border_radius=4,
                 bgcolor=t.colors.border,
                 opacity=op,
                 animate_opacity=anim,
-                border=ft.Border.all(1, t.colors.border),
             )
         )
     return ft.Column(rows, spacing=6, expand=True)

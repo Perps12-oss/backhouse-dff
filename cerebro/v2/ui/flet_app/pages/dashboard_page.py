@@ -31,7 +31,7 @@ from cerebro.v2.ui.flet_app.components.dashboard.scan_complete_banner import Sca
 from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import DashboardScanOptionsPanel
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style
 from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
@@ -360,10 +360,21 @@ class DashboardPage(ft.Column):
             ft.Column(
                 [
                     self._paused_scans_section,
-                    ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.xs)),
-                    ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(
+                        content=self._status,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
+                    ft.Container(
+                        content=self._cancelled_results_banner,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
                 ],
                 spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             expanded=True,
         )
@@ -373,17 +384,27 @@ class DashboardPage(ft.Column):
             "Summary",
             ft.Column(
                 [
-                    ft.Container(content=self._stats_row, width=360),
-                    ft.Container(content=self._presence_row, width=620, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(
+                        content=self._stats_row,
+                        width=620,
+                        alignment=ft.Alignment(0, 0),
+                    ),
+                    ft.Container(
+                        content=self._presence_row,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
                 ],
                 spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             expanded=False,
             on_toggle=self._on_summary_section_toggle,
         )
 
         home_content = ft.Container(
-            alignment=ft.Alignment(0, -1),
+            alignment=ft.Alignment(0, 0),
             padding=ft.padding.only(top=4),
             content=ft.Column(
                 [
@@ -1758,7 +1779,7 @@ class DashboardPage(ft.Column):
         self._refresh_reduce_motion()
 
         self._home_chrome.sync_theme(self._t)
-        apply_flat_style(self._workflow_stack, self._t)
+        apply_minimal_style(self._workflow_stack)
         self._scan_section.sync_theme(self._t)
         self._recent_section.sync_theme(self._t)
         self._summary_section.sync_theme(self._t)

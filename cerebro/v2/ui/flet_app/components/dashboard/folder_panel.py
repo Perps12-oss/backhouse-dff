@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
+from cerebro.v2.ui.flet_app.theme import ThemeTokens
 from cerebro.v2.ui.flet_app.utils.motion import animation_or_none, should_animate
 
 if TYPE_CHECKING:
@@ -121,11 +121,16 @@ class DashboardFolderPanel:
         self._float_task_active = False
         self._drop_icon: ft.Icon | None = None
         s = t.spacing
-        self._folder_chips_row = ft.Row([], wrap=True, spacing=s.xs)
+        self._folder_chips_row = ft.Row(
+            [],
+            wrap=True,
+            spacing=s.xs,
+            alignment=ft.MainAxisAlignment.CENTER,
+        )
         self._folder_section_icon = ft.Icon(
             ft.icons.Icons.FOLDER_OPEN, size=18, color=t.colors.accent
         )
-        self._inner_container = adaptive_glass(
+        self._inner_container = minimal_surface(
             content=ft.Column(
                 [
                     ft.Row(
@@ -136,9 +141,10 @@ class DashboardFolderPanel:
                                 color=t.colors.fg_muted,
                                 size=t.typography.size_sm,
                                 weight=ft.FontWeight.W_600,
+                                text_align=ft.TextAlign.CENTER,
                             ),
-                            ft.Container(expand=True),
                         ],
+                        alignment=ft.MainAxisAlignment.CENTER,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     self._folder_chips_row,
@@ -149,13 +155,14 @@ class DashboardFolderPanel:
                             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=999)),
                         ),
                         padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
                     ),
                 ],
                 spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            t=t,
-            page=page,
             padding=s.md,
+            width=620,
         )
         self._inner_container.on_click = on_browse
         self._inner_container.on_hover = self._on_hover
@@ -189,7 +196,7 @@ class DashboardFolderPanel:
 
     def sync_theme(self, t: ThemeTokens) -> None:
         self._t = t
-        apply_glass_style(self._inner_container, t)
+        apply_minimal_style(self._inner_container)
         self._folder_section_icon.color = t.colors.accent
         self._apply_border_style()
 
@@ -208,6 +215,7 @@ class DashboardFolderPanel:
         return str(self._t.colors.primary)
 
     def _apply_border_style(self) -> None:
+        self._inner_container.bgcolor = None
         accent = self._t.colors.accent
         if self._drag_over:
             glow = self._border_glow_color()

@@ -19,6 +19,24 @@ from cerebro.v2.core.checkpoint_db import CheckpointDB
 from cerebro.v2.ui.flet_app.components.scan.scan_hud import ScanHUD
 
 
+def test_walk_directory_worker_nine_tuple_is_skip_system_not_cancel(tmp_path: Path) -> None:
+    """MP discovery passes 9 args ending with skip_system; must not call bool.is_set()."""
+    (tmp_path / "a.txt").write_bytes(b"x")
+    args = (
+        tmp_path,
+        True,
+        set(),
+        set(),
+        True,
+        0,
+        0,
+        False,
+        True,
+    )
+    found = walk_directory_worker(args)
+    assert any(p.name == "a.txt" for p, _, _ in found)
+
+
 def test_walk_skips_windows_when_skip_system_true(tmp_path: Path) -> None:
     root = tmp_path / "drive"
     root.mkdir(parents=True)

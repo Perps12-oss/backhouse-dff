@@ -6,7 +6,7 @@ from typing import Callable, List, Optional
 
 import flet as ft
 
-from cerebro.engines.base_engine import DuplicateGroup
+from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.components.common.chunked_view import (
     ChunkedViewBuilder,
     RESULTS_GRID_CHUNK_CONFIG,
@@ -20,7 +20,11 @@ from cerebro.v2.ui.flet_app.pages.review_flow import trust_labels
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_BROWSE_EDGE, get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
-_GRID_THUMB_EDGE = 200
+_GRID_THUMB_EDGE = 140
+_FILE_THUMB_EDGE = 88
+_LIST_THUMB_EDGE = 44
+_MAX_GROUP_CHECKBOXES = 6
+_THUMB_LOAD_CAP = 64
 
 
 class BrowseScreenView:
@@ -71,16 +75,27 @@ class BrowseScreenView:
         )
         self._chip = ft.Container(visible=False)
         self._bottom_bar = ft.Container(visible=False)
-        self._header_list = ft.Row(visible=True)
-        self._header_detail = ft.Row(visible=False)
-        self._toolbar = ft.Row(visible=True)
+        self._header_list = ft.Row(visible=True, alignment=ft.MainAxisAlignment.CENTER, spacing=12)
+        self._header_detail = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER, spacing=12)
+        self._toolbar = ft.Row(
+            visible=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=12,
+            wrap=True,
+        )
         self._chunked: Optional[ChunkedViewBuilder[DuplicateGroup]] = None
         self._page: Optional[ft.Page] = None
         self._browse_thumb_gen = 0
+        self._detail_grid: Optional[ft.GridView] = None
+        self._mark_checkboxes: dict[str, ft.Checkbox] = {}
+        self._mark_checkbox_groups: dict[str, int] = {}
         self._root = self._build()
 
     def set_reduce_motion(self, value: bool) -> None:
         self._reduce_motion = bool(value)
+
+    def apply_theme(self, t: ThemeTokens) -> None:
+        self._t = t
 
     @property
     def root(self) -> ft.Column:
@@ -97,24 +112,33 @@ class BrowseScreenView:
         self._page = page
         self._chunked = ChunkedViewBuilder(page, REVIEW_GROUPS_CHUNK_CONFIG)
 
-    def refresh(self) -> None:
+    def refresh(self, *, rebuild: bool = True) -> None:
         t = self._t
         in_detail = self._state.browse_detail_group_id is not None
         self._header_list.visible = not in_detail
         self._header_detail.visible = in_detail
         self._toolbar.visible = not in_detail
-        safe_update(self._header_list)
-        safe_update(self._header_detail)
-        safe_update(self._toolbar)
 
         grid_mode = self._state.view_mode == "grid" and not in_detail
         if not in_detail:
             self._thumb_view_switch.value = self._state.view_mode == "grid"
-            safe_update(self._thumb_view_switch)
 
         groups = self._state.visible_groups()
+        n_del = len(self._state.cart_buckets()["delete"])
+        self._chip.content = ft.Text(f"{n_del} file(s) marked for removal", size=11, color=t.colors.fg)
+        self._chip.visible = n_del > 0
+        self._bottom_bar.visible = n_del > 0
+
+        if not rebuild:
+            self.sync_checkbox_marks()
+            safe_update(self._chip)
+            safe_update(self._bottom_bar)
+            return
+
         self._browse_thumb_gen += 1
         gen = self._browse_thumb_gen
+        self._mark_checkboxes.clear()
+        self._mark_checkbox_groups.clear()
         # Never call controls.clear() before ChunkedViewBuilder.render(): render bumps
         # generation (aborting in-flight async tails) and only then assigns host.controls.
         # A clear-then-gap left the list empty on screen and caused "blank after Smart select"
@@ -127,7 +151,7 @@ class BrowseScreenView:
             self._browse_slot.content = ft.Container(
                 expand=True,
                 padding=8,
-                alignment=ft.Alignment.TOP_LEFT,
+                alignment=ft.Alignment(0, 0),
                 content=self._build_detail_panel(),
             )
         elif not groups:
@@ -165,16 +189,9 @@ class BrowseScreenView:
             else:
                 self._browse_slot.content = self._group_grid
         safe_update(self._browse_slot)
-
-        n_del = len(self._state.cart_buckets()["delete"])
-        self._chip.content = ft.Text(f"{n_del} file(s) marked for removal", size=11, color=t.colors.fg)
-        self._chip.visible = n_del > 0
-        self._bottom_bar.visible = n_del > 0
         safe_update(self._chip)
         safe_update(self._bottom_bar)
-        safe_update(self._list)
-        safe_update(self._group_grid)
-        if not in_detail and groups and self._page is not None and hasattr(self._page, "run_task"):
+        if groups and self._page is not None and hasattr(self._page, "run_task"):
             self._page.run_task(self._load_browse_thumbs_async, gen)
 
     def _sort_label(self) -> str:
@@ -187,7 +204,6 @@ class BrowseScreenView:
         self._header_list.controls = [
             ft.TextButton("← Overview", on_click=self._on_back),
             ft.Text(f"Duplicates ({len(self._state.scan_results)})", weight=ft.FontWeight.W_600),
-            ft.Container(expand=True),
             ft.OutlinedButton(
                 "Remove selected…",
                 icon=ft.icons.Icons.DELETE_OUTLINE,
@@ -197,7 +213,6 @@ class BrowseScreenView:
         ]
         self._header_detail.controls = [
             ft.TextButton("← Back to groups", on_click=self._on_close_group_detail),
-            ft.Container(expand=True),
         ]
         self._toolbar.controls = [
             ft.Text(self._sort_label(), size=t.typography.size_sm, color=t.colors.fg_muted),
@@ -216,10 +231,8 @@ class BrowseScreenView:
             ),
         ]
         self._chip = ft.Container(
-            content=ft.Text("", size=11),
+            content=ft.Text("", size=11, text_align=ft.TextAlign.CENTER),
             padding=ft.padding.symmetric(horizontal=12, vertical=6),
-            border_radius=20,
-            bgcolor=ft.Colors.with_opacity(0.12, t.colors.primary),
         )
         self._bottom_bar = ft.Container(
             content=ft.FilledButton("Apply cleanup", on_click=self._on_proceed_execute),
@@ -228,19 +241,37 @@ class BrowseScreenView:
         )
         return ft.Column(
             [
-                self._header_list,
-                self._header_detail,
-                self._toolbar,
+                ft.Container(
+                    content=self._header_list,
+                    alignment=ft.Alignment(0, 0),
+                ),
+                ft.Container(
+                    content=self._header_detail,
+                    alignment=ft.Alignment(0, 0),
+                ),
+                ft.Container(
+                    content=self._toolbar,
+                    alignment=ft.Alignment(0, 0),
+                ),
                 ft.Stack(
                     [
-                        self._browse_slot,
-                        ft.Container(content=self._chip, top=8, right=8),
+                        ft.Container(
+                            content=self._browse_slot,
+                            expand=True,
+                            alignment=ft.Alignment(0, 0),
+                        ),
+                        ft.Container(
+                            content=self._chip,
+                            alignment=ft.Alignment(0, -1),
+                            padding=ft.padding.only(top=8),
+                        ),
                     ],
                     expand=True,
                 ),
                 self._bottom_bar,
             ],
             expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
     def _on_smart_rule_change(self, e: ft.ControlEvent) -> None:
@@ -259,6 +290,110 @@ class BrowseScreenView:
         sel = self._state.set_selections.get(group_id)
         return bool(sel and p in sel.deleted_paths)
 
+    def sync_checkbox_marks(self) -> None:
+        """Update checkbox values after smart-rule apply without rebuilding tiles."""
+        for path, cb in list(self._mark_checkboxes.items()):
+            gid = self._mark_checkbox_groups.get(path)
+            if gid is None:
+                continue
+            cb.value = self._file_marked_for_delete(path, gid)
+            safe_update(cb)
+
+    def _build_file_thumb_tile(
+        self,
+        group: DuplicateGroup,
+        f: DuplicateFile,
+        *,
+        edge: int = _FILE_THUMB_EDGE,
+        show_name: bool = True,
+    ) -> ft.Container:
+        t = self._t
+        gid = group.group_id
+        p = str(f.path)
+        prot = self._state.is_path_protected(p)
+        checked = self._file_marked_for_delete(p, gid)
+        mark_border = ft.border.all(2, t.colors.danger) if checked else ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border))
+
+        def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = gid) -> None:
+            self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
+
+        cb = ft.Checkbox(value=checked, disabled=prot, on_change=_toggle)
+        self._mark_checkboxes[p] = cb
+        self._mark_checkbox_groups[p] = gid
+
+        thumb_path = p if is_image_path(Path(p)) else None
+        row_data: dict = {}
+        if thumb_path:
+            tiny_img = ft.Image(
+                src=IMAGE_PLACEHOLDER_SRC,
+                visible=False,
+                width=edge,
+                height=edge,
+                fit=ft.BoxFit.COVER,
+                border_radius=6,
+            )
+            thumb_stack = ft.Stack(
+                [
+                    ft.Container(
+                        width=edge,
+                        height=edge,
+                        border_radius=6,
+                        border=mark_border,
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                        content=tiny_img,
+                    ),
+                    ft.Container(
+                        content=cb,
+                        alignment=ft.Alignment(-1, -1),
+                        padding=ft.padding.only(left=2, top=2),
+                    ),
+                ],
+                clip_behavior=ft.ClipBehavior.NONE,
+            )
+            row_data = {"thumb_path": thumb_path, "grid_thumb_single": True, "hero_img": tiny_img, "thumb_edge": edge}
+        else:
+            thumb_stack = ft.Stack(
+                [
+                    ft.Container(
+                        width=edge,
+                        height=edge,
+                        border_radius=6,
+                        border=mark_border,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED, size=edge // 2, color=t.colors.fg_muted),
+                    ),
+                    ft.Container(
+                        content=cb,
+                        alignment=ft.Alignment(-1, -1),
+                        padding=ft.padding.only(left=2, top=2),
+                    ),
+                ],
+            )
+
+        name_line: list[ft.Control] = []
+        if show_name:
+            name_line.append(
+                ft.Text(
+                    f.path.name,
+                    size=t.typography.size_xs,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    text_align=ft.TextAlign.CENTER,
+                    color=t.colors.fg,
+                )
+            )
+
+        return ft.Container(
+            content=ft.Column(
+                [thumb_stack, *name_line],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
+                tight=True,
+            ),
+            width=edge + 8,
+            data=row_data if row_data else None,
+        )
+
     def _build_detail_panel(self) -> ft.Control:
         t = self._t
         gid = self._state.browse_detail_group_id
@@ -273,51 +408,174 @@ class BrowseScreenView:
             f"Files in “{primary.path.name}” (×{len(group.files)})",
             weight=ft.FontWeight.W_600,
             size=t.typography.size_sm,
+            text_align=ft.TextAlign.CENTER,
         )
         hint = ft.Text(
-            "Check = mark for removal. Use Smart select → Apply on the group list to set candidates by rule, then adjust here.",
+            "Check thumbnails to mark for removal. Smart select → Apply rule to all checks every matching copy.",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
         )
-        rows: List[ft.Control] = []
-        for f in group.files:
-            p = str(f.path)
-            prot = self._state.is_path_protected(p)
-            checked = self._file_marked_for_delete(p, group.group_id)
-            reason = trust_labels.protected_skip_label() if prot else trust_labels.selection_reason_for_file(
-                group, f, smart_rule_key=self._smart_rule
-            )
-
-            def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = group.group_id) -> None:
-                self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
-
-            rows.append(
+        self._detail_grid = ft.GridView(
+            expand=True,
+            runs_count=4,
+            max_extent=_FILE_THUMB_EDGE + 24,
+            child_aspect_ratio=0.78,
+            spacing=12,
+            run_spacing=12,
+            padding=8,
+            controls=[self._build_file_thumb_tile(group, f) for f in group.files],
+        )
+        return ft.Column(
+            [
+                title,
+                hint,
                 ft.Container(
-                    padding=ft.padding.symmetric(vertical=4, horizontal=8),
+                    content=self._detail_grid,
+                    expand=True,
+                    alignment=ft.Alignment(0, 0),
+                ),
+            ],
+            spacing=8,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
+        )
+
+    def _collect_thumb_data_hosts(self, roots: list[ft.Control]) -> list[ft.Control]:
+        found: list[ft.Control] = []
+
+        def walk(ctrl: ft.Control) -> None:
+            if isinstance(ctrl, ft.Container):
+                data = getattr(ctrl, "data", None)
+                if isinstance(data, dict) and data.get("thumb_path"):
+                    found.append(ctrl)
+            children: list[ft.Control] = []
+            if isinstance(ctrl, ft.Container) and ctrl.content is not None:
+                children = [ctrl.content]
+            elif hasattr(ctrl, "controls"):
+                try:
+                    children = list(ctrl.controls or [])
+                except Exception:
+                    children = []
+            for child in children:
+                if child is not None:
+                    walk(child)
+
+        for root in roots:
+            walk(root)
+        return found
+
+    def _build_group_hero_thumb(
+        self,
+        group: DuplicateGroup,
+        *,
+        grid_mode: bool,
+    ) -> tuple[ft.Control, dict]:
+        t = self._t
+        primary = group.files[0] if group.files else None
+        thumb_path = str(primary.path) if primary and is_image_path(Path(primary.path)) else None
+        edge = _GRID_THUMB_EDGE if grid_mode else _LIST_THUMB_EDGE
+        if thumb_path:
+            if grid_mode:
+                hero = ft.Image(
+                    src=IMAGE_PLACEHOLDER_SRC,
+                    visible=False,
+                    width=edge,
+                    height=edge,
+                    fit=ft.BoxFit.COVER,
                     border_radius=6,
-                    border=ft.border.all(1, t.colors.border),
-                    bgcolor=t.colors.bg2,
-                    content=ft.Row(
-                        [
-                            ft.Checkbox(value=checked, disabled=prot, on_change=_toggle),
-                            ft.Column(
-                                [
-                                    ft.Text(f.path.name, size=t.typography.size_sm),
-                                    ft.Text(str(f.path.parent), size=t.typography.size_xs, color=t.colors.fg_muted),
-                                    ft.Text(reason, size=t.typography.size_xs, color=t.colors.fg_muted),
-                                ],
-                                expand=True,
-                                spacing=0,
-                            ),
-                            ft.Text(fmt_size(int(f.size)), size=t.typography.size_xs, color=t.colors.fg_muted),
-                            ft.Icon(ft.icons.Icons.SHIELD, size=14, color=t.colors.warning, visible=prot),
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+                thumb_stack = ft.Container(
+                    width=edge,
+                    height=edge,
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.Stack(
+                        [hero],
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
                     ),
                 )
+                row_data = {
+                    "thumb_path": thumb_path,
+                    "grid_thumb_single": True,
+                    "hero_img": hero,
+                    "thumb_edge": _GRID_THUMB_EDGE,
+                }
+            else:
+                tiny_img = ft.Image(
+                    src=IMAGE_PLACEHOLDER_SRC,
+                    visible=False,
+                    width=edge,
+                    height=edge,
+                    fit=ft.BoxFit.COVER,
+                    border_radius=4,
+                )
+                full_img = ft.Image(
+                    src=IMAGE_PLACEHOLDER_SRC,
+                    visible=False,
+                    width=edge,
+                    height=edge,
+                    fit=ft.BoxFit.COVER,
+                    border_radius=4,
+                )
+                full_wrap = ft.Container(content=full_img, opacity=0.0)
+                thumb_stack = ft.Container(
+                    width=edge + 4,
+                    height=edge + 4,
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.Stack(
+                        [tiny_img, full_wrap],
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                    ),
+                )
+                row_data = {
+                    "thumb_path": thumb_path,
+                    "tiny_img": tiny_img,
+                    "full_img": full_img,
+                    "full_wrap": full_wrap,
+                }
+            return thumb_stack, row_data
+        icon_size = 40 if grid_mode else 22
+        placeholder = ft.Container(
+            width=edge,
+            height=edge,
+            alignment=ft.Alignment.CENTER,
+            border_radius=6,
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border)),
+            content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED, size=icon_size, color=t.colors.fg_muted),
+        )
+        return placeholder, {}
+
+    def _build_file_checkbox_row(self, group: DuplicateGroup) -> ft.Control:
+        t = self._t
+        gid = group.group_id
+        items: list[ft.Control] = []
+        overflow = 0
+        for i, f in enumerate(group.files):
+            if i >= _MAX_GROUP_CHECKBOXES:
+                overflow = len(group.files) - _MAX_GROUP_CHECKBOXES
+                break
+            p = str(f.path)
+            prot = self._state.is_path_protected(p)
+            checked = self._file_marked_for_delete(p, gid)
+
+            def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = gid) -> None:
+                self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
+
+            cb = ft.Checkbox(value=checked, disabled=prot, on_change=_toggle)
+            self._mark_checkboxes[p] = cb
+            self._mark_checkbox_groups[p] = gid
+            items.append(cb)
+        if overflow > 0:
+            items.append(
+                ft.Text(f"+{overflow}", size=t.typography.size_xs - 1, color=t.colors.fg_muted)
             )
-        return ft.Column([title, hint, *rows], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
+        return ft.Row(
+            items,
+            spacing=2,
+            wrap=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+            run_spacing=2,
+        )
 
     async def _load_browse_thumbs_async(self, gen: int) -> None:
         if self._page is None:
@@ -325,15 +583,23 @@ class BrowseScreenView:
         cache = get_thumbnail_cache()
         loop = asyncio.get_running_loop()
         pending_updates: list[ft.Control] = []
-        host = self._browse_slot.content
-        if host is None or self._state.browse_detail_group_id is not None:
+        roots: list[ft.Control] = []
+        if self._state.browse_detail_group_id is not None and self._detail_grid is not None:
+            roots = list(self._detail_grid.controls)
+        else:
+            host = self._browse_slot.content
+            if host is not None:
+                roots = list(getattr(host, "controls", []) or [])
+        hosts = self._collect_thumb_data_hosts(roots)
+        if not hosts:
             return
-        for ctrl in list(host.controls):
+        loaded = 0
+        for ctrl in hosts:
+            if loaded >= _THUMB_LOAD_CAP:
+                break
             if gen != self._browse_thumb_gen:
                 return
-            data = getattr(ctrl, "data", None)
-            if not isinstance(data, dict):
-                continue
+            data = ctrl.data
             path = data.get("thumb_path")
             if not path:
                 continue
@@ -341,6 +607,8 @@ class BrowseScreenView:
                 hero = data.get("hero_img")
                 edge = int(data.get("thumb_edge") or _GRID_THUMB_EDGE)
                 if hero is None:
+                    continue
+                if hero.visible and hero.src and IMAGE_PLACEHOLDER_SRC not in str(hero.src):
                     continue
                 p = Path(str(path))
                 b64 = await loop.run_in_executor(cache._pool, cache.get_preview_tiny_base64, p, edge)
@@ -350,14 +618,17 @@ class BrowseScreenView:
                     hero.visible = True
                     hero.src = f"data:image/jpeg;base64,{b64}"
                     pending_updates.append(hero)
+                    loaded += 1
                 if len(pending_updates) >= 12:
-                    safe_update(host)
+                    self._safe_update_thumb_hosts()
                     pending_updates.clear()
                 continue
             tiny_img = data.get("tiny_img")
             full_img = data.get("full_img")
             full_wrap = data.get("full_wrap")
             if tiny_img is None or full_img is None or full_wrap is None:
+                continue
+            if tiny_img.visible and tiny_img.src and IMAGE_PLACEHOLDER_SRC not in str(tiny_img.src):
                 continue
             p = Path(str(path))
             tiny_b64 = await loop.run_in_executor(cache._pool, cache.get_preview_tiny_base64, p, TINY_BROWSE_EDGE)
@@ -367,6 +638,7 @@ class BrowseScreenView:
                 tiny_img.visible = True
                 tiny_img.src = f"data:image/jpeg;base64,{tiny_b64}"
                 pending_updates.append(tiny_img)
+                loaded += 1
             full_b64 = await loop.run_in_executor(cache._pool, cache.get_base64, p)
             if gen != self._browse_thumb_gen:
                 return
@@ -381,11 +653,28 @@ class BrowseScreenView:
                     full_wrap.opacity = 1.0
                 pending_updates.append(full_wrap)
                 pending_updates.append(full_img)
+                loaded += 1
             if len(pending_updates) >= 12:
-                safe_update(host)
+                self._safe_update_thumb_hosts()
                 pending_updates.clear()
         if pending_updates:
-            safe_update(host)
+            self._safe_update_thumb_hosts()
+        if loaded >= _THUMB_LOAD_CAP and gen == self._browse_thumb_gen and self._page is not None:
+            self._page.run_task(self._load_browse_thumbs_async, gen)
+
+    def _safe_update_thumb_hosts(self) -> None:
+        page = self._page
+        if page is None:
+            return
+        try:
+            page.update()
+        except Exception:
+            if self._state.browse_detail_group_id is not None and self._detail_grid is not None:
+                safe_update(self._detail_grid)
+            else:
+                host = self._browse_slot.content
+                if host is not None:
+                    safe_update(host)
 
     def _build_group_grid_tile(self, group: DuplicateGroup) -> ft.Control:
         t = self._t
@@ -397,101 +686,54 @@ class BrowseScreenView:
         n_marked = sum(1 for f in group.files if self._file_marked_for_delete(str(f.path), gid))
         confidence = max(float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files) if group.files else 1.0
         kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
-
-        thumb_path = str(primary.path) if primary and is_image_path(Path(primary.path)) else None
-        row_data: dict = {}
-        thumb_h = 140.0
-        if thumb_path:
-            hero = ft.Image(
-                src=IMAGE_PLACEHOLDER_SRC,
-                visible=False,
-                width=thumb_h,
-                height=thumb_h,
-                fit=ft.BoxFit.COVER,
-                border_radius=6,
-            )
-            row_data = {
-                "thumb_path": thumb_path,
-                "grid_thumb_single": True,
-                "hero_img": hero,
-                "thumb_edge": _GRID_THUMB_EDGE,
-            }
-            thumb_stack = ft.Container(
-                width=thumb_h,
-                height=thumb_h,
-                alignment=ft.Alignment.CENTER,
-                content=ft.Stack(
-                    [
-                        ft.Container(
-                            width=thumb_h,
-                            height=thumb_h,
-                            border_radius=6,
-                            bgcolor=t.colors.bg,
-                        ),
-                        hero,
-                    ],
-                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                ),
-            )
-        else:
-            thumb_stack = ft.Container(
-                width=thumb_h,
-                height=thumb_h,
-                alignment=ft.Alignment.CENTER,
-                border_radius=6,
-                bgcolor=t.colors.bg,
-                content=ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED, size=48, color=t.colors.fg_muted),
-            )
-
-        mark_border = ft.border.all(3, t.colors.danger) if n_marked > 0 else ft.border.all(1, t.colors.border)
+        hero, row_data = self._build_group_hero_thumb(group, grid_mode=True)
 
         title = ft.Text(
             name,
             size=t.typography.size_sm,
             max_lines=2,
             overflow=ft.TextOverflow.ELLIPSIS,
+            text_align=ft.TextAlign.CENTER,
         )
         sub = ft.Text(
-            f"{kind} · ×{len(group.files)} · {size}",
+            f"{kind} · ×{len(group.files)} · {size} · {n_marked} marked",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
+            text_align=ft.TextAlign.CENTER,
         )
         meta = ft.Text(
             trust_labels.confidence_line(confidence),
             size=t.typography.size_xs - 1,
             color=t.colors.fg_muted,
-        )
-        inspect_btn = ft.IconButton(
-            icon=ft.icons.Icons.ARROW_FORWARD,
-            tooltip="Inspect side-by-side",
-            on_click=lambda e, g=gid: self._on_open_inspect(g),
+            text_align=ft.TextAlign.CENTER,
         )
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Container(content=thumb_stack, alignment=ft.Alignment.CENTER),
+                    ft.Container(content=hero, alignment=ft.Alignment.CENTER),
+                    self._build_file_checkbox_row(group),
                     title,
                     sub,
                     meta,
                     ft.Row(
                         [
                             ft.Icon(ft.icons.Icons.SHIELD, size=14, color=t.colors.warning, visible=protected),
-                            ft.Container(expand=True),
-                            inspect_btn,
+                            ft.TextButton("Open set", on_click=lambda e, g=gid: self._on_open_group_detail(g)),
+                            ft.IconButton(
+                                icon=ft.icons.Icons.ARROW_FORWARD,
+                                tooltip="Inspect side-by-side",
+                                on_click=lambda e, g=gid: self._on_open_inspect(g),
+                            ),
                         ],
+                        alignment=ft.MainAxisAlignment.CENTER,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                 ],
-                spacing=4,
+                spacing=6,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 tight=True,
             ),
-            padding=8,
-            border_radius=8,
-            border=mark_border,
-            bgcolor=t.colors.bg2,
-            ink=True,
-            on_click=lambda e, g=gid: self._on_open_group_detail(g),
+            padding=ft.padding.symmetric(vertical=6, horizontal=4),
             data=row_data if row_data else None,
         )
 
@@ -506,92 +748,47 @@ class BrowseScreenView:
         n_marked = sum(1 for f in group.files if self._file_marked_for_delete(str(f.path), gid))
         confidence = max(float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files) if group.files else 1.0
         kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
+        hero, row_data = self._build_group_hero_thumb(group, grid_mode=False)
 
-        thumb_path = str(primary.path) if primary and is_image_path(Path(primary.path)) else None
-        thumb_cell: Optional[ft.Control] = None
-        row_data: dict = {}
-        if thumb_path:
-            tiny_img = ft.Image(
-                src=IMAGE_PLACEHOLDER_SRC,
-                visible=False,
-                width=44,
-                height=44,
-                fit=ft.BoxFit.COVER,
-                border_radius=4,
-            )
-            full_img = ft.Image(
-                src=IMAGE_PLACEHOLDER_SRC,
-                visible=False,
-                width=44,
-                height=44,
-                fit=ft.BoxFit.COVER,
-                border_radius=4,
-            )
-            full_wrap = ft.Container(content=full_img, opacity=0.0)
-            thumb_cell = ft.Container(
-                width=48,
-                height=48,
-                alignment=ft.Alignment.CENTER,
-                content=ft.Stack(
-                    [
-                        ft.Container(
-                            width=44,
-                            height=44,
-                            border_radius=4,
-                            bgcolor=t.colors.bg,
-                        ),
-                        tiny_img,
-                        full_wrap,
-                    ],
-                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                ),
-            )
-            row_data = {"thumb_path": thumb_path, "tiny_img": tiny_img, "full_img": full_img, "full_wrap": full_wrap}
-
-        mark_border = ft.border.only(left=ft.BorderSide(4, t.colors.danger)) if n_marked > 0 else None
-
-        row_inner = ft.Row(
-            [
-                ft.Container(width=8),
-                thumb_cell if thumb_cell else ft.Container(width=0),
-                ft.Icon(ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED, size=18, color=t.colors.primary),
-                ft.Icon(ft.icons.Icons.SHIELD, size=16, color=t.colors.warning, visible=protected),
-                ft.Column(
-                    [
-                        ft.Text(name),
-                        ft.Text(
-                            f"{kind} · {trust_labels.confidence_line(confidence)} · {n_marked}/{len(group.files)} marked",
-                            size=t.typography.size_xs,
-                            color=t.colors.fg_muted,
-                        ),
-                    ],
-                    spacing=2,
-                    expand=True,
-                ),
-                ft.Text(f"×{len(group.files)}", color=t.colors.primary),
-                ft.Text(size, color=t.colors.fg_muted),
-                ft.IconButton(
-                    icon=ft.icons.Icons.ARROW_FORWARD,
-                    tooltip="Inspect side-by-side",
-                    on_click=lambda e, g=gid: self._on_open_inspect(g),
-                ),
-            ],
-            spacing=8,
-        )
-        row = ft.Container(
+        return ft.Container(
             content=ft.Column(
                 [
-                    row_inner,
-                    ft.Text(path, size=t.typography.size_xs, color=t.colors.fg_muted),
+                    ft.Row(
+                        [
+                            hero,
+                            ft.Column(
+                                [
+                                    ft.Text(name, weight=ft.FontWeight.W_600),
+                                    ft.Text(
+                                        f"{kind} · {trust_labels.confidence_line(confidence)} · {n_marked}/{len(group.files)} marked · {size}",
+                                        size=t.typography.size_xs,
+                                        color=t.colors.fg_muted,
+                                    ),
+                                    ft.Text(path, size=t.typography.size_xs, color=t.colors.fg_muted),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            self._build_file_checkbox_row(group),
+                            ft.Icon(ft.icons.Icons.SHIELD, size=16, color=t.colors.warning, visible=protected),
+                            ft.IconButton(
+                                icon=ft.icons.Icons.ARROW_FORWARD,
+                                tooltip="Inspect side-by-side",
+                                on_click=lambda e, g=gid: self._on_open_inspect(g),
+                            ),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row(
+                        [
+                            ft.TextButton("Open set", on_click=lambda e, g=gid: self._on_open_group_detail(g)),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                    ),
                 ],
                 spacing=4,
             ),
-            padding=10,
-            border_radius=8,
-            border=mark_border or ft.border.all(1, t.colors.border),
-            bgcolor=t.colors.bg2,
-            ink=True,
-            on_click=lambda e, g=gid: self._on_open_group_detail(g),
+            padding=ft.padding.symmetric(vertical=8, horizontal=4),
             data=row_data if row_data else None,
         )
-        return row

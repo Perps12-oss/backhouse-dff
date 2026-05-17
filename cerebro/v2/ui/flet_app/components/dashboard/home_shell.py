@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.cards import flat_card
+from cerebro.v2.ui.flet_app.design_system.cards import minimal_surface
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
 
 
@@ -30,12 +30,16 @@ class DashboardHomeShell:
                 ft.Container(
                     content=actions,
                     padding=ft.padding.only(top=s.xs),
-                    alignment=ft.Alignment(0.34, 0),
+                    alignment=ft.Alignment(0, 0),
                 ),
             ],
             spacing=s.xs,
         )
-        folder_panel_host = ft.Container(content=folder_section, width=620)
+        folder_panel_host = ft.Container(
+            content=folder_section,
+            width=620,
+            alignment=ft.Alignment(0, 0),
+        )
         capability_hint = ft.Text(
             "Content-aware matching and perceptual image analysis",
             size=t.typography.size_xs,
@@ -50,7 +54,7 @@ class DashboardHomeShell:
                     content=scan_options_toggle_btn,
                     width=620,
                     padding=ft.padding.only(top=s.sm),
-                    alignment=ft.Alignment(0.16, 0),
+                    alignment=ft.Alignment(0, 0),
                 ),
                 scan_options_dropdown,
                 capability_hint,
@@ -58,9 +62,9 @@ class DashboardHomeShell:
             spacing=s.xs,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
-        return flat_card(
+        return minimal_surface(
             column,
-            t,
             width=840,
             padding=ft.Padding.symmetric(horizontal=s.lg, vertical=s.md),
+            alignment=ft.Alignment(0, 0),
         )

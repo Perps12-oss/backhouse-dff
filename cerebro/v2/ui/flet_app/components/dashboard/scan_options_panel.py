@@ -7,8 +7,8 @@ from typing import Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_outlined_button_style
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
+from cerebro.v2.ui.flet_app.theme import ThemeTokens
 from cerebro.v2.ui.flet_app.utils.motion import animation_or_none
 
 
@@ -202,13 +202,13 @@ class DashboardScanOptionsPanel:
             style=pill_outlined_button_style(t),
         )
         self.scan_options_dropdown = ft.Container(
-            content=glass_container(
+            content=minimal_surface(
                 content=self._dropdown_switcher,
-                t=t,
                 padding=ft.padding.all(s.xl),
             ),
             visible=False,
             width=620,
+            alignment=ft.Alignment(0, 0),
         )
 
     def _on_advanced_expansion_change(self, e: ft.ControlEvent) -> None:
@@ -237,7 +237,8 @@ class DashboardScanOptionsPanel:
         self._advanced_chevron.color = t.colors.fg_muted
         inner = self.scan_options_dropdown.content
         if isinstance(inner, ft.Container):
-            apply_glass_style(inner, t)
+            apply_minimal_style(inner)
+            inner.border = ft.border.all(1, t.colors.border)
 
     def toggle_advanced_panel(self, safe_update: Callable[[ft.Control | None], None]) -> None:
         self._advanced_options_visible = not self._advanced_options_visible

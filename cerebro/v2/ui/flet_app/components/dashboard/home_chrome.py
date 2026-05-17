@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.components.dashboard.hero_button import HeroScanButton
-from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style, flat_card
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
 from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_outlined_button_style,
     pill_text_button_style,
@@ -76,7 +76,7 @@ class DashboardHomeChrome:
             color=accent_icon,
             visible=should_animate(bridge),
         )
-        hero = flat_card(
+        hero = minimal_surface(
             content=ft.Row(
                 [
                     hero_tagline_icon,
@@ -86,8 +86,8 @@ class DashboardHomeChrome:
                 ],
                 spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
             ),
-            t=t,
             padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
             width=860,
         )
@@ -108,7 +108,7 @@ class DashboardHomeChrome:
         )
         actions = ft.Column(
             [start_btn, scan_safety_note, pause_scan_btn],
-            horizontal_alignment=ft.CrossAxisAlignment.START,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=s.xs,
         )
         status = ft.Text(
@@ -129,20 +129,17 @@ class DashboardHomeChrome:
                 [
                     ft.Icon(ft.icons.Icons.INFO_OUTLINE, color=accent_icon, size=18),
                     cancelled_results_text,
-                    ft.Container(expand=True),
                     cancelled_results_btn,
                 ],
                 spacing=8,
+                alignment=ft.MainAxisAlignment.CENTER,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, accent_icon)),
-            border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.08, accent_icon),
             visible=False,
         )
         paused_scans_col = ft.Column([], spacing=s.xs, visible=False)
-        paused_scans_section = flat_card(
+        paused_scans_section = minimal_surface(
             content=ft.Column(
                 [
                     ft.Row(
@@ -162,12 +159,13 @@ class DashboardHomeChrome:
                             ),
                         ],
                         spacing=s.xs,
+                        alignment=ft.MainAxisAlignment.CENTER,
                     ),
                     paused_scans_col,
                 ],
                 spacing=s.sm,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            t=t,
             width=620,
             padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
             visible=False,
@@ -216,8 +214,8 @@ class DashboardHomeChrome:
             await asyncio.sleep(0.045)
 
     def sync_theme(self, t: ThemeTokens) -> None:
-        apply_flat_style(self.hero, t)
-        apply_flat_style(self.paused_scans_section, t)
+        apply_minimal_style(self.hero)
+        apply_minimal_style(self.paused_scans_section)
         accent = t.colors.primary
         self._accent_color = accent
         self.hero_tagline_icon.color = accent
