@@ -1,4 +1,4 @@
-"""Gradient hero CTA with hover scale and glow (GestureDetector + Container)."""
+"""Hero CTA with hover scale (GestureDetector + Container)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,8 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.pill_button_styles import text_on_fill
 from cerebro.v2.ui.flet_app.theme import ThemeTokens
-
-_FLET_ACCENT = "#1DB954"
-_FLET_ON_ACCENT = "#FFFFFF"
 from cerebro.v2.ui.flet_app.utils.motion import animation_or_none, should_animate
 
 if TYPE_CHECKING:
@@ -38,14 +36,19 @@ class HeroScanButton(ft.Container):
         self._hovered = False
         self._pressed = False
         self._rumble_active = False
+        self._accent = t.colors.primary
 
         self._label = ft.Text(
             "START SCAN",
             size=t.typography.size_xl,
             weight=ft.FontWeight.W_800,
-            color=_FLET_ON_ACCENT,
+            color=text_on_fill(self._accent),
         )
-        self._icon = ft.Icon(ft.icons.Icons.ROCKET_LAUNCH, color=_FLET_ON_ACCENT, size=22)
+        self._icon = ft.Icon(
+            ft.icons.Icons.ROCKET_LAUNCH,
+            color=text_on_fill(self._accent),
+            size=22,
+        )
         if self._motion:
             self._icon.animate_rotation = ft.Animation(120, ft.AnimationCurve.EASE_IN_OUT)
         self._sweep = ft.Container(
@@ -69,7 +72,7 @@ class HeroScanButton(ft.Container):
             height=56,
             alignment=ft.Alignment(0, 0),
             border_radius=10,
-            bgcolor=_FLET_ACCENT,
+            bgcolor=self._accent,
             animate_scale=animation_or_none(bridge, ft.Animation(160, ft.AnimationCurve.EASE_OUT))
             if bridge
             else ft.Animation(160, ft.AnimationCurve.EASE_OUT),
@@ -90,6 +93,21 @@ class HeroScanButton(ft.Container):
             width=width,
             opacity=0.45 if disabled else 1.0,
         )
+
+    def sync_theme(self, t: ThemeTokens) -> None:
+        """Repaint CTA fill and label colors when the gradient theme changes."""
+        self._t = t
+        self._accent = t.colors.primary
+        on_accent = text_on_fill(self._accent)
+        self._face.bgcolor = self._accent
+        self._label.color = on_accent
+        self._icon.color = on_accent
+        self._apply_visual_state()
+        try:
+            if self.page is not None:
+                self.update()
+        except RuntimeError:
+            pass
 
     def set_reduce_motion(self, enabled: bool) -> None:
         """Gate hover/press/sweep/icon motion when accessibility setting changes."""
@@ -176,6 +194,7 @@ class HeroScanButton(ft.Container):
             pass
 
     def _apply_visual_state(self) -> None:
+        accent = self._accent
         if not self._motion:
             self._face.scale = 1.0
             self._face.shadow = None
@@ -190,7 +209,7 @@ class HeroScanButton(ft.Container):
             self._face.shadow = ft.BoxShadow(
                 spread_radius=0,
                 blur_radius=8,
-                color=ft.Colors.with_opacity(0.35, _FLET_ACCENT),
+                color=ft.Colors.with_opacity(0.35, accent),
                 offset=ft.Offset(0, 3),
             )
             self._sweep.width = int(self.width or 368)

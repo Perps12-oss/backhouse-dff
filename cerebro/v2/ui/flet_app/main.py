@@ -470,6 +470,13 @@ def _main(page: ft.Page) -> None:
         if (not force) and bool(onboarding_cfg.get("completed", False)):
             return
 
+        from cerebro.v2.ui.flet_app.pill_button_styles import text_on_fill
+        from cerebro.v2.ui.flet_app.theme import theme_for_mode
+
+        _onb_t = theme_for_mode(bridge.app_theme)
+        _onb_accent = _onb_t.colors.primary
+        _onb_on_accent = text_on_fill(_onb_accent)
+
         steps = [
             ("Select scan folders", "Start on Home using Browse Folders or Quick Add presets."),
             ("Run your first scan", "Use Start Scan to detect duplicate groups and recoverable space."),
@@ -477,9 +484,9 @@ def _main(page: ft.Page) -> None:
         ]
         step_idx = {"value": 0}
         step_badge = ft.Container(
-            content=ft.Text("Step 1 of 3", size=11, weight=ft.FontWeight.W_600, color="#22D3EE"),
-            bgcolor=ft.Colors.with_opacity(0.14, "#22D3EE"),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#22D3EE")),
+            content=ft.Text("Step 1 of 3", size=11, weight=ft.FontWeight.W_600, color=_onb_accent),
+            bgcolor=ft.Colors.with_opacity(0.14, _onb_accent),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, _onb_accent)),
             border_radius=999,
             padding=ft.Padding.symmetric(horizontal=10, vertical=4),
         )
@@ -497,7 +504,7 @@ def _main(page: ft.Page) -> None:
         progress = ft.ProgressBar(
             value=1 / 3,
             bar_height=6,
-            color="#22D3EE",
+            color=_onb_accent,
             bgcolor=ft.Colors.with_opacity(0.18, "#FFFFFF"),
             border_radius=999,
         )
@@ -545,12 +552,12 @@ def _main(page: ft.Page) -> None:
             title=ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color="#1DB954"),
+                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color=_onb_accent),
                         width=32,
                         height=32,
                         alignment=ft.Alignment(0, 0),
-                        bgcolor=ft.Colors.with_opacity(0.12, "#1DB954"),
-                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#1DB954")),
+                        bgcolor=ft.Colors.with_opacity(0.12, _onb_accent),
+                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, _onb_accent)),
                         border_radius=8,
                     ),
                     ft.Text("Welcome to Cerebro", size=18, weight=ft.FontWeight.W_700),
@@ -579,8 +586,8 @@ def _main(page: ft.Page) -> None:
                     "Next",
                     on_click=_next,
                     style=ft.ButtonStyle(
-                        bgcolor="#1DB954",
-                        color="#0A0E14",
+                        bgcolor=_onb_accent,
+                        color=_onb_on_accent,
                         shape=ft.RoundedRectangleBorder(radius=10),
                     ),
                 ),
@@ -685,14 +692,6 @@ def _main(page: ft.Page) -> None:
 
     def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
         tab = new_state.active_tab
-        if isinstance(action, ScanCompleted):
-            try:
-                settings = bridge.get_settings()
-                skip_results = bool((settings.get("general") or {}).get("skip_results_after_scan", False))
-            except Exception:
-                skip_results = False
-            if skip_results and new_state.groups:
-                tab = "review"
         # Only tab-changing actions should drive the shell; other dispatches still
         # carry active_tab (e.g. duplicates) and would otherwise yank the user back
         # from Review/Settings while the rail already matched the new selection.
@@ -707,6 +706,16 @@ def _main(page: ft.Page) -> None:
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
             _sync_groups_from_state(new_state)
             bridge.invalidate_stats_cache()
+        if isinstance(action, ScanCompleted) and new_state.groups:
+            focus = getattr(review_page, "reset_to_overview_after_scan", None)
+            if callable(focus):
+                focus()
+            elif hasattr(review_page, "_enter_mode"):
+                review_page.load_results(  # type: ignore[attr-defined]
+                    list(new_state.groups),
+                    new_state.scan_mode or "files",
+                    defer_render=False,
+                )
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):

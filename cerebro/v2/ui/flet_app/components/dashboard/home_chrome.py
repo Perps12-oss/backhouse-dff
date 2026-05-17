@@ -219,15 +219,17 @@ class DashboardHomeChrome:
         apply_flat_style(self.hero, t)
         apply_flat_style(self.paused_scans_section, t)
         accent = t.colors.primary
+        self._accent_color = accent
         self.hero_tagline_icon.color = accent
         self._tagline_cursor.color = accent
+        self.start_btn.sync_theme(t)
         self.last_session_btn.style = pill_text_button_style(t, variant="muted")
         self.pause_scan_btn.style = pill_outlined_button_style(t)
         self.cancelled_results_btn.style = pill_text_button_style(t, variant="primary")
 
     def set_reduce_motion(self, enabled: bool) -> None:
         self.start_btn.set_reduce_motion(enabled)
-        accent = getattr(self, "_accent_color", "#1DB954")
+        accent = getattr(self, "_accent_color", self.start_btn._accent)
         self.hero_tagline_icon.color = accent
         if enabled:
             self._tagline.value = _TAGLINE

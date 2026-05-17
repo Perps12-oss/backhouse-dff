@@ -1262,18 +1262,27 @@ class DashboardPage(ft.Column):
         self._scan_hud.complete_success(results, frozen_scan_elapsed)
 
         self._bridge.dispatch_scan_complete(results, mode)
+        if results:
+            self._scan_hud.dismiss_to_home()
+            try:
+                self._scan_complete_banner.hide()
+            except Exception:
+                pass
+            self._status.value = "Scan complete — opening review summary…"
+            DashboardPage._safe_update(self._status)
         try:
             reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
         except Exception:
             reclaimed = 0
-        try:
-            self._scan_complete_banner.show(
-                group_count=len(results),
-                reclaimable=reclaimed,
-                elapsed_label=frozen_scan_elapsed,
-            )
-        except Exception:
-            pass
+        if not results:
+            try:
+                self._scan_complete_banner.show(
+                    group_count=0,
+                    reclaimable=reclaimed,
+                    elapsed_label=frozen_scan_elapsed,
+                )
+            except Exception:
+                pass
         if reclaimed >= 1_073_741_824:
             self._bridge.show_snackbar(
                 f"Great cleanup! Reclaimable space exceeds 1 GB ({fmt_size(reclaimed)}).",

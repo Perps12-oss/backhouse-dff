@@ -34,6 +34,7 @@ from cerebro.v2.ui.flet_app.design_system.shell_background import (
 
 from cerebro.v2.ui.flet_app.multigradient_themes import default_gradient, gradient_by_id
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
+from cerebro.v2.ui.flet_app.pill_button_styles import text_on_fill
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 from cerebro.v2.ui.flet_app.utils.motion import should_animate
@@ -52,11 +53,7 @@ _log = logging.getLogger(__name__)
 
 
 
-_NAV_ACCENT = "#1DB954"
-
 _NAV_TRACK_BG = "#1e1e1e"
-
-_NAV_SELECTED_FG = "#FFFFFF"
 
 
 
@@ -347,7 +344,9 @@ class AppLayout(ft.Column):
 
         self._nav_indicator.left = sel_idx * self._nav_pill_stride
 
-        self._nav_indicator.bgcolor = _NAV_ACCENT
+        accent = c.primary
+        on_accent = text_on_fill(accent)
+        self._nav_indicator.bgcolor = accent
 
         self._nav_indicator.border = None
 
@@ -371,9 +370,9 @@ class AppLayout(ft.Column):
 
             if is_selected:
 
-                label.color = _NAV_SELECTED_FG
+                label.color = on_accent
 
-                icon.color = _NAV_SELECTED_FG
+                icon.color = on_accent
 
             elif is_hovered:
 

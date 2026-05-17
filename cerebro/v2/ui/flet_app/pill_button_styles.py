@@ -27,8 +27,16 @@ def _luminance(hex_color: str) -> float:
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
 
 
+def text_on_fill(fill_hex: str) -> str:
+    """Foreground readable on a solid accent/primary fill."""
+    return "#121212" if _luminance(fill_hex) > 0.55 else "#FFFFFF"
+
+
 def on_accent_contrast_text(colors: object) -> str:
     """Readable label on ``colors.accent`` fill: dark ink on bright accent, else theme fg."""
+    accent = str(getattr(colors, "accent", "") or getattr(colors, "primary", ""))
+    if accent.startswith("#") and len(accent.lstrip("#")) >= 6:
+        return text_on_fill(accent)
     bg = str(getattr(colors, "bg", "#0B1220"))
     fg = str(getattr(colors, "fg", "#0B1220"))
     lum = _luminance(bg)

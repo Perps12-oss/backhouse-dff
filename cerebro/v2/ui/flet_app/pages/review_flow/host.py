@@ -207,12 +207,17 @@ class ReviewFlowHost(ft.Column):
             self._state.scan_results = store_groups
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
         self._try_resume_session()
-        # When there are results and the user has not manually navigated
-        # deeper than overview, land them directly on browse — one fewer click.
-        if self._state.scan_results and self._state.active_screen == "overview":
-            self._state.screen_stack = ["overview", "browse"]
-            self._state.active_screen = "browse"
         self._render_active_screen()
+
+    def reset_to_overview_after_scan(self) -> None:
+        """Show the results summary screen after a scan completes."""
+        store_groups = list(getattr(self._bridge.state, "groups", []) or [])
+        if store_groups:
+            self._state.scan_results = store_groups
+            self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
+        self._router.reset_to_overview()
+        if self._page_is_set(self):
+            self._render_active_screen()
 
     def apply_theme(self, mode: str) -> None:
         """Sync review-flow tokens when global light/dark (or preset) changes; rebuilds the active screen."""

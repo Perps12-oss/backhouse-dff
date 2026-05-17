@@ -394,7 +394,7 @@ class SettingsPage(ft.Column):
             options=[
                 ft.dropdown.Option(key=g.id, text=g.name) for g in GRADIENT_THEMES
             ],
-            on_change=self._on_theme_dropdown_change,
+            on_select=self._on_theme_dropdown_change,
             border_radius=8,
             bgcolor=t.colors.bg3,
         )

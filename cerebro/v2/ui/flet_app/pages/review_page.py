@@ -179,6 +179,15 @@ class ReviewPage(
             return
         self._schedule_load_to_groups()
 
+    def reset_to_overview_after_scan(self) -> None:
+        """Open the groups overview with scan result summaries."""
+        st = self._bridge.state
+        groups = list(getattr(st, "groups", []) or [])
+        mode = getattr(st, "scan_mode", None) or "files"
+        self.load_results(groups, mode, defer_render=False)
+        if self._page_is_set(self) and self._groups:
+            self._enter_mode("groups")
+
     def apply_pruned_groups(self, groups: List[DuplicateGroup], mode: str = "files") -> None:
         self._groups = list(groups)
         self._group_files = {g.group_id: list(g.files) for g in self._groups}
