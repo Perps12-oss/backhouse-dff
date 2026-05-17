@@ -31,7 +31,8 @@ from cerebro.v2.ui.flet_app.components.dashboard.scan_complete_banner import Sca
 from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import DashboardScanOptionsPanel
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import apply_glass_style, theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 if TYPE_CHECKING:
@@ -232,7 +233,12 @@ class DashboardPage(ft.Column):
         )
 
     def _set_container_glow(self, container: ft.Container, hovering: bool, *, variant: str = "primary", strong: bool = False) -> None:
-        container.shadow = self._hover_shadow(self._hover_glow_color(variant), strong=strong) if hovering else None
+        _ = variant, strong
+        if hovering:
+            container.border = ft.border.all(1, self._t.colors.primary)
+        else:
+            container.border = ft.border.all(1, self._t.colors.border)
+        container.shadow = None
         DashboardPage._safe_update(container)
 
     # ------------------------------------------------------------------
@@ -1743,7 +1749,7 @@ class DashboardPage(ft.Column):
         self._refresh_reduce_motion()
 
         self._home_chrome.sync_theme(self._t)
-        apply_glass_style(self._workflow_stack, self._t)
+        apply_flat_style(self._workflow_stack, self._t)
         self._scan_section.sync_theme(self._t)
         self._recent_section.sync_theme(self._t)
         self._summary_section.sync_theme(self._t)

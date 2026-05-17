@@ -1,415 +1,640 @@
 """Shared layout shell for the Cerebro Flet app.
 
+
+
 Provides the NavigationRail-based shell with a content area that pages
+
 are swapped into. All pages receive the same consistent chrome.
+
 """
+
+
 
 from __future__ import annotations
 
-import asyncio
+
+
 import logging
+
 from typing import TYPE_CHECKING, Callable
+
+
 
 import flet as ft
 
+
+
+from cerebro.v2.ui.flet_app.design_system.shell_background import (
+
+    apply_shell_theme,
+
+    build_shell_background_stack,
+
+)
+
+from cerebro.v2.ui.flet_app.multigradient_themes import default_gradient, gradient_by_id
 from cerebro.v2.ui.flet_app.routes import ROUTE_MAP, ROUTES
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
+
 from cerebro.v2.ui.flet_app.utils.motion import should_animate
+
 from cerebro.v2.ui.flet_app.utils.shortcuts import format_nav_shortcut_label
 
+
+
 if TYPE_CHECKING:
+
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
+
+
 
 _log = logging.getLogger(__name__)
 
-_GRID_LINE_SPACING_PX = 40
-_GRID_LINE_COUNT = 36
-_GRID_DRIFT_MS = 3000
 
 
-def _control_on_page(ctrl: ft.Control | None) -> bool:
-    """True if *ctrl* is attached to a Page (Flet raises RuntimeError if not)."""
-    if ctrl is None:
-        return False
-    try:
-        return ctrl.page is not None
-    except RuntimeError:
-        return False
+_NAV_ACCENT = "#1DB954"
+
+_NAV_TRACK_BG = "#1e1e1e"
+
+_NAV_SELECTED_FG = "#FFFFFF"
 
 
-def _build_home_grid_column(line_color: str, *, count: int = _GRID_LINE_COUNT) -> ft.Column:
-    """Horizontal rules every 40px at ~4% opacity (Home background only)."""
-    rows: list[ft.Control] = []
-    for _ in range(count):
-        rows.append(
-            ft.Container(
-                height=_GRID_LINE_SPACING_PX,
-                alignment=ft.Alignment(0, 1),
-                content=ft.Divider(height=1, color=line_color),
-            )
-        )
-    return ft.Column(rows, spacing=0, expand=True)
+
 
 
 class AppLayout(ft.Column):
+
     """Root layout: top navigation bar and content area."""
 
+
+
     def __init__(
+
         self,
+
         page: ft.Page,
+
         state_bridge: "StateBridge",
+
         page_builders: dict[str, Callable[[], ft.Control]],
+
     ):
+
         super().__init__(expand=True, spacing=0)
+
         self._page = page
+
         self._bridge = state_bridge
+
         self._builders = page_builders
+
         self._theme_mode = "dark" if str(getattr(self._bridge, "app_theme", "dark")).lower() == "dark" else "light"
+
         self._t = theme_for_mode(self._theme_mode)
-        # Start "uninitialized" so first navigate_to("dashboard") mounts content.
+
         self._current_key: str = ""
 
-        # Plain container (not AnimatedSwitcher): with singleton tab pages, the
-        # switcher often failed to replace visible content while the rail updated.
-        # Clip so wide / overflowing results subtree cannot sit on top of the rail in hit-testing.
-        self._content_host = ft.Container(
-            expand=True,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            padding=ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0),
-            bgcolor=ft.Colors.TRANSPARENT,
-        )
-        self._tab_containers: dict[str, ft.Container] = {}  # F2: reuse wrappers
 
-        # Keep power-user pages routable but remove low-frequency pages from top-level navbar.
-        self._nav_routes = [r for r in ROUTES if r.key != "exclude"]
-        self._brand_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16)
-        self._brand_text = ft.Text("CEREBRO", size=11, weight=ft.FontWeight.W_700)
-        self._brand_block = ft.Container(
-            content=ft.Row(
-                [self._brand_icon, self._brand_text],
-                spacing=8,
-                tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            tooltip="Cerebro v2.0",
+
+        self._content_host = ft.Container(
+
+            expand=True,
+
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+
+            padding=ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0),
+
+            bgcolor=ft.Colors.TRANSPARENT,
+
         )
+
+        self._tab_containers: dict[str, ft.Container] = {}
+
+
+
+        self._nav_routes = [r for r in ROUTES if r.key != "exclude"]
+        self._route_map = ROUTE_MAP
+
+
+
+        self._brand_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16)
+
+        self._brand_text = ft.Text("CEREBRO", size=11, weight=ft.FontWeight.W_700)
+
+        self._brand_block = ft.Container(
+
+            content=ft.Row(
+
+                [self._brand_icon, self._brand_text],
+
+                spacing=8,
+
+                tight=True,
+
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+
+            ),
+
+            tooltip="Cerebro v2.0",
+
+        )
+
         self._nav_pills: dict[str, ft.Container] = {}
+
         self._nav_labels: dict[str, ft.Text] = {}
+
         self._nav_icons: dict[str, ft.Icon] = {}
+
         self._nav_hover_key: str | None = None
+
         self._nav_pill_stride = 106
-        self._grid_drift_generation = 0
+
         nav_button_row = ft.Row(spacing=6, tight=True)
+
         for idx, route in enumerate(self._nav_routes):
+
             icon = ft.Icon(route.icon, size=16)
+
             label = ft.Text(route.label, size=11, weight=ft.FontWeight.W_600)
+
             shortcut = format_nav_shortcut_label(page, idx + 1)
+
             pill = ft.Container(
+
                 border_radius=16,
+
                 padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+
                 ink=True,
+
                 bgcolor=ft.Colors.TRANSPARENT,
+
                 animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+
                 tooltip=f"{route.label} ({shortcut})",
+
                 content=ft.Row(
+
                     [icon, label],
+
                     spacing=6,
+
                     tight=True,
+
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
+
                 ),
+
                 on_click=lambda _e, k=route.key: self._on_nav_click(k),
+
                 on_hover=lambda e, k=route.key: self._on_nav_hover(e, k),
+
             )
+
             self._nav_pills[route.key] = pill
+
             self._nav_labels[route.key] = label
+
             self._nav_icons[route.key] = icon
+
             nav_button_row.controls.append(pill)
 
+
+
         self._nav_indicator = ft.Container(
+
             height=34,
+
             width=self._nav_pill_stride,
+
             border_radius=16,
+
             left=0,
+
             animate_position=ft.Animation(300, ft.AnimationCurve.EASE_OUT_CUBIC),
-        )
-        nav_track = ft.Container(
-            border_radius=24,
-            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
-            content=ft.Stack([self._nav_indicator, nav_button_row]),
+
         )
 
-        self._grid_bg = ft.Container(
-            expand=True,
-            visible=False,
-            clip_behavior=ft.ClipBehavior.NONE,
-            content=_build_home_grid_column(
-                ft.Colors.with_opacity(0.04, self._t.colors.fg_muted),
-            ),
+        self._nav_track = ft.Container(
+
+            border_radius=24,
+
+            padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+
+            content=ft.Stack([self._nav_indicator, nav_button_row]),
+
         )
+
+
+
+        gid = getattr(state_bridge, "active_gradient_id", "flet_base")
+
+        gradient = gradient_by_id(gid) or default_gradient()
+
+        self._shell_bg = build_shell_background_stack(gradient)
+
+
+
         self._content_stack = ft.Stack(
-            [self._grid_bg, self._content_host],
+
+            [self._shell_bg, self._content_host],
+
             expand=True,
+
         )
+
+
 
         self._top_nav = ft.Container(
+
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.TRANSPARENT)),
+
             content=ft.Row(
+
                 [
+
                     self._brand_block,
+
                     ft.Container(width=12),
-                    nav_track,
+
+                    self._nav_track,
+
                     ft.Container(expand=True),
+
                 ],
+
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
+
             ),
+
         )
+
+
 
         self.controls = [
+
             self._top_nav,
+
             self._content_stack,
+
         ]
+
         self._apply_nav_theme()
+
+
 
     def _on_nav_click(self, key: str) -> None:
+
         if key == "review" and not bool(self._bridge.state.groups):
+
             self._bridge.show_snackbar("Run a scan first to open Review.", info=True)
+
             self.navigate_to("dashboard")
+
             return
+
         self.navigate_to(key)
 
+
+
     def _on_nav_hover(self, e: ft.ControlEvent, key: str) -> None:
+
         self._nav_hover_key = key if str(e.data).lower() == "true" else None
+
         self._sync_nav_selection()
+
         if self.page is not None:
+
             self.update()
+
+
 
     def _selected_nav_index_for_key(self, key: str) -> int:
-        """Map route keys to rail indices, including hidden routes."""
+
         key_for_nav = "settings" if key == "exclude" else key
+
         return next((i for i, r in enumerate(self._nav_routes) if r.key == key_for_nav), 0)
 
+
+
     def _apply_nav_theme(self) -> None:
+
         c = self._t.colors
+
         self._top_nav.bgcolor = c.nav_bg
-        self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border3))
-        if hasattr(self, "_grid_bg"):
-            line_color = ft.Colors.with_opacity(0.04, c.fg_muted)
-            grid_col = self._grid_bg.content
-            if isinstance(grid_col, ft.Column):
-                for row in grid_col.controls:
-                    if isinstance(row, ft.Container) and isinstance(row.content, ft.Divider):
-                        row.content.color = line_color
-        self._brand_icon.color = c.accent
+
+        self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border))
+
+        self._nav_track.bgcolor = _NAV_TRACK_BG
+
+        self._brand_icon.color = c.primary
+
         self._brand_text.color = c.fg
+
         self._sync_nav_selection()
+
+
 
     def _sync_nav_selection(self) -> None:
+
         c = self._t.colors
+
         selected_key = "settings" if self._current_key == "exclude" else self._current_key
+
         sel_idx = self._selected_nav_index_for_key(selected_key or "dashboard")
+
         self._nav_indicator.left = sel_idx * self._nav_pill_stride
-        self._nav_indicator.bgcolor = ft.Colors.with_opacity(0.15, c.accent)
-        self._nav_indicator.border = ft.border.all(1, ft.Colors.with_opacity(0.28, c.accent))
-        self._nav_indicator.shadow = ft.BoxShadow(
-            spread_radius=0,
-            blur_radius=14,
-            color=ft.Colors.with_opacity(0.22, c.accent),
-            offset=ft.Offset(0, 2),
-        )
+
+        self._nav_indicator.bgcolor = _NAV_ACCENT
+
+        self._nav_indicator.border = None
+
+        self._nav_indicator.shadow = None
+
         if not should_animate(self._bridge):
+
             self._nav_indicator.animate_position = None
 
+
+
         for key, pill in self._nav_pills.items():
+
             is_selected = key == selected_key
+
             is_hovered = (self._nav_hover_key == key) and not is_selected
+
             label = self._nav_labels[key]
+
             icon = self._nav_icons[key]
-            label.color = c.accent if is_selected else (c.fg if is_hovered else c.fg2)
-            icon.color = c.accent if is_selected else (c.fg if is_hovered else c.fg_muted)
+
+            if is_selected:
+
+                label.color = _NAV_SELECTED_FG
+
+                icon.color = _NAV_SELECTED_FG
+
+            elif is_hovered:
+
+                label.color = c.fg
+
+                icon.color = c.fg
+
+            else:
+
+                label.color = c.fg2
+
+                icon.color = c.fg_muted
+
             pill.bgcolor = ft.Colors.TRANSPARENT
+
             pill.border = None
+
             pill.shadow = None
 
-    def _sync_grid_bg(self) -> None:
-        """Show the Home grid only on dashboard; optional 1px vertical drift."""
-        on_home = self._current_key == "dashboard"
-        self._grid_bg.visible = on_home
-        self._grid_drift_generation += 1
-        if not on_home or not should_animate(self._bridge):
-            self._grid_bg.animate_offset = None
-            self._grid_bg.offset = ft.Offset(0, 0)
-            return
-        self._grid_bg.animate_offset = ft.Animation(
-            _GRID_DRIFT_MS,
-            ft.AnimationCurve.EASE_IN_OUT,
-        )
-        self._grid_bg.offset = ft.Offset(0, 0)
-        if self._page is not None:
-            self._page.run_task(self._grid_drift_loop, self._grid_drift_generation)
 
-    async def _grid_drift_loop(self, generation: int) -> None:
-        """Ping-pong _grid_bg by 1px when motion is enabled (3s per half-cycle)."""
-        while (
-            generation == self._grid_drift_generation
-            and self._current_key == "dashboard"
-            and should_animate(self._bridge)
-        ):
-            self._grid_bg.offset = ft.Offset(0, 1)
-            if _control_on_page(self._grid_bg):
-                self._grid_bg.update()
-            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
-            if (
-                generation != self._grid_drift_generation
-                or self._current_key != "dashboard"
-                or not should_animate(self._bridge)
-            ):
-                break
-            self._grid_bg.offset = ft.Offset(0, 0)
-            if _control_on_page(self._grid_bg):
-                self._grid_bg.update()
-            await asyncio.sleep(_GRID_DRIFT_MS / 1000)
+
+    def apply_shell_gradient(self, gradient_id: str) -> None:
+
+        gradient = gradient_by_id(gradient_id) or default_gradient()
+
+        apply_shell_theme(self._shell_bg, gradient)
+
+
 
     def apply_theme(self, mode: str) -> None:
+
         """Repaint shell controls when the app theme changes."""
+
         self._theme_mode = "dark" if (mode or "").lower() == "dark" else "light"
+
         self._t = theme_for_mode(self._theme_mode)
+
         self._content_host.padding = ft.Padding.symmetric(horizontal=self._t.spacing.lg, vertical=0)
+
         self._content_host.bgcolor = ft.Colors.TRANSPARENT
+
         self._apply_nav_theme()
-        self._sync_grid_bg()
+
+        self.apply_shell_gradient(getattr(self._bridge, "active_gradient_id", "flet_base"))
+
         if self.page is not None:
+
             self.update()
+
+
 
     def navigate_to(self, key: str, *, run_on_show: bool = True) -> None:
-        """Switch the content area to the page identified by *key*.
 
-        If *run_on_show* is False, the tab's ``on_show`` hook is skipped (caller must run it
-        after hydrating page-specific state). Used for ``ScanCompleted`` so ``_sync_groups``
-        runs before Review paints — otherwise ``on_show`` sees empty ``_groups`` and Flet
-        can miss the follow-up subtree updates.
-        """
         if key == "duplicates":
+
             key = "review"
-        if key not in ROUTE_MAP:
+
+        if key not in self._route_map:
+
             _log.warning("Unknown route key: %s", key)
+
             return
+
         if key == "review" and not bool(self._bridge.state.groups):
+
             key = "dashboard"
-        # If already on this key and content is mounted, skip redundant rebuild.
-        # If content host is unexpectedly empty, force remount for resilience.
+
         if key == self._current_key and self._content_host.content is not None:
-            # Re-selecting Workspace while a deferred load is pending must still run on_show;
-            # otherwise the Review singleton can stay on an empty _content subtree.
+
             if key == "review":
+
                 wrap = self._tab_containers.get("review")
+
                 inner_ctrl = wrap.content if wrap is not None else None
+
                 if inner_ctrl is not None and getattr(
+
                     inner_ctrl, "_pending_deferred_render", False
+
                 ) and hasattr(inner_ctrl, "on_show"):
+
                     try:
+
                         inner_ctrl.on_show()
+
                     except Exception:
+
                         _log.exception("on_show failed for deferred same-tab review revisit")
+
             return
+
         self._current_key = key
+
         _ = self._selected_nav_index_for_key(key)
+
         self._sync_nav_selection()
-        self._sync_grid_bg()
+
         if key == "dashboard":
+
             from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
+
+
 
             TimeKeeper.instance().resume()
+
         else:
+
             from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
+
+
             TimeKeeper.instance().pause()
+
         if self.page is not None:
+
             self.update()
 
+
+
         builder = self._builders.get(key)
+
         inner = None
+
         if builder:
+
             inner = builder()
-            # Review hosts heavy image / compare subtrees; HARD_EDGE on the tab wrapper has
-            # been associated with blank/grey first-paint on some Flet desktop builds.
+
             tab_clip = ft.ClipBehavior.NONE if key == "review" else ft.ClipBehavior.HARD_EDGE
-            # F2: reuse the same wrapper container per tab to avoid remount overhead.
+
             if key not in self._tab_containers:
+
                 self._tab_containers[key] = ft.Container(
+
                     expand=True,
+
                     content=inner,
+
                     clip_behavior=tab_clip,
+
                 )
+
             else:
+
                 tc = self._tab_containers[key]
+
                 tc.clip_behavior = tab_clip
-                # Flet may skip repainting when `content` is set to the same object instance
-                # again (singleton ReviewPage / DashboardPage). Bounce through None once.
+
                 if tc.content is inner:
+
                     tc.content = None
+
                 tc.content = inner
+
             self._content_host.content = self._tab_containers[key]
+
         else:
+
             self._content_host.content = ft.Container(
+
                 expand=True,
+
                 alignment=ft.Alignment(0, 0),
+
                 content=ft.Text("Page not found"),
+
                 key="cerebro-tab-missing",
+
             )
 
-        route_info = ROUTE_MAP[key]
+
+
+        route_info = self._route_map[key]
+
         self._page.route = route_info.route
 
-        # Keep StateStore.active_tab in sync with the rail. Otherwise global listeners
-        # (e.g. on ThemeChanged) still see the old tab and call navigate_to(old), which
-        # immediately replaces Settings and looks like "Settings does nothing".
+
+
         try:
+
             self._bridge.navigate(key)
+
         except Exception:
+
             _log.exception("Failed to sync active_tab for route key %s", key)
 
-        # Mount the new content first so inner.page is assigned before on_show runs.
-        # Controls appended inside on_show (in-place list mutation) don't trigger dirty
-        # tracking, so we call _content_host.update() here to mount ReviewPage, then call
-        # on_show() while the page reference is live, and finally page.update() to flush.
+
+
         self._content_host.update()
 
-        # Apply any pending theme change that was deferred while this page was inactive
+
+
         if inner is not None and hasattr(inner, "_pending_theme"):
+
             pending = inner._pending_theme  # type: ignore[attr-defined]
+
             if pending:
+
                 inner._pending_theme = None  # type: ignore[attr-defined]
+
                 try:
+
                     inner.apply_theme(pending)
+
                 except Exception:
+
                     _log.exception("Deferred apply_theme failed for route key %s", key)
 
+
+
         if run_on_show and inner is not None and hasattr(inner, "on_show"):
+
             try:
+
                 inner.on_show()
+
             except Exception:
+
                 _log.exception("on_show failed for route key %s", key)
 
+
+
         if self._page is not None:
+
             try:
+
                 self._page.update()
+
             except Exception:
+
                 _log.exception("page.update after navigate_to failed")
 
+
+
     def refresh_current(self) -> None:
-        """Refresh the current page without a full navigation cycle (F10)."""
+
         key = self._current_key or "dashboard"
+
         builder = self._builders.get(key)
+
         if builder:
+
             inner = builder()
+
             if inner is not None and hasattr(inner, "on_show"):
+
                 try:
+
                     inner.on_show()
+
                 except Exception:
+
                     _log.exception("on_show failed in refresh_current for %s", key)
+
         self._content_host.update()
 
+
+
     @property
+
     def current_key(self) -> str:
+
         return self._current_key
+
+

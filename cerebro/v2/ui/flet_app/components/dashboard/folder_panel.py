@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
-from cerebro.v2.ui.flet_app.design_system.tokens import NEON_DARK
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
 from cerebro.v2.ui.flet_app.utils.motion import animation_or_none, should_animate
 
@@ -206,7 +205,7 @@ class DashboardFolderPanel:
         self._apply_border_style()
 
     def _border_glow_color(self) -> str:
-        return str(NEON_DARK.get("border_glow", self._t.colors.accent))
+        return str(self._t.colors.primary)
 
     def _apply_border_style(self) -> None:
         accent = self._t.colors.accent

@@ -88,7 +88,7 @@ def _main(page: ft.Page) -> None:
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
     # Filled from apply_preset_theme once settings are loaded.
-    page.bgcolor = "#060B14"
+    page.bgcolor = "#121212"
     page.padding = 0
     page.spacing = 0
 
@@ -230,7 +230,9 @@ def _main(page: ft.Page) -> None:
         _fs0 = int(_appear0.get("font_size", 13) or 13)
     set_ui_font_size_px(_fs0)
 
-    _preset_id = str((_appear0 or {}).get("ui_theme_preset", "count_byteula"))
+    from cerebro.v2.ui.flet_app.palette_themes import resolve_preset_id
+
+    _preset_id = resolve_preset_id(str((_appear0 or {}).get("ui_theme_preset", "flet_base")))
     bridge.apply_preset_theme(_preset_id)
 
     dashboard_page = DashboardPage(bridge, folder_picker)
@@ -543,12 +545,12 @@ def _main(page: ft.Page) -> None:
             title=ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color="#22D3EE"),
+                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color="#1DB954"),
                         width=32,
                         height=32,
                         alignment=ft.Alignment(0, 0),
-                        bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
-                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#22D3EE")),
+                        bgcolor=ft.Colors.with_opacity(0.12, "#1DB954"),
+                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#1DB954")),
                         border_radius=8,
                     ),
                     ft.Text("Welcome to Cerebro", size=18, weight=ft.FontWeight.W_700),
@@ -559,11 +561,7 @@ def _main(page: ft.Page) -> None:
                 width=560,
                 padding=16,
                 border_radius=14,
-                gradient=ft.LinearGradient(
-                    begin=ft.Alignment(-1, -1),
-                    end=ft.Alignment(1, 1),
-                    colors=["#111A24", "#0B121A"],
-                ),
+                bgcolor="#1e1e1e",
                 border=ft.border.all(1, ft.Colors.with_opacity(0.16, "#FFFFFF")),
                 content=ft.Column(
                     [step_badge, title_text, desc_text, progress, dont_show_again],
@@ -581,7 +579,7 @@ def _main(page: ft.Page) -> None:
                     "Next",
                     on_click=_next,
                     style=ft.ButtonStyle(
-                        bgcolor="#22D3EE",
+                        bgcolor="#1DB954",
                         color="#0A0E14",
                         shape=ft.RoundedRectangleBorder(radius=10),
                     ),
@@ -739,12 +737,11 @@ def _main(page: ft.Page) -> None:
                 _log.exception("apply_theme failed on %s", type(p).__name__)
 
     bridge.set_on_theme_change(_on_theme_change)
+    _on_theme_change(bridge.app_theme)
 
     history_page.load_history(bridge.get_scan_history_table_rows())
     history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
 
-    appearance = bridge.get_settings().get("appearance") or {}
-    bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "count_byteula")))
     _show_onboarding_if_needed()
     try:
         dashboard_page.prompt_resume_incomplete_scan_if_needed()

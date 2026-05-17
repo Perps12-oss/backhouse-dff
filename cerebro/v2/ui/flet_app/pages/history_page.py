@@ -345,8 +345,9 @@ class HistoryPage(ft.Column):
             self._page_header.subtitle.color = self._t.colors.fg_muted
 
         # Update Glass Styles
-        self._empty_container.bgcolor = self._t.colors.glass_bg
-        self._empty_container.border = ft.border.all(1, self._t.colors.glass_border)
+        from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+
+        apply_flat_style(self._empty_container, self._t)
 
         # Update Table Borders
         self._table.border = ft.border.all(1, self._t.colors.border)

@@ -55,6 +55,7 @@ class StateBridge:
         self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
         self._on_theme_change: Optional[Callable[[str], None]] = None
         self._visual_theme: str = "dark"
+        self._active_gradient_id: str = "flet_base"
         self._scan_session: Dict[str, Any] = {}
         self._suppress_page_update: bool = False
         self._last_page_update_ts: float = 0.0  # B3: throttle progress-tick updates
@@ -66,8 +67,12 @@ class StateBridge:
 
     @property
     def app_theme(self) -> str:
-        """Effective light/dark label for glass morphism overlays (always ``light`` or ``dark``)."""
+        """Effective light/dark label for overlays (always ``light`` or ``dark``)."""
         return self._visual_theme
+
+    @property
+    def active_gradient_id(self) -> str:
+        return self._active_gradient_id
 
     @property
     def flet_page(self) -> ft.Page:
@@ -229,11 +234,30 @@ class StateBridge:
                 _log.exception("Theme change callback failed")
 
     def apply_preset_theme(self, preset_id: str) -> bool:
-        """Apply a named palette (VS Code-accurate colors + light/dark shell) and sync app state."""
-        from cerebro.v2.ui.flet_app.palette_themes import default_preset, preset_by_id
+        """Apply a gradient theme (flet-base surfaces + accent) and sync app state."""
+        from cerebro.v2.ui.flet_app.multigradient_themes import (
+            default_gradient,
+            gradient_by_id,
+        )
+        from cerebro.v2.ui.flet_app.palette_themes import (
+            default_preset,
+            derive_preset_from_base,
+            resolve_preset_id,
+        )
         from cerebro.v2.ui.flet_app.theme import build_flet_theme, set_active_preset
 
-        preset = preset_by_id(preset_id) or default_preset()
+        resolved = resolve_preset_id(preset_id)
+        gradient = gradient_by_id(resolved) or default_gradient()
+        self._active_gradient_id = gradient.id
+
+        base = default_preset()
+        preset = derive_preset_from_base(
+            base,
+            preset_id=gradient.id,
+            name=gradient.name,
+            primary=gradient.accent,
+            seed=gradient.accent,
+        )
         mode_str = "dark" if preset.is_dark else "light"
 
         set_active_preset(preset)

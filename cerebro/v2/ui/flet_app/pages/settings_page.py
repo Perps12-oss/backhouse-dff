@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any, Dict
 import flet as ft
 
 from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
-from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.multigradient_themes import GRADIENT_THEMES
+from cerebro.v2.ui.flet_app.palette_themes import resolve_preset_id
+from cerebro.v2.ui.flet_app.design_system.cards import flat_card
 from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
@@ -95,7 +96,8 @@ class SettingsPage(ft.Column):
         self._deletion_similarity_label: ft.Text
         self._criteria_radio: ft.RadioGroup
 
-        self._theme_chips: Dict[str, ft.Container] = {}
+        self._theme_dropdown: ft.Dropdown
+        self._theme_preview: ft.Container
 
         self._build_ui()
 
@@ -136,13 +138,10 @@ class SettingsPage(ft.Column):
             on_change=self._on_tab_changed,
         )
 
-        # Tab content containers (glass)
+        # Tab content containers (flat flet-base cards)
         self._tab_contents = {
-            "general": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "appearance": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "performance": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "deletion": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "about": glass_container(content=None, padding=t.spacing.xl, t=t),
+            key: flat_card(ft.Container(), t, padding=t.spacing.xl, expand=True)
+            for key in ("general", "appearance", "performance", "deletion", "about")
         }
 
         # Build each tab's inner content
@@ -211,7 +210,7 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("file_mode", {})
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
-        self._settings["appearance"].setdefault("ui_theme_preset", "count_byteula")
+        self._settings["appearance"].setdefault("ui_theme_preset", "flet_base")
         perf = self._settings.setdefault("performance", {})
         perf.setdefault("max_threads", 0)
         perf.setdefault("hash_cache_enabled", True)
@@ -260,8 +259,13 @@ class SettingsPage(ft.Column):
         self._deletion_dhash_label.value = f"dHash threshold: {int(self._deletion_dhash_slider.value)}"
         self._deletion_similarity_label.value = f"Matching level: {int(self._deletion_similarity_slider.value)}%"
 
-        preset_id = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
+        preset_id = resolve_preset_id(
+            str(self._settings["appearance"].get("ui_theme_preset", "flet_base"))
+        )
         self._bridge.apply_preset_theme(preset_id)
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = preset_id
+            self._update_theme_preview(preset_id)
 
     # ------------------------------------------------------------------
     # Tab builders
@@ -374,39 +378,33 @@ class SettingsPage(ft.Column):
                 color=t.colors.fg,
             )
         )
-        self._theme_chips.clear()
-        selected_pid = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
-        chips_wrap = ft.Row(wrap=True, spacing=t.spacing.sm, run_spacing=t.spacing.sm)
-        for preset in PRESET_THEMES:
-            is_sel = preset.id == selected_pid
-            chip = ft.Container(
-                width=112,
-                padding=8,
-                border=ft.border.all(
-                    2 if is_sel else 1,
-                    t.colors.primary if is_sel else t.colors.border,
-                ),
-                border_radius=10,
-                ink=True,
-                on_click=lambda e, pid=preset.id: self._on_preset_selected(pid),
-                content=ft.Column(
-                    [
-                        ft.Container(height=28, border_radius=6, bgcolor=preset.seed),
-                        ft.Text(
-                            preset.name,
-                            size=10,
-                            color=t.colors.fg,
-                            text_align=ft.TextAlign.CENTER,
-                            max_lines=2,
-                        ),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=6,
-                ),
+        selected_pid = resolve_preset_id(
+            str(self._settings["appearance"].get("ui_theme_preset", "flet_base"))
+        )
+        self._theme_preview = ft.Container(
+            width=48,
+            height=28,
+            border_radius=6,
+            border=ft.border.all(1, t.colors.border),
+        )
+        self._update_theme_preview(selected_pid)
+        self._theme_dropdown = ft.Dropdown(
+            width=320,
+            value=selected_pid,
+            options=[
+                ft.dropdown.Option(key=g.id, text=g.name) for g in GRADIENT_THEMES
+            ],
+            on_change=self._on_theme_dropdown_change,
+            border_radius=8,
+            bgcolor=t.colors.bg3,
+        )
+        content.controls.append(
+            ft.Row(
+                [self._theme_preview, self._theme_dropdown],
+                spacing=t.spacing.sm,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
-            self._theme_chips[preset.id] = chip
-            chips_wrap.controls.append(chip)
-        content.controls.append(chips_wrap)
+        )
 
         self._tab_contents["appearance"].content = content
 
@@ -655,22 +653,34 @@ class SettingsPage(ft.Column):
     # ------------------------------------------------------------------
     # Theme picker
     # ------------------------------------------------------------------
-    def _on_preset_selected(self, preset_id: str) -> None:
-        self._bridge.apply_preset_theme(preset_id)
-        self._settings.setdefault("appearance", {})["ui_theme_preset"] = preset_id
-        self._update_theme_chip_highlights(preset_id)
+    def _on_theme_dropdown_change(self, e: ft.ControlEvent) -> None:
+        preset_id = str(getattr(e.control, "value", "") or "flet_base")
+        self._on_preset_selected(preset_id)
 
-    def _update_theme_chip_highlights(self, selected_id: str) -> None:
-        t = self._t
-        for pid, chip in self._theme_chips.items():
-            sel = pid == selected_id
-            chip.border = ft.border.all(
-                2 if sel else 1,
-                t.colors.primary if sel else t.colors.border,
-            )
+    def _on_preset_selected(self, preset_id: str) -> None:
+        pid = resolve_preset_id(preset_id)
+        self._bridge.apply_preset_theme(pid)
+        self._settings.setdefault("appearance", {})["ui_theme_preset"] = pid
+        self._update_theme_preview(pid)
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = pid
+
+    def _update_theme_preview(self, theme_id: str) -> None:
+        from cerebro.v2.ui.flet_app.multigradient_themes import gradient_by_id
+
+        g = gradient_by_id(theme_id)
+        if g is None or not hasattr(self, "_theme_preview"):
+            return
+        self._theme_preview.gradient = ft.LinearGradient(
+            begin=ft.Alignment(0, -1),
+            end=ft.Alignment(0, 1),
+            colors=[g.gradient_top, g.gradient_bottom],
+        )
         if self._is_mounted():
-            for chip in self._theme_chips.values():
-                chip.update()
+            try:
+                self._theme_preview.update()
+            except RuntimeError:
+                pass
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -740,8 +750,8 @@ class SettingsPage(ft.Column):
         self._settings["general"]["partial_results_banner_timeout_seconds"] = 30 if timeout_raw == "30" else 60
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
-        self._settings["appearance"]["ui_theme_preset"] = str(
-            self._settings["appearance"].get("ui_theme_preset", "count_byteula")
+        self._settings["appearance"]["ui_theme_preset"] = resolve_preset_id(
+            str(getattr(self._theme_dropdown, "value", None) or "flet_base")
         )
 
         self._settings["performance"]["max_threads"] = int(self._perf_threads_slider.value)
@@ -851,10 +861,10 @@ class SettingsPage(ft.Column):
         if self._page_header.subtitle is not None:
             self._page_header.subtitle.color = self._t.colors.fg_muted
 
-        # Update all Tab Containers (Glass styles)
+        from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+
         for container in self._tab_contents.values():
-            container.bgcolor = self._t.colors.glass_bg
-            container.border = ft.border.all(1, self._t.colors.glass_border)
+            apply_flat_style(container, self._t)
             
         # Helper to update text colors in specific controls
         # Note: This is a broad update. For perfection, we'd update every Text control individually.
@@ -876,8 +886,12 @@ class SettingsPage(ft.Column):
         )
         self._cancel_btn.style = ft.ButtonStyle(color=self._t.colors.fg2)
 
-        pid = str(self._settings.get("appearance", {}).get("ui_theme_preset", "count_byteula"))
-        self._update_theme_chip_highlights(pid)
+        pid = resolve_preset_id(
+            str(self._settings.get("appearance", {}).get("ui_theme_preset", "flet_base"))
+        )
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = pid
+        self._update_theme_preview(pid)
 
         if self._is_mounted():
             self.update()

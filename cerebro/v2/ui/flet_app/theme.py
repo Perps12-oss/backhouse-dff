@@ -456,9 +456,10 @@ def glass_surface_bg(t: ThemeTokens) -> str:
 
 
 def apply_glass_style(container: ft.Container, t: ThemeTokens) -> None:
-    """Repaint an existing glass container after theme / preset change."""
-    container.bgcolor = glass_surface_bg(t)
-    container.border = ft.border.all(1, t.colors.glass_border)
+    """Repaint container as flat flet-base surface (legacy name)."""
+    from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+
+    apply_flat_style(container, t)
 
 
 # ---------------------------------------------------------------------------
@@ -475,31 +476,18 @@ def glass_container(
     blur: int = 0,
     **kwargs
 ) -> ft.Container:
-    """Create a glassmorphism-styled container."""
-    br = border_radius or t.border_radius
-    shadow = kwargs.pop(
-        "shadow",
-        ft.BoxShadow(
-            spread_radius=0,
-            blur_radius=t.shadow_blur,
-            offset=ft.Offset(0, t.shadow_offset_y),
-            color=ft.Colors.with_opacity(0.12, "#000000" if is_dark_theme(t) else "#94A3B8"),
-        ),
-    )
-    container_kwargs: dict = dict(
-        content=content,
+    """Flat flet-base card (legacy name)."""
+    from cerebro.v2.ui.flet_app.design_system.cards import flat_card
+
+    _ = blur
+    return flat_card(
+        content,
+        t,
         padding=padding,
-        border_radius=br,
-        bgcolor=glass_surface_bg(t),
-        border=ft.border.all(1, t.colors.glass_border),
-        shadow=shadow,
+        border_radius=border_radius or 12,
         expand=expand,
         **kwargs,
     )
-    if blur > 0:
-        container_kwargs["blur"] = ft.Blur(blur, blur)
-    return ft.Container(**container_kwargs)
-
 
 # ---------------------------------------------------------------------------
 # Static data unchanged from original
