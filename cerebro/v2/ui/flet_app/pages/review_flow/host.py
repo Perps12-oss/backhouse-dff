@@ -14,7 +14,11 @@ from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
 from cerebro.v2.ui.flet_app.pages.review_flow.apply_sheet import ApplyOutcomeModel, ApplyStep, build_apply_sheet_column
-from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import build_progress_sidebar
+from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import (
+    ProgressSidebarRefs,
+    build_progress_sidebar,
+    refresh_progress_sidebar,
+)
 from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.inspect import build_inspect_screen
@@ -29,7 +33,6 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
     step_inspect_cmp,
 )
 from cerebro.core.deletion import DeletionPolicy
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS, normalized_rule, paths_to_delete
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_INSPECT_EDGE, get_thumbnail_cache
@@ -58,10 +61,11 @@ class ReviewFlowHost(ft.Column):
         self._content = ft.Container(expand=True)
         self._grid = ft.ListView(expand=True)
         self._workstation_sidebar = ft.Container(width=0)
+        self._sidebar_refs: Optional[ProgressSidebarRefs] = None
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
-        self._filter_sheet: Optional[ft.BottomSheet] = None
-        self._apply_sheet: Optional[ft.BottomSheet] = None
+        self._filter_sheet: Optional[ft.AlertDialog] = None
+        self._apply_dialog: Optional[ft.AlertDialog] = None
         self._apply_outer: Optional[ft.Container] = None
         self._apply_step: ApplyStep = "summary"
         self._apply_confirm_chk: Optional[ft.Checkbox] = None
@@ -73,6 +77,7 @@ class ReviewFlowHost(ft.Column):
         self._inspect_preview_generation = 0
         self._reduce_motion = bool(bridge.is_reduce_motion_enabled())
         self._last_render_screen: Optional[str] = None
+        self._skip_content_fade = False
         self.controls = [
             ft.Row(
                 [
@@ -102,8 +107,11 @@ class ReviewFlowHost(ft.Column):
         page_width = getattr(self._bridge.flet_page, "width", None)
         if is_narrow_viewport(page_width):
             self._workstation_sidebar = ft.Container(width=0)
+            self._sidebar_refs = None
         else:
-            self._workstation_sidebar = build_progress_sidebar(t, screen, self._state, self._on_progress_jump)
+            self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
+                t, screen, self._state, self._on_progress_jump
+            )
         self.controls[0].controls[0] = self._workstation_sidebar
         if screen == "overview":
             elapsed: Optional[float] = None
@@ -147,7 +155,6 @@ class ReviewFlowHost(ft.Column):
                     on_open_group_detail=self._browse_open_detail,
                     on_close_group_detail=self._browse_close_detail,
                     on_toggle_file_mark=self._browse_toggle_file_mark,
-                    on_apply_smart_rule_all=self._apply_smart_rule_all_visible,
                     on_start_delete_ceremony=self._open_apply_sheet,
                     on_proceed_execute=self._open_apply_sheet,
                     reduce_motion=self._reduce_motion,
@@ -161,7 +168,9 @@ class ReviewFlowHost(ft.Column):
                     self._browse_view.attach_page(page)
             self._content.content = self._browse_view.root
             self._grid = self._browse_view.list_host
-            self._browse_view.refresh()
+            self._ensure_content_visible()
+            if prev_screen != "browse" or not list(getattr(self._browse_view.list_host, "controls", None) or []):
+                self._browse_view.refresh()
         elif screen == "inspect":
             self._repair_inspect_indices_for_selection()
             inspect_col, slot_a, slot_b = build_inspect_screen(
@@ -188,6 +197,7 @@ class ReviewFlowHost(ft.Column):
             self._schedule_inspect_previews(slot_a, slot_b)
         if (
             not self._reduce_motion
+            and not self._skip_content_fade
             and prev_screen is not None
             and prev_screen != screen
             and self._page_is_set(self._content)
@@ -214,7 +224,10 @@ class ReviewFlowHost(ft.Column):
             self._state.rebuild_group_index()
             self._state.invalidate_visible_cache()
         self._try_resume_session()
-        self._render_active_screen()
+        if self._state.scan_results:
+            self._repair_review_surface(self._state.active_screen)
+        else:
+            self._render_active_screen()
 
     def reset_to_overview_after_scan(self) -> None:
         """Show the results summary screen after a scan completes."""
@@ -355,6 +368,11 @@ class ReviewFlowHost(ft.Column):
                 self._router.go_back()
             if self._router.active_screen() != screen:
                 self._router.navigate(screen)
+            else:
+                self._ensure_content_visible()
+                self._repair_review_surface(screen)
+        else:
+            self._router.navigate(screen)
 
     def _toggle_set(self, group_id: int) -> None:
         if group_id in self._state.selected_set_ids:
@@ -489,8 +507,8 @@ class ReviewFlowHost(ft.Column):
             sel.protected_paths = {p for p in sel.protected_paths if p in alive}
         self._state._recompute_cart_counters()
 
-    def _apply_sheet_closed(self, _e=None) -> None:
-        self._apply_sheet = None
+    def _apply_dialog_closed(self, _e=None) -> None:
+        self._apply_dialog = None
         self._apply_confirm_chk = None
 
     def _apply_close_sheet(self, _e=None) -> None:
@@ -498,7 +516,7 @@ class ReviewFlowHost(ft.Column):
             self._bridge.dismiss_top_dialog()
         except Exception:
             pass
-        self._apply_sheet_closed()
+        self._apply_dialog_closed()
 
     def _apply_refresh_body(self) -> None:
         if self._apply_outer is None:
@@ -536,8 +554,9 @@ class ReviewFlowHost(ft.Column):
     def _open_apply_sheet(self, _e=None) -> None:
         buckets = self._state.cart_buckets()["delete"]
         if not buckets:
-            self._show_toast("No files marked for removal. Apply a smart rule or pick files in a group.")
+            self._show_toast("No files marked for removal. Use checkboxes on groups, then try again.")
             return
+        self._push_marked_paths_to_store()
         self._apply_step = "summary"
         self._last_apply_outcome = None
         self._apply_undo_snapshot = None
@@ -547,16 +566,19 @@ class ReviewFlowHost(ft.Column):
         )
         self._apply_progress = ft.ProgressBar(value=0, width=400)
         self._apply_progress_label = ft.Text("Preparing…", size=self._t.typography.size_xs)
-        self._apply_outer = ft.Container(padding=16, width=480)
+        self._apply_outer = ft.Container(padding=0, width=480)
         self._apply_refresh_body()
-        self._apply_sheet = ft.BottomSheet(
+        # BottomSheet + show_dialog never painted on Flet 0.84 desktop in the field;
+        # AlertDialog matches delete_flow / dashboard and is reliably visible.
+        self._apply_dialog = ft.AlertDialog(
+            modal=True,
             content=self._apply_outer,
-            on_dismiss=lambda e: self._apply_sheet_closed(),
-            scrollable=True,
+            content_padding=ft.padding.all(16),
             bgcolor=self._t.colors.bg2,
-            show_drag_handle=True,
+            shape=ft.RoundedRectangleBorder(radius=16),
+            inset_padding=ft.padding.symmetric(horizontal=24, vertical=48),
         )
-        self._bridge.show_modal_dialog(self._apply_sheet)
+        self._bridge.show_modal_dialog(self._apply_dialog)
 
     def _apply_goto_confirm(self, _e=None) -> None:
         self._apply_step = "confirm"
@@ -635,6 +657,7 @@ class ReviewFlowHost(ft.Column):
                 self._state.report_freed_bytes = bytes_reclaimed
                 self._reconcile_state_after_delete(new_groups)
                 self._push_marked_paths_to_store()
+                self._bridge.invalidate_stats_cache()
                 self._last_apply_outcome = ApplyOutcomeModel(
                     deleted_count=deleted_count,
                     freed_bytes=bytes_reclaimed,
@@ -733,45 +756,79 @@ class ReviewFlowHost(ft.Column):
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.sync_checkbox_marks()
+            self._browse_view.update_cart_chrome()
+        self._update_sidebar_counts_only()
 
-    def _apply_smart_rule_all_visible(self, rule: str) -> None:
-        """Mark delete candidates in every visible duplicate group using the smart rule."""
-        r = normalized_rule(rule)
-        self._state.push_undo_snapshot()
-        groups_touched = 0
-        files_marked = 0
-        for group in self._state.visible_groups():
-            if any(self._state.is_path_protected(str(f.path)) for f in group.files):
-                continue
-            to_delete = paths_to_delete(r, group.files)
-            if not to_delete:
-                continue
-            self._apply_paths_for_group(group, set(to_delete))
-            groups_touched += 1
-            files_marked += len(to_delete)
-        label = next((lbl for key, lbl in RULE_LABELS if key == r), r)
-        if files_marked:
-            self._show_toast(f"Smart select ({label}): {files_marked} file(s) in {groups_touched} group(s).")
+    def _ensure_content_visible(self) -> None:
+        try:
+            self._content.opacity = 1.0
+            self._content.animate_opacity = None
+        except Exception:
+            pass
+
+    def _update_sidebar_counts_only(self) -> None:
+        """Refresh sidebar stats in place — never replace the Row child (avoids blank main pane)."""
+        page_width = getattr(self._bridge.flet_page, "width", None)
+        if is_narrow_viewport(page_width):
+            return
+        screen = self._router.active_screen()
+        if self._sidebar_refs is None:
+            self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
+                self._t, screen, self._state, self._on_progress_jump
+            )
+            self.controls[0].controls[0] = self._workstation_sidebar
         else:
-            self._show_toast("Nothing to mark — adjust filters or pick another rule.")
-        if self._browse_view:
-            self._browse_view.sync_checkbox_marks()
-            self._browse_view.refresh(rebuild=False)
-        self._rebuild_sidebar_in_place()
-        self._defer_safe_update_content()
+            refresh_progress_sidebar(
+                self._sidebar_refs, self._workstation_sidebar, screen, self._state
+            )
+
+    def _repair_review_surface(self, screen: str) -> None:
+        """Rebind browse content when empty; never force rebuild if groups are already on screen."""
+        self._ensure_content_visible()
+        if screen == "browse" and self._state.scan_results:
+            page = getattr(self._bridge, "flet_page", None)
+            if self._browse_view is None:
+                self._skip_content_fade = True
+                try:
+                    self._render_active_screen()
+                finally:
+                    self._skip_content_fade = False
+                return
+            if page is not None:
+                self._browse_view.attach_page(page)
+            self._content.content = self._browse_view.root
+            self._grid = self._browse_view.list_host
+            host_controls = list(getattr(self._browse_view.list_host, "controls", None) or [])
+            if not host_controls:
+                self._browse_view.refresh(rebuild=True)
+            self._update_sidebar_counts_only()
+            return
+        self._skip_content_fade = True
+        try:
+            self._render_active_screen()
+        finally:
+            self._skip_content_fade = False
+
+    def _schedule_after_handler_frame(self, fn: Callable[[], None]) -> None:
+        """Run *fn* on the Flet UI loop after the current event handler returns.
+
+        Uses ``page.run_task`` only. ``page.run_thread`` runs on a worker thread and must
+        not mutate controls (see ``BackendService._deliver_on_ui_thread``).
+        """
+        page = getattr(self._bridge, "flet_page", None)
+        if page is not None and hasattr(page, "run_task"):
+
+            async def _deferred() -> None:
+                await asyncio.sleep(0)
+                fn()
+
+            page.run_task(_deferred)
+        else:
+            fn()
 
     def _defer_safe_update_content(self) -> None:
         """Defer parent content paint one frame — avoids blank main after heavy Browse refresh + dialog."""
-        page = getattr(self._bridge, "flet_page", None)
-        if page is None or not hasattr(page, "run_task"):
-            self._safe_update(self._content)
-            return
-
-        async def _tick() -> None:
-            await asyncio.sleep(0)
-            self._safe_update(self._content)
-
-        page.run_task(_tick)
+        self._schedule_after_handler_frame(lambda: self._safe_update(self._content))
 
     def _inspect_prev(self, _e=None) -> None:
         groups = self._state.visible_groups()
@@ -857,13 +914,23 @@ class ReviewFlowHost(ft.Column):
         self._persist_inspect_layout()
         self._render_active_screen()
 
-    def _apply_paths_for_group(self, group: DuplicateGroup, delete_paths: set[str]) -> None:
+    def _apply_paths_for_group(
+        self,
+        group: DuplicateGroup,
+        delete_paths: set[str],
+        *,
+        notify: bool = True,
+        _recompute: bool = True,
+    ) -> None:
         sel = self._state.set_selections.setdefault(group.group_id, SetSelection())
+        self._state.marked_paths -= sel.deleted_paths
         sel.deleted_paths = set(delete_paths)
         sel.kept_paths = {str(f.path) for f in group.files if str(f.path) not in delete_paths}
         self._state.marked_paths.update(delete_paths)
-        self._state._recompute_cart_counters()
-        self._push_marked_paths_to_store()
+        if _recompute:
+            self._state._recompute_cart_counters()
+        if notify:
+            self._push_marked_paths_to_store()
 
     def _inspect_keep_physical_side(self, physical_side: int) -> None:
         """physical_side 0 = left column file, 1 = right column file (after swap)."""
@@ -1046,12 +1113,7 @@ class ReviewFlowHost(ft.Column):
 
     def _rebuild_sidebar_in_place(self) -> None:
         """Rebuild the sidebar stat counts without recreating the full screen."""
-        page_width = getattr(self._bridge.flet_page, "width", None)
-        if not is_narrow_viewport(page_width):
-            self._workstation_sidebar = build_progress_sidebar(
-                self._t, self._router.active_screen(), self._state, self._on_progress_jump
-            )
-            self.controls[0].controls[0] = self._workstation_sidebar
+        self._update_sidebar_counts_only()
         self._safe_update(self)
 
     def _navigate_browse_after_modal_from_overview(self) -> None:
@@ -1062,7 +1124,8 @@ class ReviewFlowHost(ft.Column):
             if self._router.active_screen() == "overview":
                 self._router.navigate("browse")
             elif self._router.active_screen() == "browse" and self._browse_view is not None:
-                self._browse_view.refresh()
+                self._browse_view.refresh(rebuild=False)
+            self._ensure_content_visible()
             self._safe_update(self._content)
 
         if hasattr(page, "run_task"):
@@ -1074,70 +1137,6 @@ class ReviewFlowHost(ft.Column):
             page.run_task(_deferred)
         else:
             _paint_browse()
-
-    def _open_auto_select_modal(self, _e=None) -> None:
-        options = [ft.dropdown.Option(key, label) for key, label in RULE_LABELS]
-        dd = ft.Dropdown(options=options, value=RULE_LABELS[0][0])
-
-        def apply_rule(_ev=None) -> None:
-            rule = dd.value or RULE_LABELS[0][0]
-            self._state.push_undo_snapshot()
-            for group in self._state.visible_groups():
-                if any(self._state.is_path_protected(str(f.path)) for f in group.files):
-                    continue
-                to_delete = paths_to_delete(rule, group.files)
-                self._apply_paths_for_group(group, set(to_delete))
-            self._close_overlay()
-            self._show_toast(f"Applied {rule}")
-            if self._router.active_screen() == "overview":
-                self._navigate_browse_after_modal_from_overview()
-            elif self._browse_view:
-                self._browse_view.refresh()
-                self._schedule_browse_apply_wave()
-            else:
-                self._render_active_screen()
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Auto-Select"),
-            content=dd,
-            actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self._close_overlay()),
-                ft.FilledButton("OK", on_click=apply_rule),
-            ],
-        )
-        self._show_modal(dlg)
-
-    def _schedule_browse_apply_wave(self) -> None:
-        if self._reduce_motion or self._browse_view is None:
-            return
-        page = getattr(self._bridge, "flet_page", None)
-        if page is None or not hasattr(page, "run_task"):
-            return
-        page.run_task(self._browse_apply_wave_async)
-
-    async def _browse_apply_wave_async(self) -> None:
-        view = self._browse_view
-        if view is None:
-            return
-        t = self._t
-        flash = ft.Colors.with_opacity(0.22, t.colors.success)
-        lst = view.list_host
-        prepared: list[tuple[ft.Container, object]] = []
-        for ctrl in list(lst.controls)[:40]:
-            if isinstance(ctrl, ft.Container):
-                prepared.append((ctrl, ctrl.bgcolor))
-        for row, orig in prepared:
-            try:
-                row.bgcolor = flash
-                lst.update()
-            except Exception:
-                pass
-            await asyncio.sleep(0.05)
-            try:
-                row.bgcolor = orig
-                lst.update()
-            except Exception:
-                pass
 
     def _close_filter_sheet(self) -> None:
         if self._filter_sheet is None:
@@ -1169,33 +1168,33 @@ class ReviewFlowHost(ft.Column):
             else:
                 self._render_active_screen()
 
-        sheet = ft.BottomSheet(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Filter & Sort", weight=ft.FontWeight.W_700),
-                        query,
-                        min_size,
-                        ft.Row(
-                            [
-                                ft.TextButton("Cancel", on_click=lambda e: self._close_filter_sheet()),
-                                ft.FilledButton("OK", on_click=apply_filters),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
-                        ),
-                    ],
-                    tight=True,
-                ),
-                padding=16,
-                width=400,
+        body = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Filter & Sort", weight=ft.FontWeight.W_700),
+                    query,
+                    min_size,
+                    ft.Row(
+                        [
+                            ft.TextButton("Cancel", on_click=lambda e: self._close_filter_sheet()),
+                            ft.FilledButton("OK", on_click=apply_filters),
+                        ],
+                        alignment=ft.MainAxisAlignment.END,
+                    ),
+                ],
+                tight=True,
             ),
-            on_dismiss=lambda e: setattr(self, "_filter_sheet", None),
-            scrollable=True,
-            bgcolor=self._t.colors.bg2,
-            show_drag_handle=True,
+            padding=16,
+            width=400,
         )
-        self._filter_sheet = sheet
-        self._bridge.show_modal_dialog(sheet)
+        self._filter_sheet = ft.AlertDialog(
+            modal=True,
+            content=body,
+            content_padding=0,
+            bgcolor=self._t.colors.bg2,
+            shape=ft.RoundedRectangleBorder(radius=16),
+        )
+        self._bridge.show_modal_dialog(self._filter_sheet)
 
     def _open_command_palette(self) -> None:
         field = ft.TextField(label="Command", autofocus=True)
@@ -1212,7 +1211,7 @@ class ReviewFlowHost(ft.Column):
                 selected = self._state.selected_set_ids
                 self._state.selected_set_ids = visible - selected
             elif "keep newest" in cmd or cmd == "keep_newest":
-                self._open_auto_select_modal()
+                self._show_toast("Bulk rule marking was removed — use checkboxes on each group.")
             elif "grid" in cmd:
                 self._state.view_mode = "grid"
             self._close_overlay()
@@ -1221,7 +1220,7 @@ class ReviewFlowHost(ft.Column):
 
         dlg = ft.AlertDialog(
             title=ft.Text("Command Palette"),
-            content=ft.Column([field, ft.Text("Try: invert, keep newest, grid")], tight=True),
+            content=ft.Column([field, ft.Text("Try: invert, grid")], tight=True),
             actions=[ft.TextButton("Close", on_click=lambda e: self._close_overlay()), ft.FilledButton("Run", on_click=run_cmd)],
         )
         self._show_modal(dlg)

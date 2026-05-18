@@ -13,7 +13,6 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import (
     REVIEW_GROUPS_CHUNK_CONFIG,
 )
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC, safe_update
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import RULE_LABELS
 from cerebro.v2.ui.flet_app.pages.review_flow.skeletons import browse_skeleton
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
 from cerebro.v2.ui.flet_app.pages.review_flow import trust_labels
@@ -38,7 +37,6 @@ class BrowseScreenView:
         on_open_group_detail,
         on_close_group_detail,
         on_toggle_file_mark,
-        on_apply_smart_rule_all,
         on_start_delete_ceremony,
         on_proceed_execute,
         reduce_motion: bool = False,
@@ -51,10 +49,9 @@ class BrowseScreenView:
         self._on_open_group_detail = on_open_group_detail
         self._on_close_group_detail = on_close_group_detail
         self._on_toggle_file_mark = on_toggle_file_mark
-        self._on_apply_smart_rule_all = on_apply_smart_rule_all
         self._on_start_delete_ceremony = on_start_delete_ceremony
         self._on_proceed_execute = on_proceed_execute
-        self._smart_rule: str = RULE_LABELS[0][0]
+        self._group_marked_lines: dict[int, ft.Text] = {}
         self._list = ft.ListView(expand=True, spacing=6, padding=8, auto_scroll=False)
         self._group_grid = ft.GridView(
             expand=True,
@@ -74,6 +71,7 @@ class BrowseScreenView:
             on_change=self._on_thumb_view_mode,
         )
         self._chip = ft.Container(visible=False)
+        self._chip_row = ft.Container(visible=False)
         self._bottom_bar = ft.Container(visible=False)
         self._header_list = ft.Row(visible=True, alignment=ft.MainAxisAlignment.CENTER, spacing=12)
         self._header_detail = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER, spacing=12)
@@ -134,6 +132,7 @@ class BrowseScreenView:
         n_del = self._state.cart_delete_count
         self._chip.content = ft.Text(f"{n_del} file(s) marked for removal", size=11, color=t.colors.fg)
         self._chip.visible = n_del > 0
+        self._chip_row.visible = n_del > 0
         self._bottom_bar.visible = n_del > 0
 
         # Phase 3.1 — informational banner when results span multiple pages
@@ -174,6 +173,7 @@ class BrowseScreenView:
         if not rebuild:
             self.sync_checkbox_marks()
             safe_update(self._chip)
+            safe_update(self._chip_row)
             safe_update(self._bottom_bar)
             safe_update(self._overflow_banner)
             safe_update(self._page_nav)
@@ -183,10 +183,9 @@ class BrowseScreenView:
         gen = self._browse_thumb_gen
         self._mark_checkboxes.clear()
         self._mark_checkbox_groups.clear()
+        self._group_marked_lines.clear()
         # Never call controls.clear() before ChunkedViewBuilder.render(): render bumps
         # generation (aborting in-flight async tails) and only then assigns host.controls.
-        # A clear-then-gap left the list empty on screen and caused "blank after Smart select"
-        # when refresh ran twice close together (apply rule + parent safe_update).
         if in_detail:
             # Do not put the detail Column inside ListView — a single expand+scroll child often
             # lays out to zero height (blank). Use a plain expanded Container instead.
@@ -234,6 +233,7 @@ class BrowseScreenView:
                 self._browse_slot.content = self._group_grid
         safe_update(self._browse_slot)
         safe_update(self._chip)
+        safe_update(self._chip_row)
         safe_update(self._bottom_bar)
         safe_update(self._overflow_banner)
         safe_update(self._page_nav)
@@ -263,22 +263,22 @@ class BrowseScreenView:
         self._toolbar.controls = [
             ft.Text(self._sort_label(), size=t.typography.size_sm, color=t.colors.fg_muted),
             self._thumb_view_switch,
-            ft.Dropdown(
-                label="Smart select",
-                width=260,
-                dense=True,
-                options=[ft.dropdown.Option(key, label) for key, label in RULE_LABELS],
-                value=self._smart_rule,
-                on_select=self._on_smart_rule_change,
-            ),
-            ft.OutlinedButton(
-                "Apply rule to all",
-                on_click=lambda _e: self._on_apply_smart_rule_all(self._smart_rule),
+            ft.Text(
+                "Mark files with checkboxes, then Apply cleanup",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                italic=True,
             ),
         ]
         self._chip = ft.Container(
             content=ft.Text("", size=11, text_align=ft.TextAlign.CENTER),
             padding=ft.padding.symmetric(horizontal=12, vertical=6),
+        )
+        self._chip_row = ft.Container(
+            content=self._chip,
+            alignment=ft.Alignment(0, 0),
+            padding=ft.padding.only(top=8),
+            visible=False,
         )
         self._bottom_bar = ft.Container(
             content=ft.FilledButton("Apply cleanup", on_click=self._on_proceed_execute),
@@ -301,20 +301,13 @@ class BrowseScreenView:
                 ),
                 # Phase 3.1 — overflow banner
                 self._overflow_banner,
-                ft.Stack(
-                    [
-                        ft.Container(
-                            content=self._browse_slot,
-                            expand=True,
-                            alignment=ft.Alignment(0, 0),
-                        ),
-                        ft.Container(
-                            content=self._chip,
-                            alignment=ft.Alignment(0, -1),
-                            padding=ft.padding.only(top=8),
-                        ),
-                    ],
+                # Plain Column instead of Stack(expand): nested expand+Stack can lay out to
+                # zero height on some Flet builds (blank main after apply-all).
+                self._chip_row,
+                ft.Container(
+                    content=self._browse_slot,
                     expand=True,
+                    alignment=ft.Alignment(0, 0),
                 ),
                 # Phase 3.2 — page navigation footer
                 self._page_nav,
@@ -324,10 +317,38 @@ class BrowseScreenView:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-    def _on_smart_rule_change(self, e: ft.ControlEvent) -> None:
-        v = getattr(e.control, "value", None)
-        if v:
-            self._smart_rule = str(v)
+    def _repaint_marks_surface(self) -> None:
+        """Single paint for mark UI — avoids dozens of nested updates blanking ListView/GridView."""
+        safe_update(self._chip)
+        safe_update(self._chip_row)
+        safe_update(self._bottom_bar)
+        host = self._browse_slot.content
+        if host is not None:
+            safe_update(host)
+
+    def _refresh_group_marked_lines(self, *, repaint: bool = True) -> None:
+        for gid, label in list(self._group_marked_lines.items()):
+            group = self._state.group_by_id(gid)
+            if not group or not group.files:
+                continue
+            n_marked = sum(
+                1 for f in group.files if self._file_marked_for_delete(str(f.path), gid)
+            )
+            primary = group.files[0]
+            size = fmt_size(int(primary.size))
+            kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
+            if self._state.view_mode == "grid" and self._state.browse_detail_group_id is None:
+                label.value = f"{kind} · ×{len(group.files)} · {size} · {n_marked} marked"
+            else:
+                confidence = max(
+                    float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files
+                )
+                label.value = (
+                    f"{kind} · {trust_labels.confidence_line(confidence)} · "
+                    f"{n_marked}/{len(group.files)} marked · {size}"
+                )
+            if repaint:
+                safe_update(label)
 
     def _on_thumb_view_mode(self, e: ft.ControlEvent) -> None:
         self._state.view_mode = "grid" if bool(getattr(e.control, "value", False)) else "list"
@@ -340,14 +361,47 @@ class BrowseScreenView:
         sel = self._state.set_selections.get(group_id)
         return bool(sel and p in sel.deleted_paths)
 
-    def sync_checkbox_marks(self) -> None:
+    def _group_marked_line_for_list(
+        self,
+        gid: int,
+        group: DuplicateGroup,
+        kind: str,
+        confidence: float,
+        n_marked: int,
+        n_files: int,
+        size: str,
+    ) -> ft.Text:
+        t = self._t
+        line = ft.Text(
+            f"{kind} · {trust_labels.confidence_line(confidence)} · {n_marked}/{n_files} marked · {size}",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+        )
+        self._group_marked_lines[gid] = line
+        return line
+
+    def sync_checkbox_marks(self, *, repaint: bool = True) -> None:
         """Update checkbox values after smart-rule apply without rebuilding tiles."""
         for path, cb in list(self._mark_checkboxes.items()):
             gid = self._mark_checkbox_groups.get(path)
             if gid is None:
                 continue
             cb.value = self._file_marked_for_delete(path, gid)
-            safe_update(cb)
+        if repaint:
+            self._repaint_marks_surface()
+
+    def update_cart_chrome(self, *, repaint: bool = True) -> None:
+        """Refresh chip + cleanup bar only — never rebuilds the group list (apply-all safe path)."""
+        t = self._t
+        n_del = self._state.cart_delete_count
+        self._chip.content = ft.Text(f"{n_del} file(s) marked for removal", size=11, color=t.colors.fg)
+        self._chip.visible = n_del > 0
+        self._chip_row.visible = n_del > 0
+        self._bottom_bar.visible = n_del > 0
+        if repaint:
+            safe_update(self._chip)
+            safe_update(self._chip_row)
+            safe_update(self._bottom_bar)
 
     def _build_file_thumb_tile(
         self,
@@ -461,7 +515,7 @@ class BrowseScreenView:
             text_align=ft.TextAlign.CENTER,
         )
         hint = ft.Text(
-            "Check thumbnails to mark for removal. Smart select → Apply rule to all checks every matching copy.",
+            "Check thumbnails to mark files for removal, then use Apply cleanup.",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
@@ -713,18 +767,14 @@ class BrowseScreenView:
             self._page.run_task(self._load_browse_thumbs_async, gen)
 
     def _safe_update_thumb_hosts(self) -> None:
-        page = self._page
-        if page is None:
-            return
-        try:
-            page.update()
-        except Exception:
-            if self._state.browse_detail_group_id is not None and self._detail_grid is not None:
-                safe_update(self._detail_grid)
-            else:
-                host = self._browse_slot.content
-                if host is not None:
-                    safe_update(host)
+        # Update only the affected list/grid host, not the whole page.
+        # Full page.update() here races with apply-all tile rebuild and causes blank canvas.
+        if self._state.browse_detail_group_id is not None and self._detail_grid is not None:
+            safe_update(self._detail_grid)
+        else:
+            host = self._browse_slot.content
+            if host is not None:
+                safe_update(host)
 
     def _build_group_grid_tile(self, group: DuplicateGroup) -> ft.Control:
         t = self._t
@@ -751,6 +801,7 @@ class BrowseScreenView:
             color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
         )
+        self._group_marked_lines[gid] = sub
         meta = ft.Text(
             trust_labels.confidence_line(confidence),
             size=t.typography.size_xs - 1,
@@ -809,10 +860,8 @@ class BrowseScreenView:
                             ft.Column(
                                 [
                                     ft.Text(name, weight=ft.FontWeight.W_600),
-                                    ft.Text(
-                                        f"{kind} · {trust_labels.confidence_line(confidence)} · {n_marked}/{len(group.files)} marked · {size}",
-                                        size=t.typography.size_xs,
-                                        color=t.colors.fg_muted,
+                                    self._group_marked_line_for_list(
+                                        gid, group, kind, confidence, n_marked, len(group.files), size
                                     ),
                                     ft.Text(path, size=t.typography.size_xs, color=t.colors.fg_muted),
                                 ],
