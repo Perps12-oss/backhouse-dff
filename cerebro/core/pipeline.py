@@ -1,7 +1,7 @@
 """
 CEREBRO Pipeline - Target Architecture (Authoritative)
 
-ReviewPage (UI) produces DeletionPlan (intent only).
+Review flow UI produces DeletionPlan (intent only).
 The live deletion path passes DeletionPlan to Pipeline.
 Pipeline:
   - validates invariants (keeper cannot equal delete target)
@@ -48,7 +48,7 @@ class ExecutableDeletePlan:
     operations: List[ExecutableDeleteOperation]
     stats: Dict[str, Any] = field(default_factory=dict)
     policy: Dict[str, Any] = field(default_factory=dict)
-    source: str = "review_page"
+    source: str = "review_flow"
 
     @property
     def total_bytes(self) -> int:
@@ -127,13 +127,13 @@ class CerebroPipeline:
           "scan_id": "...",
           "policy": {"mode":"trash"|"permanent", ...},
           "groups": [{"group_index":0,"keep":"...","delete":["..."]}, ...],
-          "source": "review_page" (optional),
+          "source": "review_flow" (optional; legacy "review_page" accepted),
         }
         """
         scan_id = str(deletion_plan.get("scan_id", "unknown"))
         policy = dict(deletion_plan.get("policy", {}) or {})
         mode = str(policy.get("mode", "trash"))
-        source = str(deletion_plan.get("source", "review_page"))
+        source = str(deletion_plan.get("source", "review_flow"))
         groups = list(deletion_plan.get("groups", []) or [])
 
         self._log(f"Building delete plan scan={scan_id} mode={mode} groups={len(groups)}")
@@ -361,7 +361,7 @@ class CerebroPipeline:
             deleted_paths=[str(p) for p in batch.deleted],
             mode=plan.mode,
             scan_id=plan.scan_id,
-            source=plan.source or "review_page",
+            source=plan.source or "review_flow",
             groups=int(plan.stats.get("groups", 0) or 0),
             failed=len(result.failed),
             bytes_reclaimed=result.bytes_reclaimed,

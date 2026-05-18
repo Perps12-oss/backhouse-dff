@@ -72,7 +72,7 @@ cerebro/ui/
 
 Each page: UI layout + bind to controller snapshot/bus; no heavy logic.
 
-**Order:** StartPage → ScanPage → ReviewPage → History / Settings / Themes.
+**Order:** StartPage → ScanPage → ReviewFlowHost (overview/browse/inspect) → History / Settings / Themes. _(Legacy doc: formerly ReviewPage.)_
 
 **Checkpoint B:** Start → Scan → Review navigation is solid.
 

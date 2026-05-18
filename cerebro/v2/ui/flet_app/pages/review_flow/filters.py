@@ -1,4 +1,4 @@
-"""Review-scope helpers for Workspace group filtering."""
+"""Group filtering helpers for review flow (browse may adopt reviewed/unreviewed scope later)."""
 
 from __future__ import annotations
 

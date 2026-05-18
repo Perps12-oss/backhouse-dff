@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import AUTO_MARK_RULE_OPTIONS
 from cerebro.v2.ui.flet_app.multigradient_themes import GRADIENT_THEMES
 from cerebro.v2.ui.flet_app.palette_themes import resolve_preset_id
 from cerebro.v2.ui.flet_app.design_system.cards import flat_card
@@ -27,7 +27,7 @@ _DELETE_METHODS = [
     ("move_to_folder", "Move to Folder"),
 ]
 
-# Auto‑mark rules (aligned with :mod:`review.smart_rules` + ``keep_first`` for deletion settings)
+# Auto‑mark rules (aligned with :mod:`review_flow.smart_rules` + ``keep_first`` for deletion settings)
 _AUTO_MARK_RULES = AUTO_MARK_RULE_OPTIONS
 
 # Scan mode options (matching old dialog)

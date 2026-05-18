@@ -13,6 +13,13 @@ from cerebro.v2.ui.flet_app.utils.motion import animation_or_none, should_animat
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 
+# Flet 0.84.x exposes FADE / ROTATION / SCALE only — not SIZE (added in later releases).
+_SWITCHER_TRANSITION = getattr(
+    ft.AnimatedSwitcherTransition,
+    "SIZE",
+    ft.AnimatedSwitcherTransition.FADE,
+)
+
 
 class CollapsibleSection(ft.Container):
     """Title row with expand/collapse and optional default-expanded state."""
@@ -63,7 +70,7 @@ class CollapsibleSection(ft.Container):
             switch_duration = 250
             self._body_host = ft.AnimatedSwitcher(
                 content=self._expanded_slot if expanded else self._collapsed_slot,
-                transition=ft.AnimatedSwitcherTransition.SIZE,
+                transition=_SWITCHER_TRANSITION,
                 duration=switch_duration,
                 reverse_duration=switch_duration,
                 switch_in_curve=ft.AnimationCurve.EASE_OUT,

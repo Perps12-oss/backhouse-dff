@@ -1,3 +1,5 @@
+"""Pure smart-selection rule engine (no Flet, no Review v1 UI)."""
+
 from __future__ import annotations
 
 import re
@@ -26,11 +28,11 @@ def _keep_first(files: List[DuplicateFile]) -> DuplicateFile:
 
 
 _RULES = {
-    "keep_largest":  lambda files: max(files, key=lambda f: f.size),
+    "keep_largest": lambda files: max(files, key=lambda f: f.size),
     "keep_smallest": lambda files: min(files, key=lambda f: f.size),
-    "keep_newest":   lambda files: max(files, key=_mtime),
-    "keep_oldest":   lambda files: min(files, key=_mtime),
-    "keep_first":    _keep_first,
+    "keep_newest": lambda files: max(files, key=_mtime),
+    "keep_oldest": lambda files: min(files, key=_mtime),
+    "keep_first": _keep_first,
 }
 
 KNOWN_RULES = frozenset(_RULES.keys())
@@ -41,14 +43,15 @@ def normalized_rule(rule: str) -> str:
     r = (rule or "").strip()
     return r if r in KNOWN_RULES else "keep_largest"
 
+
 RULE_LABELS = [
-    ("keep_largest",  "Keep Largest"),
+    ("keep_largest", "Keep Largest"),
     ("keep_smallest", "Keep Smallest"),
-    ("keep_newest",   "Keep Newest"),
-    ("keep_oldest",   "Keep Oldest"),
+    ("keep_newest", "Keep Newest"),
+    ("keep_oldest", "Keep Oldest"),
 ]
 
-# Deletion settings auto-mark: same four rules plus list-order keeper (not shown on Review segmented control).
+# Deletion settings auto-mark: same four rules plus list-order keeper.
 AUTO_MARK_RULE_OPTIONS = [*RULE_LABELS, ("keep_first", "Keep First")]
 
 

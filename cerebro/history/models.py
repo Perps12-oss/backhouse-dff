@@ -20,7 +20,7 @@ class ScanStatus(str, Enum):
 
 @dataclass
 class ScanHealthSnapshot:
-    """Health metrics captured during scan (from ReviewPage health panel)."""
+    """Health metrics captured during scan (from review flow overview)."""
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
     disk_read_mb: float = 0.0

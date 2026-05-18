@@ -1,4 +1,4 @@
-"""Bottom-sheet UI for Apply cleanup: summary → confirm → progress → outcome."""
+"""Delete ceremony UI (summary → confirm → progress → outcome) shown in a modal dialog."""
 
 from __future__ import annotations
 

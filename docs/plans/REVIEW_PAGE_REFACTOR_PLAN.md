@@ -1,5 +1,8 @@
 # Review Page Refactor Plan
-**Target:** `cerebro/v2/ui/flet_app/pages/review_page.py`
+
+> **Superseded (2026-05):** V1 `ReviewPage` and `pages/review/*` were removed. The live UI is **`ReviewFlowHost`** under `pages/review_flow/`. This plan is kept as historical context only; do not implement against `review_page.py`.
+
+**Original target:** `cerebro/v2/ui/flet_app/pages/review_page.py` (deleted)
 **Build:** 0.0.24.1 → target 0.0.25.0
 **Scope:** Architecture decomposition, state correctness, deletion safety, performance
 

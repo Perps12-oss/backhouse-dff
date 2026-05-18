@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
-from cerebro.v2.ui.flet_app.pages.review.review_scope import (
+from cerebro.v2.ui.flet_app.pages.review_flow.filters import (
     REVIEW_SCOPE_UNREVIEWED,
     filter_groups_by_review_scope,
 )
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import apply_rule_with_pipeline
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
 
 
 def _group() -> DuplicateGroup:

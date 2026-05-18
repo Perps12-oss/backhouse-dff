@@ -202,21 +202,7 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
-    def _review_flow_v2_enabled() -> bool:
-        try:
-            general = (bridge.get_settings().get("general") or {})
-            return bool(general.get("review_flow_v2", True))
-        except Exception:
-            return True
-
-    if _review_flow_v2_enabled():
-        from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
-
-        _ReviewTabCls = ReviewFlowHost
-    else:
-        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
-
-        _ReviewTabCls = ReviewPage
+    from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
@@ -237,7 +223,7 @@ def _main(page: ft.Page) -> None:
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
-    review_page = _ReviewTabCls(bridge)
+    review_host = ReviewFlowHost(bridge)
     _log.info("init: review built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
@@ -249,18 +235,20 @@ def _main(page: ft.Page) -> None:
     except Exception:
         _log.debug("Could not register dashboard progress control", exc_info=True)
     try:
-        bridge.register_action_control("ResultsFilesRemoved", review_page._grid)  # type: ignore[attr-defined]
-        bridge.register_action_control("ScanCompleted", review_page._grid)  # type: ignore[attr-defined]
-        bridge.register_action_control("GroupsPruned", review_page._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ResultsFilesRemoved", review_host._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ScanCompleted", review_host._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("GroupsPruned", review_host._grid)  # type: ignore[attr-defined]
+        # Do not register review list/grid for FileSelectionChanged — partial ListView.update()
+        # after bulk smart-select was blanking the browse pane on Flet 0.84.
         bridge.register_action_control("ScanCompleted", dashboard_page._stats_row)  # type: ignore[attr-defined]
         bridge.register_action_control("GroupsPruned", dashboard_page._stats_row)  # type: ignore[attr-defined]
 
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
-            "ReviewNavigate": [getattr(review_page, "_grid", None), getattr(review_page, "_content", None)],
+            "ReviewNavigate": [getattr(review_host, "_grid", None), getattr(review_host, "_content", None)],
             "ReviewViewFilterChanged": [
-                getattr(review_page, "_workstation_sidebar", None),
-                getattr(review_page, "_grid", None),
+                getattr(review_host, "_workstation_sidebar", None),
+                getattr(review_host, "_grid", None),
             ],
             "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
             "ScanEnded": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
@@ -273,8 +261,8 @@ def _main(page: ft.Page) -> None:
 
     builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
-        "duplicates": lambda: review_page,
-        "review": lambda: review_page,
+        "duplicates": lambda: review_host,
+        "review": lambda: review_host,
         "history": lambda: history_page,
         "exclude": lambda: exclude_page,
         "settings": lambda: settings_page,
@@ -633,13 +621,13 @@ def _main(page: ft.Page) -> None:
             bridge.open_last_session()
             return
         if ctrl and key == "k":
-            if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
-                if review_page.handle_keyboard("k", ctrl=ctrl):
+            if layout.current_key == "review" and hasattr(review_host, "handle_keyboard"):
+                if review_host.handle_keyboard("k", ctrl=ctrl):
                     return
             _show_command_palette()
             return
-        if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
-            if review_page.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
+        if layout.current_key == "review" and hasattr(review_host, "handle_keyboard"):
+            if review_host.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
                 return
         if key in ("arrowleft", "left"):
             _cycle_tab(-1)
@@ -649,7 +637,7 @@ def _main(page: ft.Page) -> None:
             return
         if key == "space" and layout.current_key == "review":
             try:
-                if review_page.get_groups():
+                if review_host.get_groups():
                     layout.navigate_to("review")
             except Exception:
                 _log.exception("Failed opening Review from Space shortcut")
@@ -683,12 +671,12 @@ def _main(page: ft.Page) -> None:
         mode = s.scan_mode or "files"
         active = layout.current_key
         if not groups:
-            review_page.load_results([], mode, defer_render=(active != "review"))
+            review_host.load_results([], mode, defer_render=(active != "review"))
             return
         if active == "review":
-            review_page.apply_pruned_groups(groups, mode)
+            review_host.apply_pruned_groups(groups, mode)
         else:
-            review_page.load_results(groups, mode, defer_render=True)
+            review_host.load_results(groups, mode, defer_render=True)
 
     def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
         tab = new_state.active_tab
@@ -707,15 +695,9 @@ def _main(page: ft.Page) -> None:
             _sync_groups_from_state(new_state)
             bridge.invalidate_stats_cache()
         if isinstance(action, ScanCompleted) and new_state.groups:
-            focus = getattr(review_page, "reset_to_overview_after_scan", None)
+            focus = getattr(review_host, "reset_to_overview_after_scan", None)
             if callable(focus):
                 focus()
-            elif hasattr(review_page, "_enter_mode"):
-                review_page.load_results(  # type: ignore[attr-defined]
-                    list(new_state.groups),
-                    new_state.scan_mode or "files",
-                    defer_render=False,
-                )
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
@@ -731,7 +713,7 @@ def _main(page: ft.Page) -> None:
             _log.exception("Layout theme update failed")
         page_map = {
             "dashboard": dashboard_page,
-            "review": review_page,
+            "review": review_host,
             "history": history_page,
             "exclude": exclude_page,
             "settings": settings_page,
@@ -746,6 +728,7 @@ def _main(page: ft.Page) -> None:
                 _log.exception("apply_theme failed on %s", type(p).__name__)
 
     bridge.set_on_theme_change(_on_theme_change)
+    bridge.set_on_stats_refresh_ui(dashboard_page._schedule_dashboard_data_fetch)
     _on_theme_change(bridge.app_theme)
 
     history_page.load_history(bridge.get_scan_history_table_rows())

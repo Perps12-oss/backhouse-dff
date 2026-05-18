@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
-from cerebro.v2.ui.flet_app.pages.review.review_mixins import _marked_bytes_total
+from cerebro.v2.ui.flet_app.pages.review_flow.state import marked_bytes_total
 
 
 def _f(name: str, size: int) -> DuplicateFile:
@@ -39,7 +39,7 @@ def test_incremental_toggle_matches_full_scan() -> None:
             total += sz
         if total < 0:
             total = 0
-        assert total == _marked_bytes_total(groups, marked), (fp, marked, total)
+        assert total == marked_bytes_total(groups, marked), (fp, marked, total)
 
     apply_toggle(a)
     apply_toggle(b)

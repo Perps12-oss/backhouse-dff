@@ -27,9 +27,14 @@ class StatsService:
         self._on_refresh = cb
 
     def invalidate(self) -> None:
-        """Mark cache dirty. Next get_stats() will start a background refresh."""
+        """Mark cache dirty and start a background refresh immediately."""
         with self._lock:
             self._dirty = True
+            should_refresh = not self._refreshing
+            if should_refresh:
+                self._refreshing = True
+        if should_refresh:
+            threading.Thread(target=self._refresh_worker, daemon=True).start()
 
     def get_stats(self) -> Dict[str, Any]:
         """Return cached stats immediately; kick off a background refresh if stale."""

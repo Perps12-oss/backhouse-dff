@@ -64,6 +64,7 @@ class StateBridge:
         self._structural_actions: set[str] = {"SetActiveTab", "ScanCompleted"}
         self._stats_service = get_stats_service()
         self._stats_service.set_on_refresh(self._on_stats_refreshed)
+        self._on_stats_refresh_ui: Optional[Callable[[], None]] = None
 
     @property
     def app_theme(self) -> str:
@@ -82,10 +83,18 @@ class StateBridge:
     def show_modal_dialog(self, dialog: ft.Control) -> None:
         """Open a modal dialog (Flet 0.25+ uses ``Page.show_dialog``, not ``Page.open``)."""
         self._page.show_dialog(dialog)
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     def dismiss_top_dialog(self) -> None:
         """Close the top dialog opened with :meth:`show_modal_dialog`."""
         self._page.pop_dialog()
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     @property
     def store(self) -> StateStore:
@@ -194,11 +203,12 @@ class StateBridge:
 
     def _on_stats_refreshed(self, _stats: Dict[str, Any]) -> None:
         """Refresh UI when background stats cache finishes recomputing."""
+        cb = self._on_stats_refresh_ui or self._safe_page_update
         try:
             if hasattr(self._page, "run_thread"):
-                self._page.run_thread(self._safe_page_update)
+                self._page.run_thread(cb)
             else:
-                self._safe_page_update()
+                cb()
         except Exception:
             pass
 
@@ -347,6 +357,10 @@ class StateBridge:
     def get_stats(self) -> Dict[str, Any]:
         """Aggregate stats for the dashboard cards (cached + background refresh)."""
         return self._stats_service.get_stats()
+
+    def set_on_stats_refresh_ui(self, cb: Callable[[], None]) -> None:
+        """Register a UI callback invoked (on the Flet thread) when the background stats refresh completes."""
+        self._on_stats_refresh_ui = cb
 
     def invalidate_stats_cache(self) -> None:
         self._stats_service.invalidate()

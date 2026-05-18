@@ -569,7 +569,7 @@ class ReviewFlowHost(ft.Column):
         self._apply_outer = ft.Container(padding=0, width=480)
         self._apply_refresh_body()
         # BottomSheet + show_dialog never painted on Flet 0.84 desktop in the field;
-        # AlertDialog matches delete_flow / dashboard and is reliably visible.
+        # AlertDialog matches dashboard pattern and is reliably visible on Flet 0.84.
         self._apply_dialog = ft.AlertDialog(
             modal=True,
             content=self._apply_outer,

@@ -17,12 +17,24 @@ Rules:
 ## Revived to date
 | Feature | Source | Phase revived |
 |---|---|---|
-| Delete ceremony (4 dialogs + celebration) | `cerebro/v2/ui/delete_ceremony_widgets.py` | Phase 4.1 (lazy import) — orchestrated by `cerebro/v2/ui/delete_flow.py` in Phase 6 Part 3 so Results + Review share one code path |
+| Delete ceremony (4-step apply sheet) | `review_flow/apply_sheet.py` + `host.py` | Review flow v2 — AlertDialog on Flet 0.84; replaces legacy bottom sheet and v1 `pages/review/delete_flow.py` |
 | Zoom/pan canvas + synced A/B comparison | `widgets/zoom_canvas.py`, `preview_panel.py` | Phase 6 (initially as Results grid takeover; **moved to Review in Part 3**) |
 | MetadataTable inside side preview | `widgets/metadata_table.py` | Phase 6 (via PreviewPanel composition, now on Review) |
-| Undo toast after delete | `delete_ceremony_widgets.UndoToast` | Phase 6 (via `delete_flow`) |
-| Auto-Mark (now "Smart Select") dropdown | `review_page.py` rule catalog | Phase 6 Part 3 (lives on Review; runs global ceremony) |
+| Undo after delete (Trash) | `DeleteService` + host apply outcome | Review flow v2 |
+| Smart Select (bulk rules on browse) | `review_flow/smart_rules.py` | **Removed 2026-05** until redesign — manual checkboxes + Apply cleanup only |
 | `VirtualThumbGrid` + async thumb decoder | new in Phase 6 — inspired by `widgets/thumbnail_grid.py` | Phase 6 Part 2; repurposed as Review's default view in Part 3 |
+
+---
+
+## Retired with v1 Review (2026-05)
+
+| Item | Note |
+|------|------|
+| `ReviewPage`, `pages/review/*`, `review_page.py` | Replaced by `ReviewFlowHost` only; no feature flag |
+| `SmartSelectionRow`, `components/smart_selection.py` | Removed with v1 |
+| `components/files/group_card.py` | V1 grid only; copy helpers live in `review_flow/labels.py` |
+| `components/filters/workspace_filter_stack.py` | Unused; browse filters are in `browse.py` / `state.py` |
+| Separate Results tab (`results_page.py`) | Not in current Flet shell; duplicates/review share one host |
 
 ---
 

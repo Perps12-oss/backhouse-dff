@@ -1,20 +1,31 @@
-# Review page — manual smoke checklist
+# Review flow — manual smoke checklist
 
-Run after changes to `review_page.py`, `review/grid_view.py`, or `review/compare_view.py`.
+Run after changes to `review_flow/host.py`, `review_flow/screens/browse.py`, `review_flow/screens/inspect.py`, or `review_flow/apply_sheet.py`.
 
-1. **Navigate to Review** — From the app shell, open the Review route; page loads without errors.
-2. **Empty / loading** — With no scan results, empty state shows; starting a load shows loading, then content.
-3. **Groups overview** — With results, group cards list appears; sort control changes order; “tiles” / “groups” toggles work.
-4. **File-type filter buckets** — Use the top filter strip to switch **All** vs extension buckets (images, video, audio, documents, archives, code, other). Counts update; grid or group list reflects only files in that bucket (not “date/status” filters).
-5. **Grid marks** — In tile grid, toggle “mark for deletion” on several files; checkboxes stay in sync and the UI stays responsive (no full compare-panel rebuild while in grid).
-6. **Compare mode** — Open a group; A/B panels, thumbnails/meta, smart-rule strip, and prev/next navigation behave as before.
-7. **Compare marks & delete** — Toggle marks on compare checkboxes; “Delete marked” / side A–B deletes show confirmation and complete; snackbars and undo (Trash) when applicable.
-8. **Regression pass** — Back to groups/grid; theme toggle if available; keyboard shortcuts in compare (←/→, optional delete keys) still fire.
+1. **Navigate to Review** — From the app shell, open the Review tab; `ReviewFlowHost` loads without errors.
+2. **Overview** — After a scan, overview shows summary stats; **Continue to browse** (or equivalent) enters browse.
+3. **Browse — list mode** — Group rows render; checkboxes mark files for deletion; sidebar shows marked count and reclaim estimate.
+4. **Browse — grid mode** — Toggle thumbnail grid; tiles load incrementally; marks stay in sync with list mode.
+5. **Filters** — Text/type/size filters narrow visible groups without blanking the central pane (no full-host rebuild regressions).
+6. **Apply cleanup** — With manual marks only: **Apply cleanup** opens the 4-step dialog (summary → confirm → progress → outcome); deletion completes; browse list updates; undo (Trash) when applicable.
+7. **Inspect** — Open a group; side-by-side previews, ref/compare navigation, and back-to-browse work.
+8. **Regression** — Theme toggle; keyboard shortcuts on review tab; scan-complete returns to overview when configured.
 
-## Follow-ups
+## Not in scope (removed until redesign)
 
-- Smart-delete confirmation and progress orchestration live in `review/delete_flow.py`; further shrinking `review_page.py` can move more post-delete refresh helpers there if needed.
+- **Smart Select** bulk rule apply was removed from browse (Flet 0.84 repaint bug). Reintroduce only via new code under `review_flow/` with a strict no-partial-`ListView.update()` contract.
+
+## Implementation pointers
+
+| Concern | Location |
+|--------|----------|
+| Tab host + delete ceremony | `review_flow/host.py`, `review_flow/apply_sheet.py` |
+| Browse list/grid | `review_flow/screens/browse.py` |
+| Inspect A/B | `review_flow/screens/inspect.py` |
+| Flow state | `review_flow/state.py` |
+| Smart rules (settings only) | `review_flow/smart_rules.py` |
+| UI copy strings | `review_flow/labels.py` |
 
 ## Script pointer
 
-See `scripts/review_smoke.md` for a short command reference (no automated runner).
+See `scripts/review_smoke.md` for a compile check command (no automated runner).

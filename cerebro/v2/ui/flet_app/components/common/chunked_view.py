@@ -16,10 +16,8 @@ T = TypeVar("T")
 
 MAX_RENDERED_GROUPS = 1_000
 
-RESULTS_LIST_CHUNK_CONFIG = "results_list"
-RESULTS_GRID_CHUNK_CONFIG = "results_grid"
-REVIEW_GROUPS_CHUNK_CONFIG = "review_groups"
-REVIEW_GRID_FILES_CHUNK_CONFIG = "review_grid_files"
+BROWSE_GROUPS_CHUNK_CONFIG = "browse_groups"
+BROWSE_TILES_CHUNK_CONFIG = "browse_tiles"
 
 _PRESETS: dict[str, "ChunkedViewConfig"] = {}
 
@@ -37,42 +35,26 @@ class ChunkedViewConfig:
 def _register_presets() -> None:
     if _PRESETS:
         return
-    _PRESETS[RESULTS_LIST_CHUNK_CONFIG] = ChunkedViewConfig(
-        async_threshold=72,
-        first_sync_count=4,
-        batch_size=16,
-        max_items=MAX_RENDERED_GROUPS,
-        max_builds_per_tick=20,
-    )
-    _PRESETS[RESULTS_GRID_CHUNK_CONFIG] = ChunkedViewConfig(
-        async_threshold=36,
-        first_sync_count=4,
-        batch_size=8,
-        max_items=MAX_RENDERED_GROUPS,
-        max_builds_per_tick=20,
-    )
-    _PRESETS[REVIEW_GROUPS_CHUNK_CONFIG] = ChunkedViewConfig(
+    _PRESETS[BROWSE_GROUPS_CHUNK_CONFIG] = ChunkedViewConfig(
         async_threshold=48,
         first_sync_count=12,
         batch_size=24,
         max_items=MAX_RENDERED_GROUPS,
         max_builds_per_tick=16,
     )
-    _PRESETS[REVIEW_GRID_FILES_CHUNK_CONFIG] = ChunkedViewConfig(
-        async_threshold=220,
-        first_sync_count=20,
-        batch_size=30,
-        max_items=None,
+    _PRESETS[BROWSE_TILES_CHUNK_CONFIG] = ChunkedViewConfig(
+        async_threshold=36,
+        first_sync_count=4,
+        batch_size=8,
+        max_items=MAX_RENDERED_GROUPS,
         max_builds_per_tick=20,
     )
 
 
 _register_presets()
 
-RESULTS_LIST_CHUNK = _PRESETS[RESULTS_LIST_CHUNK_CONFIG]
-RESULTS_GRID_CHUNK = _PRESETS[RESULTS_GRID_CHUNK_CONFIG]
-REVIEW_GROUPS_CHUNK = _PRESETS[REVIEW_GROUPS_CHUNK_CONFIG]
-REVIEW_GRID_FILES_CHUNK = _PRESETS[REVIEW_GRID_FILES_CHUNK_CONFIG]
+BROWSE_GROUPS_CHUNK = _PRESETS[BROWSE_GROUPS_CHUNK_CONFIG]
+BROWSE_TILES_CHUNK = _PRESETS[BROWSE_TILES_CHUNK_CONFIG]
 
 
 class ChunkedViewBuilder(Generic[T]):

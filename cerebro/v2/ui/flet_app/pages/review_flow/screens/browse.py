@@ -9,13 +9,13 @@ import flet as ft
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.components.common.chunked_view import (
     ChunkedViewBuilder,
-    RESULTS_GRID_CHUNK_CONFIG,
-    REVIEW_GROUPS_CHUNK_CONFIG,
+    BROWSE_TILES_CHUNK_CONFIG,
+    BROWSE_GROUPS_CHUNK_CONFIG,
 )
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC, safe_update
 from cerebro.v2.ui.flet_app.pages.review_flow.skeletons import browse_skeleton
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
-from cerebro.v2.ui.flet_app.pages.review_flow import trust_labels
+from cerebro.v2.ui.flet_app.pages.review_flow import labels
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_BROWSE_EDGE, get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -112,7 +112,7 @@ class BrowseScreenView:
 
     def attach_page(self, page: ft.Page) -> None:
         self._page = page
-        self._chunked = ChunkedViewBuilder(page, REVIEW_GROUPS_CHUNK_CONFIG)
+        self._chunked = ChunkedViewBuilder(page, BROWSE_GROUPS_CHUNK_CONFIG)
 
     def refresh(self, *, rebuild: bool = True) -> None:
         t = self._t
@@ -209,7 +209,7 @@ class BrowseScreenView:
                 self._group_grid.controls.clear()
                 self._list.controls = [self._build_group_row(g) for g in groups[:1000]]
         else:
-            chunk_preset = RESULTS_GRID_CHUNK_CONFIG if grid_mode else REVIEW_GROUPS_CHUNK_CONFIG
+            chunk_preset = BROWSE_TILES_CHUNK_CONFIG if grid_mode else BROWSE_GROUPS_CHUNK_CONFIG
             host = self._group_grid if grid_mode else self._list
             if grid_mode:
                 self._list.controls.clear()
@@ -336,7 +336,7 @@ class BrowseScreenView:
             )
             primary = group.files[0]
             size = fmt_size(int(primary.size))
-            kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
+            kind = labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
             if self._state.view_mode == "grid" and self._state.browse_detail_group_id is None:
                 label.value = f"{kind} · ×{len(group.files)} · {size} · {n_marked} marked"
             else:
@@ -344,7 +344,7 @@ class BrowseScreenView:
                     float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files
                 )
                 label.value = (
-                    f"{kind} · {trust_labels.confidence_line(confidence)} · "
+                    f"{kind} · {labels.confidence_line(confidence)} · "
                     f"{n_marked}/{len(group.files)} marked · {size}"
                 )
             if repaint:
@@ -373,7 +373,7 @@ class BrowseScreenView:
     ) -> ft.Text:
         t = self._t
         line = ft.Text(
-            f"{kind} · {trust_labels.confidence_line(confidence)} · {n_marked}/{n_files} marked · {size}",
+            f"{kind} · {labels.confidence_line(confidence)} · {n_marked}/{n_files} marked · {size}",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
         )
@@ -785,7 +785,7 @@ class BrowseScreenView:
         protected = any(self._state.is_path_protected(str(f.path)) for f in group.files)
         n_marked = sum(1 for f in group.files if self._file_marked_for_delete(str(f.path), gid))
         confidence = max(float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files) if group.files else 1.0
-        kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
+        kind = labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
         hero, row_data = self._build_group_hero_thumb(group, grid_mode=True)
 
         title = ft.Text(
@@ -803,7 +803,7 @@ class BrowseScreenView:
         )
         self._group_marked_lines[gid] = sub
         meta = ft.Text(
-            trust_labels.confidence_line(confidence),
+            labels.confidence_line(confidence),
             size=t.typography.size_xs - 1,
             color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
@@ -848,7 +848,7 @@ class BrowseScreenView:
         protected = any(self._state.is_path_protected(str(f.path)) for f in group.files)
         n_marked = sum(1 for f in group.files if self._file_marked_for_delete(str(f.path), gid))
         confidence = max(float(getattr(f, "similarity", 1.0) or 1.0) for f in group.files) if group.files else 1.0
-        kind = trust_labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
+        kind = labels.duplicate_kind_label(getattr(group, "similarity_type", "exact"))
         hero, row_data = self._build_group_hero_thumb(group, grid_mode=False)
 
         return ft.Container(

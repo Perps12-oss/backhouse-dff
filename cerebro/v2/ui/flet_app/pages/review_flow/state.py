@@ -291,3 +291,13 @@ def make_index_reference(n: int, ref: int, cmp_i: int, new_ref: int) -> tuple[in
     else:
         new_cmp = (new_ref + 1) % n
     return normalize_inspect_ref_cmp(n, new_ref, new_cmp)
+
+
+def marked_bytes_total(groups: List[DuplicateGroup], marked_paths: Set[str]) -> int:
+    """Sum file sizes for paths currently marked for deletion."""
+    total = 0
+    for g in groups:
+        for f in g.files:
+            if str(f.path) in marked_paths:
+                total += int(getattr(f, "size", 0) or 0)
+    return total

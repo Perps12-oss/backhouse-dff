@@ -1,4 +1,4 @@
-"""Tests for :mod:`cerebro.v2.ui.flet_app.pages.review.smart_rules`."""
+"""Tests for :mod:`cerebro.v2.ui.flet_app.pages.review_flow.smart_rules`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from cerebro.engines.base_engine import DuplicateFile
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import (
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import (
     apply_rule,
     normalized_rule,
     paths_to_delete,

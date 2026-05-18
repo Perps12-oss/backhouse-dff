@@ -6,12 +6,14 @@ from pathlib import Path
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.ui.flet_app.components.common.chunked_view import (
-    REVIEW_GRID_FILES_CHUNK,
-    REVIEW_GROUPS_CHUNK,
-    RESULTS_GRID_CHUNK,
-    RESULTS_LIST_CHUNK,
+    BROWSE_GROUPS_CHUNK,
+    BROWSE_TILES_CHUNK,
 )
-from cerebro.v2.ui.flet_app.components.files.group_card import group_duplicate_summary, group_path_hint, is_machine_generated_name
+from cerebro.v2.ui.flet_app.pages.review_flow.labels import (
+    group_duplicate_summary,
+    group_path_hint,
+    is_machine_generated_name,
+)
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import (
     NARROW_BREAKPOINT_PX,
     inspector_overlay_width,
@@ -36,11 +38,9 @@ def test_glass_container_uses_theme_tokens() -> None:
 
 
 def test_chunked_view_presets_match_live_thresholds() -> None:
-    assert RESULTS_LIST_CHUNK.async_threshold == 72
-    assert RESULTS_GRID_CHUNK.async_threshold == 36
-    assert REVIEW_GROUPS_CHUNK.first_sync_count == 12
-    assert REVIEW_GRID_FILES_CHUNK.batch_size == 30
-    assert REVIEW_GROUPS_CHUNK.max_builds_per_tick == 16
+    assert BROWSE_TILES_CHUNK.async_threshold == 36
+    assert BROWSE_GROUPS_CHUNK.first_sync_count == 12
+    assert BROWSE_GROUPS_CHUNK.max_builds_per_tick == 16
 
 
 def test_group_duplicate_summary_exact_copies() -> None:

@@ -27,9 +27,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_REVIEW_PKG = "cerebro/v2/ui/flet_app/pages/review"
-_REVIEW_PAGE = "cerebro/v2/ui/flet_app/pages/review_page.py"
-_SMOKE_TARGETS = [_REVIEW_PKG, _REVIEW_PAGE]
+_REVIEW_FLOW_PKG = "cerebro/v2/ui/flet_app/pages/review_flow"
+_SMOKE_TARGETS = [_REVIEW_FLOW_PKG]
 
 
 # ── git helpers ───────────────────────────────────────────────────────────────
@@ -104,7 +103,7 @@ def _find_bad_worktree(good_sha: str) -> tuple[Path, str]:
 def _compute_layers(good_sha: str, bad_sha: str) -> list[str]:
     raw = _run([
         "git", "diff", "--name-only", good_sha, bad_sha,
-        "--", _REVIEW_PKG, _REVIEW_PAGE,
+        "--", _REVIEW_FLOW_PKG,
     ])
     if not raw:
         return []
