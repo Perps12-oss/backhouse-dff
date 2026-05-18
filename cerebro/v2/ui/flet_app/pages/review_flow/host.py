@@ -157,6 +157,8 @@ class ReviewFlowHost(ft.Column):
                     on_toggle_file_mark=self._browse_toggle_file_mark,
                     on_start_delete_ceremony=self._open_apply_sheet,
                     on_proceed_execute=self._open_apply_sheet,
+                    on_apply_smart_rule=self._apply_smart_rule_to_all,
+                    on_undo_smart=self._undo,
                     reduce_motion=self._reduce_motion,
                 )
                 if page is not None:
@@ -752,12 +754,44 @@ class ReviewFlowHost(ft.Column):
         else:
             self._state.marked_paths.discard(p)
             sel.deleted_paths.discard(p)
+        # Manual toggle invalidates any smart rule reason label for this group.
+        self._state.smart_rule_by_group.pop(gid, None)
         self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.sync_checkbox_marks()
             self._browse_view.update_cart_chrome()
         self._update_sidebar_counts_only()
+
+    def _apply_smart_rule_to_all(self, rule: str) -> None:
+        from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
+        self._state.push_undo_snapshot()
+        groups = self._state.visible_groups()
+        for group in groups:
+            if len(group.files) < 2:
+                continue
+            try:
+                keeper = apply_rule_with_pipeline(rule, group.files)
+            except Exception:
+                keeper = group.files[0]
+            gid = group.group_id
+            sel = self._state.set_selections.setdefault(gid, SetSelection())
+            keeper_path = str(keeper.path)
+            sel.kept_paths.clear()
+            sel.deleted_paths.clear()
+            sel.kept_paths.add(keeper_path)
+            for f in group.files:
+                p = str(f.path)
+                if p != keeper_path:
+                    self._state.marked_paths.add(p)
+                    sel.deleted_paths.add(p)
+                else:
+                    self._state.marked_paths.discard(p)
+            self._state.smart_rule_by_group[gid] = rule
+        self._state._recompute_cart_counters()
+        self._push_marked_paths_to_store()
+        if self._browse_view:
+            self._browse_view.refresh()
 
     def _ensure_content_visible(self) -> None:
         try:

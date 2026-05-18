@@ -51,6 +51,8 @@ class ReviewFlowState:
     protected_path_prefixes: Tuple[str, ...] = field(default_factory=tuple)
     undo_stack: List[Dict[str, object]] = field(default_factory=list)
     redo_stack: List[Dict[str, object]] = field(default_factory=list)
+    # Smart Select — tracks which rule key was last applied per group (cleared on manual toggle).
+    smart_rule_by_group: Dict[int, str] = field(default_factory=dict)
     text_filter: str = ""
     type_filter: Set[str] = field(default_factory=set)
     min_size_bytes: int = 0

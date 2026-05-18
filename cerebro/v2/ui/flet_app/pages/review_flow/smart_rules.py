@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from cerebro.engines.base_engine import DuplicateFile
+
+# Compiled once at module level — matches copy-like filename suffixes.
+_COPY_PATTERN = re.compile(r'\s*\(\d+\)|\bcopy\b|copy\s+of\b', re.IGNORECASE)
 
 
 def _mtime(f: DuplicateFile) -> float:
@@ -27,11 +30,23 @@ def _keep_first(files: List[DuplicateFile]) -> DuplicateFile:
     return files[0]
 
 
+def _avoid_copy(files: List[DuplicateFile]) -> DuplicateFile:
+    originals = [f for f in files if not _COPY_PATTERN.search(Path(str(f.path)).name)]
+    pool = originals if originals else files
+    return max(pool, key=lambda f: int(getattr(f, "size", 0) or 0))
+
+
+def _keep_shortest_path(files: List[DuplicateFile]) -> DuplicateFile:
+    return min(files, key=lambda f: len(str(f.path)))
+
+
 _RULES = {
     "keep_largest": lambda files: max(files, key=lambda f: f.size),
     "keep_smallest": lambda files: min(files, key=lambda f: f.size),
     "keep_newest": lambda files: max(files, key=_mtime),
     "keep_oldest": lambda files: min(files, key=_mtime),
+    "keep_shortest_path": _keep_shortest_path,
+    "avoid_copy": _avoid_copy,
     "keep_first": _keep_first,
 }
 
@@ -45,13 +60,15 @@ def normalized_rule(rule: str) -> str:
 
 
 RULE_LABELS = [
-    ("keep_largest", "Keep Largest"),
-    ("keep_smallest", "Keep Smallest"),
     ("keep_newest", "Keep Newest"),
     ("keep_oldest", "Keep Oldest"),
+    ("keep_largest", "Keep Largest"),
+    ("keep_smallest", "Keep Smallest"),
+    ("keep_shortest_path", "Keep Shortest Path"),
+    ("avoid_copy", 'Avoid "(1)" & "Copy"'),
 ]
 
-# Deletion settings auto-mark: same four rules plus list-order keeper.
+# Deletion settings auto-mark: same rules plus list-order keeper.
 AUTO_MARK_RULE_OPTIONS = [*RULE_LABELS, ("keep_first", "Keep First")]
 
 
@@ -63,7 +80,7 @@ def apply_rule(rule: str, files: List[DuplicateFile]) -> DuplicateFile:
     return fn(files)
 
 
-def keeper_from_filename_regex(regex: str, files: List[DuplicateFile]) -> DuplicateFile | None:
+def keeper_from_filename_regex(regex: str, files: List[DuplicateFile]) -> Optional[DuplicateFile]:
     pattern = (regex or "").strip()
     if not pattern:
         return None
@@ -96,3 +113,35 @@ def paths_to_delete(rule: str, files: List[DuplicateFile]) -> List[str]:
         return []
     keeper = apply_rule(rule, files)
     return [str(f.path) for f in files if f is not keeper]
+
+
+_KEEP_REASONS: dict[str, str] = {
+    "keep_newest": "Kept: Newest modified version",
+    "keep_oldest": "Kept: Oldest version",
+    "keep_largest": "Kept: Largest file",
+    "keep_smallest": "Kept: Smallest file",
+    "keep_shortest_path": "Kept: Shortest path",
+    "avoid_copy": "Kept: Cleanest filename",
+    "keep_first": "Kept: First in list",
+}
+
+_SELECT_REASONS: dict[str, str] = {
+    "keep_newest": "Selected: Older than newest",
+    "keep_oldest": "Selected: Newer than oldest",
+    "keep_largest": "Selected: Smaller than largest",
+    "keep_smallest": "Selected: Larger than smallest",
+    "keep_shortest_path": "Selected: Longer path",
+    "avoid_copy": "Selected: Copy-like filename",
+    "keep_first": "Selected: Lower list position",
+}
+
+
+def get_selection_reason(rule: str, file_path: str, keeper_path: str) -> str:
+    """Return a short human-readable reason label for a file's KEPT/SELECTED status."""
+    if file_path == keeper_path:
+        return _KEEP_REASONS.get(rule, "Kept")
+    if rule == "avoid_copy":
+        name = Path(file_path).name
+        if _COPY_PATTERN.search(name):
+            return 'Selected: Copy-like filename pattern'
+    return _SELECT_REASONS.get(rule, "Selected")

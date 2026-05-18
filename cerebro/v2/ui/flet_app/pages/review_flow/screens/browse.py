@@ -16,6 +16,7 @@ from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHO
 from cerebro.v2.ui.flet_app.pages.review_flow.skeletons import browse_skeleton
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
 from cerebro.v2.ui.flet_app.pages.review_flow import labels
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import RULE_LABELS, get_selection_reason
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_BROWSE_EDGE, get_thumbnail_cache, is_image_path
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
@@ -39,6 +40,8 @@ class BrowseScreenView:
         on_toggle_file_mark,
         on_start_delete_ceremony,
         on_proceed_execute,
+        on_apply_smart_rule=None,
+        on_undo_smart=None,
         reduce_motion: bool = False,
     ) -> None:
         self._t = t
@@ -51,6 +54,8 @@ class BrowseScreenView:
         self._on_toggle_file_mark = on_toggle_file_mark
         self._on_start_delete_ceremony = on_start_delete_ceremony
         self._on_proceed_execute = on_proceed_execute
+        self._on_apply_smart_rule = on_apply_smart_rule
+        self._on_undo_smart = on_undo_smart
         self._group_marked_lines: dict[int, ft.Text] = {}
         self._list = ft.ListView(expand=True, spacing=6, padding=8, auto_scroll=False)
         self._group_grid = ft.GridView(
@@ -81,6 +86,11 @@ class BrowseScreenView:
             spacing=12,
             wrap=True,
         )
+        # Smart Select toolbar controls (built in _build, updated in refresh)
+        self._smart_rule_dropdown: Optional[ft.Dropdown] = None
+        self._smart_summary_text: Optional[ft.Text] = None
+        self._smart_undo_btn: Optional[ft.TextButton] = None
+        self._smart_toolbar: ft.Container = ft.Container(visible=True)
         self._chunked: Optional[ChunkedViewBuilder[DuplicateGroup]] = None
         self._page: Optional[ft.Page] = None
         self._browse_thumb_gen = 0
@@ -114,12 +124,29 @@ class BrowseScreenView:
         self._page = page
         self._chunked = ChunkedViewBuilder(page, BROWSE_GROUPS_CHUNK_CONFIG)
 
+    def _refresh_smart_toolbar(self, in_detail: bool) -> None:
+        """Update Smart Select toolbar visibility and summary text."""
+        self._smart_toolbar.visible = not in_detail
+        if self._smart_undo_btn is not None:
+            self._smart_undo_btn.visible = bool(self._state.undo_stack)
+        if self._smart_summary_text is not None:
+            n_del = self._state.cart_delete_count
+            total_bytes = self._state.cart_delete_bytes
+            if n_del > 0:
+                self._smart_summary_text.value = (
+                    f"Selected: {n_del:,} file(s) • {fmt_size(total_bytes)} recoverable"
+                )
+            else:
+                self._smart_summary_text.value = ""
+        safe_update(self._smart_toolbar)
+
     def refresh(self, *, rebuild: bool = True) -> None:
         t = self._t
         in_detail = self._state.browse_detail_group_id is not None
         self._header_list.visible = not in_detail
         self._header_detail.visible = in_detail
         self._toolbar.visible = not in_detail
+        self._refresh_smart_toolbar(in_detail)
 
         grid_mode = self._state.view_mode == "grid" and not in_detail
         if not in_detail:
@@ -245,6 +272,72 @@ class BrowseScreenView:
         direction = "↓" if self._state.sort_desc else "↑"
         return f"Sort: {key.title()} {direction}"
 
+    def _build_smart_toolbar(self) -> ft.Container:
+        t = self._t
+
+        def _on_apply(_e=None) -> None:
+            if self._on_apply_smart_rule is None or self._smart_rule_dropdown is None:
+                return
+            rule = self._smart_rule_dropdown.value or "keep_newest"
+            self._on_apply_smart_rule(rule)
+
+        def _on_undo(_e=None) -> None:
+            if self._on_undo_smart:
+                self._on_undo_smart()
+
+        self._smart_rule_dropdown = ft.Dropdown(
+            value="keep_newest",
+            options=[ft.dropdown.Option(key=k, text=label) for k, label in RULE_LABELS],
+            width=200,
+            dense=True,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=4),
+        )
+        self._smart_summary_text = ft.Text(
+            "",
+            size=t.typography.size_xs,
+            color=t.colors.fg_muted,
+        )
+        self._smart_undo_btn = ft.TextButton(
+            "↶ Undo",
+            visible=False,
+            on_click=_on_undo,
+            style=ft.ButtonStyle(color=t.colors.fg_muted),
+        )
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text(
+                                "Smart Select",
+                                size=t.typography.size_sm,
+                                weight=ft.FontWeight.W_600,
+                                color=t.colors.fg,
+                            ),
+                            ft.Text(
+                                "Keep:",
+                                size=t.typography.size_sm,
+                                color=t.colors.fg_muted,
+                            ),
+                            self._smart_rule_dropdown,
+                            ft.FilledButton("Apply", on_click=_on_apply),
+                            self._smart_undo_btn,
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        wrap=True,
+                    ),
+                    self._smart_summary_text,
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.25, t.colors.border)),
+            border_radius=8,
+            margin=ft.margin.only(bottom=4),
+        )
+
     def _build(self) -> ft.Column:
         t = self._t
         self._header_list.controls = [
@@ -285,6 +378,7 @@ class BrowseScreenView:
             padding=12,
             alignment=ft.Alignment.CENTER,
         )
+        self._smart_toolbar = self._build_smart_toolbar()
         return ft.Column(
             [
                 ft.Container(
@@ -298,6 +392,12 @@ class BrowseScreenView:
                 ft.Container(
                     content=self._toolbar,
                     alignment=ft.Alignment(0, 0),
+                ),
+                # Smart Select toolbar
+                ft.Container(
+                    content=self._smart_toolbar,
+                    alignment=ft.Alignment(0, 0),
+                    padding=ft.padding.symmetric(horizontal=8),
                 ),
                 # Phase 3.1 — overflow banner
                 self._overflow_banner,
@@ -403,6 +503,22 @@ class BrowseScreenView:
             safe_update(self._chip_row)
             safe_update(self._bottom_bar)
 
+    def _build_smart_badge(self, is_kept: bool) -> ft.Container:
+        t = self._t
+        if is_kept:
+            return ft.Container(
+                content=ft.Text("KEPT", size=8, color="#FFFFFF", weight=ft.FontWeight.W_700),
+                bgcolor=t.colors.success,
+                border_radius=4,
+                padding=ft.padding.symmetric(horizontal=4, vertical=2),
+            )
+        return ft.Container(
+            content=ft.Text("SELECTED", size=8, color="#FFFFFF", weight=ft.FontWeight.W_700),
+            bgcolor=t.colors.danger,
+            border_radius=4,
+            padding=ft.padding.symmetric(horizontal=4, vertical=2),
+        )
+
     def _build_file_thumb_tile(
         self,
         group: DuplicateGroup,
@@ -418,12 +534,29 @@ class BrowseScreenView:
         checked = self._file_marked_for_delete(p, gid)
         mark_border = ft.border.all(2, t.colors.danger) if checked else ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border))
 
+        # Smart Select state for this file
+        sel = self._state.set_selections.get(gid)
+        rule = self._state.smart_rule_by_group.get(gid)
+        is_kept = bool(sel and p in sel.kept_paths)
+        has_smart = rule is not None and (is_kept or bool(sel and p in sel.deleted_paths))
+
         def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = gid) -> None:
             self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
 
         cb = ft.Checkbox(value=checked, disabled=prot, on_change=_toggle)
         self._mark_checkboxes[p] = cb
         self._mark_checkbox_groups[p] = gid
+
+        # Badge overlay (bottom-right of the thumb) when a smart rule is active.
+        badge_layer: list[ft.Control] = []
+        if has_smart:
+            badge_layer.append(
+                ft.Container(
+                    content=self._build_smart_badge(is_kept),
+                    alignment=ft.Alignment(1, 1),
+                    padding=ft.padding.only(right=2, bottom=2),
+                )
+            )
 
         thumb_path = p if is_image_path(Path(p)) else None
         row_data: dict = {}
@@ -436,6 +569,9 @@ class BrowseScreenView:
                 fit=ft.BoxFit.COVER,
                 border_radius=6,
             )
+            # Keeper: tint the border green instead of the standard danger red.
+            if is_kept and has_smart:
+                mark_border = ft.border.all(2, t.colors.success)
             thumb_stack = ft.Stack(
                 [
                     ft.Container(
@@ -451,11 +587,16 @@ class BrowseScreenView:
                         alignment=ft.Alignment(-1, -1),
                         padding=ft.padding.only(left=2, top=2),
                     ),
+                    *badge_layer,
                 ],
                 clip_behavior=ft.ClipBehavior.NONE,
+                width=edge,
+                height=edge,
             )
             row_data = {"thumb_path": thumb_path, "grid_thumb_single": True, "hero_img": tiny_img, "thumb_edge": edge}
         else:
+            if is_kept and has_smart:
+                mark_border = ft.border.all(2, t.colors.success)
             thumb_stack = ft.Stack(
                 [
                     ft.Container(
@@ -471,11 +612,16 @@ class BrowseScreenView:
                         alignment=ft.Alignment(-1, -1),
                         padding=ft.padding.only(left=2, top=2),
                     ),
+                    *badge_layer,
                 ],
+                width=edge,
+                height=edge,
             )
 
         name_line: list[ft.Control] = []
         if show_name:
+            sel2 = self._state.set_selections.get(gid)
+            keeper_path = next(iter(sel2.kept_paths), "") if sel2 and sel2.kept_paths else ""
             name_line.append(
                 ft.Text(
                     f.path.name,
@@ -486,6 +632,19 @@ class BrowseScreenView:
                     color=t.colors.fg,
                 )
             )
+            if has_smart and rule:
+                reason = get_selection_reason(rule, p, keeper_path)
+                name_line.append(
+                    ft.Text(
+                        reason,
+                        size=8,
+                        color=t.colors.success if is_kept else t.colors.fg_muted,
+                        text_align=ft.TextAlign.CENTER,
+                        italic=True,
+                        max_lines=2,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    )
+                )
 
         return ft.Container(
             content=ft.Column(
