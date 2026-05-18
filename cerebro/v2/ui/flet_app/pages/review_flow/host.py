@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
-from cerebro.v2.state.actions import FileSelectionChanged
+from cerebro.v2.state.actions import FileSelectionChanged, GroupsPruned
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
 from cerebro.v2.ui.flet_app.pages.review_flow.apply_sheet import ApplyOutcomeModel, ApplyStep, build_apply_sheet_column
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import (
@@ -128,13 +128,10 @@ class ReviewFlowHost(ft.Column):
                 scan_elapsed_seconds=elapsed,
             )
             if len(self._state.scan_results) == 0:
-                sk = skeletons.overview_skeleton(t, reduce_motion=self._reduce_motion)
-                self._content.content = ft.Stack(
-                    [
-                        ft.Container(sk, expand=True, alignment=ft.Alignment.TOP_CENTER),
-                        ft.Container(overview_body, expand=True),
-                    ],
+                self._content.content = ft.Container(
                     expand=True,
+                    alignment=ft.Alignment(0, 0),
+                    content=overview_body,
                 )
             else:
                 # Plain Column(expand=True) as the only child of Container(expand=True) can get
@@ -507,7 +504,14 @@ class ReviewFlowHost(ft.Column):
             sel.deleted_paths = {p for p in sel.deleted_paths if p in alive}
             sel.kept_paths = {p for p in sel.kept_paths if p in alive}
             sel.protected_paths = {p for p in sel.protected_paths if p in alive}
+        for gid in list(self._state.smart_rule_by_group.keys()):
+            if gid not in alive_gids:
+                del self._state.smart_rule_by_group[gid]
         self._state._recompute_cart_counters()
+        try:
+            self._bridge.store.dispatch(GroupsPruned(groups=tuple(new_groups)))
+        except Exception:
+            _log.debug("GroupsPruned dispatch failed", exc_info=True)
 
     def _apply_dialog_closed(self, _e=None) -> None:
         self._apply_dialog = None
@@ -668,7 +672,7 @@ class ReviewFlowHost(ft.Column):
                 )
                 self._apply_step = "outcome"
                 self._apply_refresh_body()
-                self._render_active_screen()
+                self._update_sidebar_counts_only()
                 self._show_apply_undo_toast(simulated=False)
 
             flet_page = self._bridge.flet_page
@@ -711,23 +715,27 @@ class ReviewFlowHost(ft.Column):
         self._apply_close_sheet()
 
     def _apply_finish_overview(self, _e=None) -> None:
+        """Return to browse (or overview if nothing left) after delete outcome."""
         self._apply_close_sheet()
         self._state.browse_detail_group_id = None
+        self._state.page_index = 0
         if len(self._state.scan_results) > 0:
-            # Go straight to Browse — avoid overview→browse in one click (double opacity transition
-            # on _content can leave the page stuck transparent / blank on some Flet builds).
             self._state.screen_stack = ["overview", "browse"]
             self._state.active_screen = "browse"
         else:
             self._state.screen_stack = ["overview"]
             self._state.active_screen = "overview"
-        self._render_active_screen()
-        try:
-            self._content.opacity = 1.0
-            self._content.animate_opacity = None
-        except Exception:
-            pass
-        self._safe_update(self._content)
+
+        def _paint_after_dialog() -> None:
+            self._ensure_content_visible()
+            self._render_active_screen()
+            if self._state.active_screen == "browse" and self._browse_view is not None:
+                # Stale list_host controls after delete skip refresh() and leave a blank pane.
+                self._browse_view.refresh(rebuild=True)
+            self._ensure_content_visible()
+            self._safe_update(self._content)
+
+        self._schedule_after_handler_frame(_paint_after_dialog)
 
     def _apply_finish_new_scan(self, _e=None) -> None:
         self._apply_close_sheet()

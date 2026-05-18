@@ -13,7 +13,6 @@ from cerebro.v2.ui.flet_app.components.common.chunked_view import (
     BROWSE_GROUPS_CHUNK_CONFIG,
 )
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC, safe_update
-from cerebro.v2.ui.flet_app.pages.review_flow.skeletons import browse_skeleton
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
 from cerebro.v2.ui.flet_app.pages.review_flow import labels
 from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import RULE_LABELS, get_selection_reason
@@ -226,8 +225,29 @@ class BrowseScreenView:
             )
         elif not groups:
             self._group_grid.controls.clear()
-            sk = browse_skeleton(t, reduce_motion=self._reduce_motion)
-            self._list.controls = [ft.Container(content=sk, padding=8, expand=True)]
+            total = len(self._state.scan_results)
+            if total == 0:
+                empty_msg = "No duplicate groups left after cleanup."
+                empty_hint = "Start a new scan from the dashboard, or use New scan in the outcome dialog."
+            else:
+                empty_msg = "No groups on this page."
+                empty_hint = "Try another page or clear filters."
+            self._list.controls = [
+                ft.Container(
+                    expand=True,
+                    padding=24,
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Column(
+                        [
+                            ft.Text(empty_msg, size=t.typography.size_md, weight=ft.FontWeight.W_600),
+                            ft.Text(empty_hint, size=t.typography.size_sm, color=t.colors.fg_muted),
+                            ft.TextButton("← Overview", on_click=self._on_back),
+                        ],
+                        spacing=8,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                )
+            ]
         elif self._chunked is None:
             if grid_mode:
                 self._list.controls.clear()

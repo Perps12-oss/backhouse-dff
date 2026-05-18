@@ -9,7 +9,8 @@ Run after changes to `review_flow/host.py`, `review_flow/screens/browse.py`, `re
 5. **Filters** — Text/type/size filters narrow visible groups without blanking the central pane (no full-host rebuild regressions).
 6. **Apply cleanup** — With manual marks only: **Apply cleanup** opens the 4-step dialog (summary → confirm → progress → outcome); deletion completes; browse list updates; undo (Trash) when applicable.
 7. **Inspect** — Open a group; side-by-side previews, ref/compare navigation, and back-to-browse work.
-8. **Regression** — Theme toggle; keyboard shortcuts on review tab; scan-complete returns to overview when configured.
+8. **Apply cleanup → Back to browse** — After delete outcome, **Back to browse** shows either remaining groups or an explicit empty message (not a blank pane). If every duplicate was removed, overview shows “No duplicate sets loaded”.
+9. **Regression** — Theme toggle; keyboard shortcuts on review tab; scan-complete returns to overview when configured.
 
 ## Not in scope (removed until redesign)
 

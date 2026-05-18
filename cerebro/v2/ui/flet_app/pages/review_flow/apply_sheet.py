@@ -164,7 +164,7 @@ def build_apply_sheet_column(
             ),
             ft.Row(
                 [
-                    ft.TextButton("Back to review", on_click=on_back_overview),
+                    ft.TextButton("Back to browse", on_click=on_back_overview),
                     ft.OutlinedButton("New scan", on_click=on_new_scan),
                 ],
                 alignment=ft.MainAxisAlignment.START,
