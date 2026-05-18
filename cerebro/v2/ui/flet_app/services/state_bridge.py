@@ -296,22 +296,38 @@ class StateBridge:
         self, groups: List[DuplicateGroup], mode: str
     ) -> None:
         self._coordinator.scan_completed(groups, mode)
-        self._persist_scan_history(groups, mode or "files")
-        try:
-            import time as _t
-
-            from cerebro.v2.persistence.scan_snapshot import save_scan_results_snapshot
-
-            save_scan_results_snapshot(list(groups), mode or "files", _t.time())
-        except Exception:
-            _log.exception("Persist scan snapshot failed")
+        self._persist_scan_history_async(groups, mode or "files")
+        self._save_scan_snapshot_async(list(groups), mode or "files")
         self._scan_session = {}
 
-    def _persist_scan_history(self, groups: List[DuplicateGroup], mode: str) -> None:
+    def _save_scan_snapshot_async(self, groups: List[DuplicateGroup], mode: str) -> None:
+        import threading as _threading
+        import time as _t
+        ts = _t.time()
+
+        def _worker() -> None:
+            try:
+                from cerebro.v2.persistence.scan_snapshot import save_scan_results_snapshot
+                save_scan_results_snapshot(groups, mode, ts)
+            except Exception:
+                _log.exception("Persist scan snapshot failed")
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _persist_scan_history_async(self, groups: List[DuplicateGroup], mode: str) -> None:
+        import threading as _threading
+        session_snapshot = dict(self._scan_session)
+
+        def _worker() -> None:
+            self._persist_scan_history(groups, mode, _session=session_snapshot)
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _persist_scan_history(self, groups: List[DuplicateGroup], mode: str, *, _session: dict | None = None) -> None:
         try:
             from cerebro.v2.core.scan_history_db import get_scan_history_db
 
-            ses = self._scan_session or {}
+            ses = _session if _session is not None else (self._scan_session or {})
             folders = [str(x) for x in ses.get("folders", [])]
             t0 = ses.get("t0")
             duration = max(0.0, time.monotonic() - float(t0)) if t0 is not None else 0.0

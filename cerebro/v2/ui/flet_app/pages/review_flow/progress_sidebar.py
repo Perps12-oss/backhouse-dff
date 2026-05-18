@@ -10,7 +10,7 @@ def build_progress_sidebar(t: ThemeTokens, active: ReviewScreen, state: ReviewFl
     """Operational status strip (replaces linear wizard steps)."""
     n_groups = len(state.scan_results)
     marked = len(state.cart_buckets()["delete"])
-    reclaim = state.marked_bytes()
+    reclaim = state.cart_delete_bytes
     mode = (state.scan_mode or "files").replace("_", " ").title()
     screen_label = {"overview": "Overview", "browse": "Browse", "inspect": "Compare"}.get(active, active)
     return ft.Container(

@@ -89,6 +89,10 @@ class BrowseScreenView:
         self._detail_grid: Optional[ft.GridView] = None
         self._mark_checkboxes: dict[str, ft.Checkbox] = {}
         self._mark_checkbox_groups: dict[str, int] = {}
+        # Phase 3.1 — overflow banner
+        self._overflow_banner: ft.Container = ft.Container(visible=False)
+        # Phase 3.2 — page navigation
+        self._page_nav: ft.Row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER, spacing=8)
         self._root = self._build()
 
     def set_reduce_motion(self, value: bool) -> None:
@@ -123,16 +127,56 @@ class BrowseScreenView:
         if not in_detail:
             self._thumb_view_switch.value = self._state.view_mode == "grid"
 
-        groups = self._state.visible_groups()
-        n_del = len(self._state.cart_buckets()["delete"])
+        # Phase 3.2 — use paged view; all_visible for count and navigation
+        all_visible = self._state.visible_groups()
+        groups = self._state.paged_visible_groups()
+        total_visible = len(all_visible)
+        n_del = self._state.cart_delete_count
         self._chip.content = ft.Text(f"{n_del} file(s) marked for removal", size=11, color=t.colors.fg)
         self._chip.visible = n_del > 0
         self._bottom_bar.visible = n_del > 0
+
+        # Phase 3.1 — informational banner when results span multiple pages
+        total_pages = max(1, (total_visible + self._state.page_size - 1) // self._state.page_size)
+        if total_pages > 1:
+            self._overflow_banner.content = ft.Text(
+                f"{total_visible:,} groups — use filters to narrow results.",
+                color=ft.Colors.BLUE_300,
+                size=11,
+            )
+            self._overflow_banner.visible = True
+        else:
+            self._overflow_banner.visible = False
+
+        # Phase 3.2 — page navigation bar
+        if total_pages > 1:
+            page_idx = self._state.page_index
+
+            def _go_prev(_e=None) -> None:
+                if self._state.page_index > 0:
+                    self._state.page_index -= 1
+                    self.refresh()
+
+            def _go_next(_e=None) -> None:
+                if self._state.page_index < total_pages - 1:
+                    self._state.page_index += 1
+                    self.refresh()
+
+            self._page_nav.controls = [
+                ft.TextButton("← Prev", on_click=_go_prev, disabled=(page_idx == 0)),
+                ft.Text(f"Page {page_idx + 1} / {total_pages}", size=11, color=t.colors.fg_muted),
+                ft.TextButton("Next →", on_click=_go_next, disabled=(page_idx >= total_pages - 1)),
+            ]
+            self._page_nav.visible = True
+        else:
+            self._page_nav.visible = False
 
         if not rebuild:
             self.sync_checkbox_marks()
             safe_update(self._chip)
             safe_update(self._bottom_bar)
+            safe_update(self._overflow_banner)
+            safe_update(self._page_nav)
             return
 
         self._browse_thumb_gen += 1
@@ -191,6 +235,8 @@ class BrowseScreenView:
         safe_update(self._browse_slot)
         safe_update(self._chip)
         safe_update(self._bottom_bar)
+        safe_update(self._overflow_banner)
+        safe_update(self._page_nav)
         if groups and self._page is not None and hasattr(self._page, "run_task"):
             self._page.run_task(self._load_browse_thumbs_async, gen)
 
@@ -253,6 +299,8 @@ class BrowseScreenView:
                     content=self._toolbar,
                     alignment=ft.Alignment(0, 0),
                 ),
+                # Phase 3.1 — overflow banner
+                self._overflow_banner,
                 ft.Stack(
                     [
                         ft.Container(
@@ -268,6 +316,8 @@ class BrowseScreenView:
                     ],
                     expand=True,
                 ),
+                # Phase 3.2 — page navigation footer
+                self._page_nav,
                 self._bottom_bar,
             ],
             expand=True,

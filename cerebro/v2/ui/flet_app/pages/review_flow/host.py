@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import logging
 import os
@@ -212,6 +211,8 @@ class ReviewFlowHost(ft.Column):
         if store_groups:
             self._state.scan_results = store_groups
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
+            self._state.rebuild_group_index()
+            self._state.invalidate_visible_cache()
         self._try_resume_session()
         self._render_active_screen()
 
@@ -221,6 +222,8 @@ class ReviewFlowHost(ft.Column):
         if store_groups:
             self._state.scan_results = store_groups
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
+            self._state.rebuild_group_index()
+            self._state.invalidate_visible_cache()
         self._router.reset_to_overview()
         if self._page_is_set(self):
             self._render_active_screen()
@@ -242,6 +245,8 @@ class ReviewFlowHost(ft.Column):
     def load_results(self, groups: List[DuplicateGroup], mode: str = "files", defer_render: bool = False) -> None:
         self._state.scan_results = list(groups)
         self._state.scan_mode = mode
+        self._state.rebuild_group_index()
+        self._state.invalidate_visible_cache()
         if not defer_render and self._page_is_set(self):
             self._render_active_screen()
 
@@ -368,6 +373,10 @@ class ReviewFlowHost(ft.Column):
             self._state.inspect_cmp_index,
             self._state.inspect_swap_panels,
         )
+        # P0-4 — cap inspect_layout_by_set_id at 200 entries
+        if len(self._state.inspect_layout_by_set_id) > 200:
+            oldest = next(iter(self._state.inspect_layout_by_set_id))
+            del self._state.inspect_layout_by_set_id[oldest]
 
     def _restore_inspect_layout_for_set(self, group_id: int) -> None:
         group = self._state.group_by_id(group_id)
@@ -412,29 +421,61 @@ class ReviewFlowHost(ft.Column):
         self._restore_inspect_layout_for_set(group_id)
         self._router.navigate("inspect")
 
-    def _snapshot_apply_undo(self) -> dict:
-        selections: dict[int, SetSelection] = {}
-        for gid, sel in self._state.set_selections.items():
-            selections[gid] = SetSelection(
-                kept_paths=set(sel.kept_paths),
-                deleted_paths=set(sel.deleted_paths),
-                protected_paths=set(sel.protected_paths),
-            )
-        return {
-            "scan_results": copy.deepcopy(self._state.scan_results),
-            "marked_paths": set(self._state.marked_paths),
-            "set_selections": selections,
-        }
+    def _push_delete_undo_bundle(self, paths_to_delete: list) -> None:
+        """Phase 2 — Build a lightweight undo bundle without deepcopy of all scan_results."""
+        path_set = set(paths_to_delete)
+        affected_groups = [
+            g for g in self._state.scan_results
+            if any(str(f.path) in path_set for f in g.files)
+        ]
+        affected_gids = {g.group_id for g in affected_groups}
+        self._state.undo_stack.append({
+            "type": "delete_batch",
+            "deleted_paths": list(paths_to_delete),
+            "affected_groups_before": affected_groups,
+            "marked_paths_before": set(self._state.marked_paths),
+            "set_selections_before": {
+                gid: SetSelection(
+                    kept_paths=set(sel.kept_paths),
+                    deleted_paths=set(sel.deleted_paths),
+                    protected_paths=set(sel.protected_paths),
+                )
+                for gid, sel in self._state.set_selections.items()
+                if gid in affected_gids
+            },
+        })
+        self._state.redo_stack.clear()
+        while len(self._state.undo_stack) > 50:
+            self._state.undo_stack.pop(0)
+
+    def _undo_delete_bundle(self, bundle: dict) -> None:
+        """Phase 2 — Restore state from a delete_batch undo bundle."""
+        restored_groups = bundle.get("affected_groups_before", [])
+        restored_gids = {g.group_id for g in restored_groups}
+        new_results = [g for g in self._state.scan_results if g.group_id not in restored_gids]
+        new_results.extend(restored_groups)
+        self._state.scan_results = new_results
+        self._state.marked_paths = set(bundle.get("marked_paths_before", set()))
+        for gid, sel in bundle.get("set_selections_before", {}).items():
+            self._state.set_selections[gid] = sel
+        self._state.rebuild_group_index()
+        self._state.invalidate_visible_cache()
+        self._state._recompute_cart_counters()
+
 
     def _restore_apply_undo_bundle(self, snap: dict) -> None:
-        self._state.scan_results = copy.deepcopy(snap.get("scan_results", []))
+        self._state.rebuild_group_index()
+        self._state.invalidate_visible_cache()
         self._state.marked_paths = set(snap.get("marked_paths", set()))
         restored = snap.get("set_selections", {})
         if isinstance(restored, dict):
             self._state.set_selections = dict(restored)
+        self._state._recompute_cart_counters()
 
     def _reconcile_state_after_delete(self, new_groups: List[DuplicateGroup]) -> None:
         self._state.scan_results = new_groups
+        self._state.rebuild_group_index()
+        self._state.invalidate_visible_cache()
         alive = {str(f.path) for g in new_groups for f in g.files}
         self._state.marked_paths &= alive
         alive_gids = {g.group_id for g in new_groups}
@@ -446,6 +487,7 @@ class ReviewFlowHost(ft.Column):
             sel.deleted_paths = {p for p in sel.deleted_paths if p in alive}
             sel.kept_paths = {p for p in sel.kept_paths if p in alive}
             sel.protected_paths = {p for p in sel.protected_paths if p in alive}
+        self._state._recompute_cart_counters()
 
     def _apply_sheet_closed(self, _e=None) -> None:
         self._apply_sheet = None
@@ -539,7 +581,8 @@ class ReviewFlowHost(ft.Column):
         paths = [str(f.path) for f in buckets["delete"]]
         simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
         if simulate:
-            self._apply_undo_snapshot = self._snapshot_apply_undo()
+            self._push_delete_undo_bundle(paths)
+            self._apply_undo_snapshot = self._state.undo_stack[-1] if self._state.undo_stack else None
             freed = sum(int(f.size) for f in buckets["delete"])
             self._state.report_deleted_count = len(paths)
             self._state.report_freed_bytes = freed
@@ -556,40 +599,66 @@ class ReviewFlowHost(ft.Column):
             self._show_apply_undo_toast(simulated=True)
             return
 
-        self._apply_undo_snapshot = self._snapshot_apply_undo()
+        self._push_delete_undo_bundle(paths)
+        self._apply_undo_snapshot = self._state.undo_stack[-1] if self._state.undo_stack else None
 
         def on_progress(done: int, total: int, _name: str) -> None:
-            self._state.execute_progress = (done, total)
-            if self._apply_progress:
-                self._apply_progress.value = (done / total) if total else 0.0
-            if self._apply_progress_label:
-                self._apply_progress_label.value = f"{done}/{total} processed"
-            self._safe_update(self._apply_outer)
+            frac = (done / total) if total else 0.0
+            pct = int(frac * 100)
 
-        new_groups, dfr = self._delete_service.delete_and_prune(
+            def _ui_progress() -> None:
+                self._state.execute_progress = (done, total)
+                if self._apply_progress:
+                    self._apply_progress.value = frac
+                if self._apply_progress_label:
+                    self._apply_progress_label.value = f"{done}/{total} processed ({pct}%)"
+                self._safe_update(self._apply_outer)
+
+            flet_page = self._bridge.flet_page
+            if hasattr(flet_page, "run_thread"):
+                flet_page.run_thread(_ui_progress)
+            else:
+                _ui_progress()
+
+        def on_done(new_groups, deleted_count, failed_count, bytes_reclaimed, exc) -> None:
+            def _finish() -> None:
+                if exc is not None:
+                    self._state.execute_errors = [str(exc)]
+                    self._apply_step = "outcome"
+                    self._apply_refresh_body()
+                    return
+                self._state.execute_failures_detail = []
+                self._state.execute_errors = (
+                    [f"{failed_count} file(s) could not be moved"] if failed_count else []
+                )
+                self._state.report_deleted_count = deleted_count
+                self._state.report_freed_bytes = bytes_reclaimed
+                self._reconcile_state_after_delete(new_groups)
+                self._push_marked_paths_to_store()
+                self._last_apply_outcome = ApplyOutcomeModel(
+                    deleted_count=deleted_count,
+                    freed_bytes=bytes_reclaimed,
+                    error_count=failed_count,
+                    failures=[],
+                )
+                self._apply_step = "outcome"
+                self._apply_refresh_body()
+                self._render_active_screen()
+                self._show_apply_undo_toast(simulated=False)
+
+            flet_page = self._bridge.flet_page
+            if hasattr(flet_page, "run_thread"):
+                flet_page.run_thread(_finish)
+            else:
+                _finish()
+
+        self._delete_service.delete_and_prune_async(
             paths,
             self._state.scan_results,
             DeletionPolicy.TRASH,
-            progress_cb=on_progress,
+            progress_callback=on_progress,
+            done_callback=on_done,
         )
-        self._state.execute_failures_detail = list(dfr.failures)
-        self._state.execute_errors = (
-            [f"{dfr.failed_count} file(s) could not be moved"] if dfr.failed_count else []
-        )
-        self._state.report_deleted_count = dfr.deleted_count
-        self._state.report_freed_bytes = dfr.bytes_reclaimed
-        self._reconcile_state_after_delete(new_groups)
-        self._push_marked_paths_to_store()
-        self._last_apply_outcome = ApplyOutcomeModel(
-            deleted_count=dfr.deleted_count,
-            freed_bytes=dfr.bytes_reclaimed,
-            error_count=dfr.failed_count,
-            failures=list(dfr.failures),
-        )
-        self._apply_step = "outcome"
-        self._apply_refresh_body()
-        self._render_active_screen()
-        self._show_apply_undo_toast(simulated=False)
 
     def _show_apply_undo_toast(self, *, simulated: bool) -> None:
         msg = "Simulated apply (no files moved)." if simulated else "Last batch can be restored from managed storage."
@@ -598,9 +667,13 @@ class ReviewFlowHost(ft.Column):
     def _toast_undo_last_apply(self, _e=None) -> None:
         simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
         if not simulate:
-            DeleteService.undo_last_trash_delete()
+            self._delete_service.undo_last_trash_delete()
         if self._apply_undo_snapshot is not None:
-            self._restore_apply_undo_bundle(self._apply_undo_snapshot)
+            bundle = self._apply_undo_snapshot
+            if isinstance(bundle, dict) and bundle.get("type") == "delete_batch":
+                self._undo_delete_bundle(bundle)
+            else:
+                self._restore_apply_undo_bundle(bundle)
             self._apply_undo_snapshot = None
         self._push_marked_paths_to_store()
         self._render_active_screen()
@@ -656,6 +729,7 @@ class ReviewFlowHost(ft.Column):
         else:
             self._state.marked_paths.discard(p)
             sel.deleted_paths.discard(p)
+        self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.sync_checkbox_marks()
@@ -784,11 +858,11 @@ class ReviewFlowHost(ft.Column):
         self._render_active_screen()
 
     def _apply_paths_for_group(self, group: DuplicateGroup, delete_paths: set[str]) -> None:
-        self._state.push_undo_snapshot()
         sel = self._state.set_selections.setdefault(group.group_id, SetSelection())
         sel.deleted_paths = set(delete_paths)
         sel.kept_paths = {str(f.path) for f in group.files if str(f.path) not in delete_paths}
         self._state.marked_paths.update(delete_paths)
+        self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
 
     def _inspect_keep_physical_side(self, physical_side: int) -> None:
@@ -805,6 +879,7 @@ class ReviewFlowHost(ft.Column):
         pick_i = left_i if physical_side == 0 else right_i
         keep = group.files[pick_i]
         delete_paths = {str(f.path) for f in group.files if str(f.path) != str(keep.path)}
+        self._state.push_undo_snapshot()
         self._apply_paths_for_group(group, delete_paths)
         self._inspect_next()
 
@@ -816,12 +891,14 @@ class ReviewFlowHost(ft.Column):
         sel = self._state.set_selections.setdefault(group.group_id, SetSelection())
         sel.kept_paths = {str(f.path) for f in group.files}
         sel.deleted_paths.clear()
+        self._state._recompute_cart_counters()
         self._render_active_screen()
 
     def _inspect_delete_all(self) -> None:
         group = self._state.group_by_id(self._state.inspect_set_id or -1)
         if not group:
             return
+        self._state.push_undo_snapshot()
         self._apply_paths_for_group(group, {str(f.path) for f in group.files})
 
     def _inspect_mark_next(self) -> None:
@@ -1081,6 +1158,8 @@ class ReviewFlowHost(ft.Column):
             except ValueError:
                 self._state.min_size_bytes = 0
             self._state.text_filter = query.value or ""
+            # Phase 3.2 — reset page on filter change
+            self._state.page_index = 0
             self._close_filter_sheet()
             if self._router.active_screen() == "overview":
                 self._navigate_browse_after_modal_from_overview()
@@ -1154,7 +1233,10 @@ class ReviewFlowHost(ft.Column):
                 "marked_paths": sorted(self._state.marked_paths),
                 "screen": self._router.active_screen(),
             }
-            out = Path(self._bridge.get_settings().get("general", {}).get("export_dir", ".")) / "review_session.json"
+            export_dir_str = self._bridge.get_settings().get("general", {}).get("export_dir", "")
+            export_dir = Path(export_dir_str) if export_dir_str else Path.home() / ".cerebro" / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            out = export_dir / "review_session.json"
             out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._show_toast(f"Exported {out.name}")
             self._close_overlay()
@@ -1248,7 +1330,7 @@ class ReviewFlowHost(ft.Column):
             self._browse_view.refresh()
 
     def _try_resume_session(self) -> None:
-        path = Path("review_session.v1.json")
+        path = Path.home() / ".cerebro" / "review_session.v1.json"
         if not path.exists():
             return
         try:
@@ -1268,6 +1350,10 @@ class ReviewFlowHost(ft.Column):
                 except (TypeError, ValueError):
                     continue
             self._state.inspect_layout_by_set_id = parsed
+            # P0-4 — cap inspect_layout_by_set_id at 200 entries
+            while len(self._state.inspect_layout_by_set_id) > 200:
+                oldest = next(iter(self._state.inspect_layout_by_set_id))
+                del self._state.inspect_layout_by_set_id[oldest]
         screen = payload.get("active_screen")
         if screen == "cart":
             screen = "browse"
@@ -1276,6 +1362,27 @@ class ReviewFlowHost(ft.Column):
         if screen in {"overview", "browse", "inspect"}:
             self._router.reset_to_overview()
             self._router.navigate(screen)
+
+    def _save_snapshot_async(self, path_str: str, snapshot_json: str, done_cb=None) -> None:
+        """Phase 4 — Write snapshot to disk on a daemon thread (atomic via .tmp rename)."""
+        import threading
+        import pathlib
+
+        def _worker() -> None:
+            try:
+                p = pathlib.Path(path_str)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                tmp = p.with_suffix(".tmp")
+                tmp.write_text(snapshot_json, encoding="utf-8")
+                tmp.replace(p)
+                if done_cb:
+                    done_cb(True)
+            except Exception:
+                _log.exception("Snapshot save failed")
+                if done_cb:
+                    done_cb(False)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _save_session(self) -> None:
         payload = {
@@ -1288,12 +1395,12 @@ class ReviewFlowHost(ft.Column):
                 for gid, (ref, cmp_i, swap) in sorted(self._state.inspect_layout_by_set_id.items())
             },
         }
-        path = Path(".") / "review_session.v1.json"
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        path = Path.home() / ".cerebro" / "review_session.v1.json"
+        self._save_snapshot_async(str(path), json.dumps(payload, indent=2))
         self._show_toast("Session saved")
 
     def _recent_review_lines(self) -> list[str]:
-        path = Path("review_session.v1.json")
+        path = Path.home() / ".cerebro" / "review_session.v1.json"
         if path.exists():
             return [f"Resumable session ({path.name})"]
         return ["No saved sessions yet"]

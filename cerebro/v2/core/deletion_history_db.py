@@ -91,6 +91,17 @@ class HistoryManager:
         except sqlite3.Error:
             return []
 
+    def get_total_bytes_reclaimed(self) -> int:
+        """Single-row SQL aggregate — O(1) query, no row fetching."""
+        try:
+            with self._lock, sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(file_size), 0) FROM deletion_history"
+                ).fetchone()
+                return int(row[0]) if row else 0
+        except sqlite3.Error:
+            return 0
+
     def search_history(self, pattern: str) -> list[tuple[Any, ...]]:
         q = f"%{pattern}%"
         try:

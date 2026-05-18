@@ -59,8 +59,36 @@ class ReviewFlowState:
     inspect_diff_enabled: bool = False
     inspect_blink_enabled: bool = False
     active_tag_filter: str = ""
+    # Phase 3.2 — pagination
+    page_index: int = 0
+    page_size: int = 200
+    # 1.3 — incremental cart counters
+    cart_delete_count: int = 0
+    cart_keep_count: int = 0
+    cart_protected_count: int = 0
+    cart_delete_bytes: int = 0
+    # 1.1 — visible_groups() memoization cache (hidden from repr/eq)
+    _visible_cache_key: object = field(default=None, repr=False, compare=False)
+    _visible_cache_val: list = field(default_factory=list, repr=False, compare=False)
+    # 1.2 — O(1) group lookup index (hidden from repr/eq)
+    _group_index: dict = field(default_factory=dict, repr=False, compare=False)
 
     def visible_groups(self) -> List[DuplicateGroup]:
+        # 1.1 — memoization cache check
+        cache_key = (
+            len(self.scan_results),
+            self.text_filter,
+            frozenset(self.type_filter),
+            self.min_size_bytes,
+            self.max_size_bytes,
+            self.similarity_min,
+            self.active_tag_filter,
+            self.sort_key,
+            self.sort_desc,
+        )
+        if cache_key == self._visible_cache_key:
+            return list(self._visible_cache_val)
+
         groups = list(self.scan_results)
         if self.text_filter.strip():
             q = self.text_filter.strip().lower()
@@ -100,13 +128,53 @@ class ReviewFlowState:
                 return max(float(getattr(f, "similarity", 1.0) or 1.0) for f in g.files) if g.files else 0.0
             return int(getattr(g, "reclaimable", 0) or 0)
 
-        return sorted(groups, key=sort_val, reverse=reverse)
+        result = sorted(groups, key=sort_val, reverse=reverse)
+        self._visible_cache_key = cache_key
+        self._visible_cache_val = result
+        return result
+
+    # 1.1 — cache invalidation
+    def invalidate_visible_cache(self) -> None:
+        self._visible_cache_key = None
+        self._visible_cache_val = []
+
+    # 1.2 — O(1) group index
+    def rebuild_group_index(self) -> None:
+        self._group_index = {g.group_id: g for g in self.scan_results}
 
     def group_by_id(self, group_id: int) -> Optional[DuplicateGroup]:
+        if self._group_index:
+            return self._group_index.get(group_id)
+        return next((g for g in self.scan_results if g.group_id == group_id), None)
+
+    # 1.3 — incremental cart counters
+    def _recompute_cart_counters(self) -> None:
+        dc = kc = pc = db = 0
         for g in self.scan_results:
-            if g.group_id == group_id:
-                return g
-        return None
+            sel = self.set_selections.get(g.group_id)
+            for f in g.files:
+                path = str(f.path)
+                size = int(getattr(f, "size", 0) or 0)
+                if sel and path in sel.protected_paths:
+                    pc += 1
+                elif path in self.marked_paths or (sel and path in sel.deleted_paths):
+                    dc += 1
+                    db += size
+                elif sel and path in sel.kept_paths:
+                    kc += 1
+        self.cart_delete_count = dc
+        self.cart_keep_count = kc
+        self.cart_protected_count = pc
+        self.cart_delete_bytes = db
+
+    # Phase 3.2 — pagination helpers
+    def visible_group_count(self) -> int:
+        return len(self.visible_groups())
+
+    def paged_visible_groups(self) -> list:
+        all_visible = self.visible_groups()
+        start = self.page_index * self.page_size
+        return all_visible[start:start + self.page_size]
 
     def marked_bytes(self) -> int:
         total = 0
@@ -126,6 +194,7 @@ class ReviewFlowState:
     def push_undo_snapshot(self) -> None:
         self.undo_stack.append(
             {
+                "type": "selection",
                 "marked_paths": set(self.marked_paths),
                 "selected_set_ids": set(self.selected_set_ids),
                 "set_selections": {
@@ -139,6 +208,9 @@ class ReviewFlowState:
             }
         )
         self.redo_stack.clear()
+        # P0-3 — cap undo stack at 50
+        while len(self.undo_stack) > 50:
+            self.undo_stack.pop(0)
 
     def restore_snapshot(self, snap: Dict[str, object]) -> None:
         self.marked_paths = set(snap.get("marked_paths", set()))

@@ -737,7 +737,11 @@ class ReviewPageNavThemeMixin:
             self._bridge.navigate("dashboard")
 
     def _undo_last_trash_delete(self) -> None:
-        ok, restored = DeleteService.undo_last_trash_delete()
+        svc = getattr(self, "_delete_service", None)
+        if svc is None:
+            self._bridge.show_snackbar("Undo not available.", info=True)
+            return
+        ok, restored = svc.undo_last_trash_delete()
         if ok and restored > 0:
             self._bridge.show_snackbar(f"Restored {restored:,} file(s) from Trash.", success=True)
         elif restored > 0:
