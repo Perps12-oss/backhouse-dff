@@ -69,12 +69,16 @@ class DuplicateGroup:
         """Calculate derived fields after initialization."""
         if self.files:
             self.total_size = sum(f.size for f in self.files)
-            keepers = [f for f in self.files if f.is_keeper]
-            if keepers:
-                keeper_size = sum(f.size for f in keepers)
-            else:
-                keeper_size = max(f.size for f in self.files)
-            self.reclaimable = self.total_size - keeper_size
+            # L-1: only auto-calculate reclaimable when it was not explicitly provided
+            # (default is 0). This preserves values set by callers like LargeFileEngine
+            # across snapshot round-trips where __post_init__ would otherwise override them.
+            if self.reclaimable == 0:
+                keepers = [f for f in self.files if f.is_keeper]
+                if keepers:
+                    keeper_size = sum(f.size for f in keepers)
+                else:
+                    keeper_size = max(f.size for f in self.files)
+                self.reclaimable = self.total_size - keeper_size
 
     @property
     def file_count(self) -> int:

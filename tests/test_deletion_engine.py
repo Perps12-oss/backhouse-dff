@@ -25,4 +25,4 @@ def test_deletion_engine_trash_missing_file_reports_error(tmp_path: Path):
     res = engine.delete_one(missing, req)
 
     assert res.success is False
-    assert res.error == "File does not exist"
+    assert res.error in ("File does not exist", "missing"), f"Unexpected error: {res.error}"

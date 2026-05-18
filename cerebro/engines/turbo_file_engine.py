@@ -349,6 +349,16 @@ class TurboFileEngine(BaseEngine):
         self._folders = list(folders)
         self._protected = list(protected)
         self._options = dict(options)
+        # H-6: TurboScanner uses follow_symlinks=False on is_dir/is_file/stat so symlinks
+        # are NOT followed by default. Log a debug note when follow_symlinks=True is
+        # explicitly requested — the scanner still skips symlink targets at entry level.
+        if self._options.get("follow_symlinks", False):
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "TurboFileEngine: follow_symlinks=True requested; scanner uses "
+                "follow_symlinks=False at the DirEntry level (symlink targets are skipped). "
+                "This option is a no-op for TurboFileEngine."
+            )
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._callback = progress_callback

@@ -1,16 +1,20 @@
 """
 CEREBRO Pipeline - Target Architecture (Authoritative)
 
-ReviewPage (UI) produces DeletionPlan (intent only)
-The live deletion path passes DeletionPlan to Pipeline
+ReviewPage (UI) produces DeletionPlan (intent only).
+The live deletion path passes DeletionPlan to Pipeline.
 Pipeline:
-  - validates invariants
+  - validates invariants (keeper cannot equal delete target)
+  - calls should_block_delete() per path (hardlink / symlink policy)
   - expands + enriches metadata -> ExecutableDeletePlan
   - executes via DeletionEngine
-  - records audit via HistoryStore
+  - records dual audit trail (HistoryStore JSONL + deletion_history_db SQLite)
 Returns DeletionResult (plan-level) to UI.
 
-This file is DELETE-PIPELINE authoritative and intentionally headless.
+Gate lifecycle (Decision A):
+  - One DeletionGate per CerebroPipeline instance.
+  - Callers issue token on self.gate, embed in plan.policy["token"].
+  - execute_delete_plan() calls self.gate.assert_allowed() — never creates a fresh gate.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .deletion import DeletionEngine, DeletionPolicy, DeletionRequest, BatchDeletionResult
+from .fs_policy import HardlinkPolicy, should_block_delete
 from .safety.deletion_gate import DeletionGate, DeletionGateConfig, DeletionGateError
 from ..history.store import HistoryStore
 
@@ -31,7 +36,7 @@ class ExecutableDeleteOperation:
     path: Path
     size: int
     group_index: int
-    kept_path: Path
+    kept_path: Optional[Path]
     mtime: float = 0.0
 
 
@@ -70,16 +75,19 @@ class CerebroPipeline:
     """
     Pipeline owns truth for deletion operations.
     Validates UI intent and produces executable plans.
-    Owns side-effects: execution + audit write-through.
+    Owns side-effects: execution + dual audit write-through.
     """
 
     def __init__(
         self,
         deletion_engine: Optional[DeletionEngine] = None,
         history_store: Optional[HistoryStore] = None,
+        deletion_gate: Optional[DeletionGate] = None,
     ) -> None:
         self._deletion_engine = deletion_engine or DeletionEngine()
         self._history = history_store or HistoryStore()
+        # gate is owned by this pipeline instance — Decision A.
+        self.gate: DeletionGate = deletion_gate or DeletionGate()
 
         self._logger = None
         try:
@@ -96,12 +104,23 @@ class CerebroPipeline:
                 pass
 
     # ------------------------------------------------------------------
-    # Build plan (validate + enrich)
+    # Build plan helpers (validate + enrich)
     # ------------------------------------------------------------------
+
+    def _check_hardlink(self, path: Path, errors: List[str], label: str) -> bool:
+        """Returns True if the path should be blocked (and appends to errors)."""
+        reason = should_block_delete(
+            path,
+            hardlink_policy=HardlinkPolicy(allow_hardlink_deletes=False),
+        )
+        if reason and reason != "missing":
+            errors.append(f"{label}: blocked ({reason}): {path}")
+            return True
+        return False
 
     def build_delete_plan(self, deletion_plan: Dict[str, Any]) -> ExecutableDeletePlan:
         """
-        Validate invariants, enrich metadata, and prepare executable plan.
+        Validate keeper invariants, check hardlink policy, enrich metadata.
 
         Expected UI DeletionPlan:
         {
@@ -109,7 +128,6 @@ class CerebroPipeline:
           "policy": {"mode":"trash"|"permanent", ...},
           "groups": [{"group_index":0,"keep":"...","delete":["..."]}, ...],
           "source": "review_page" (optional),
-          "timestamp": ... (optional)
         }
         """
         scan_id = str(deletion_plan.get("scan_id", "unknown"))
@@ -123,11 +141,10 @@ class CerebroPipeline:
         operations: List[ExecutableDeleteOperation] = []
         errors: List[str] = []
 
-        # Validate + expand
         for group_data in groups:
             try:
                 group_idx = int(group_data.get("group_index", 0) or 0)
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            except (ValueError, TypeError):
                 group_idx = 0
 
             keep_path_str = str(group_data.get("keep", "") or "")
@@ -140,10 +157,9 @@ class CerebroPipeline:
 
             try:
                 keep_resolved = keep_path.resolve()
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            except OSError:
                 keep_resolved = keep_path
 
-            # Invariant: cannot delete keeper. Missing delete file → skip that file only (race/stale UI).
             for del_path_str in delete_paths:
                 del_path_str = str(del_path_str)
                 if not del_path_str:
@@ -151,24 +167,26 @@ class CerebroPipeline:
                 del_path = Path(del_path_str)
 
                 if not del_path.exists():
-                    # Skip this file; do not fail the group or the plan
                     continue
 
                 try:
                     del_resolved = del_path.resolve()
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                except OSError:
                     del_resolved = del_path
 
                 if keep_resolved == del_resolved:
                     errors.append(f"Group {group_idx}: keeper included in delete: {del_path_str}")
                     continue
 
-                # Enrich metadata
+                # C-3: hardlink protection at plan-build time.
+                if self._check_hardlink(del_path, errors, f"Group {group_idx}"):
+                    continue
+
                 try:
                     st = del_path.stat()
                     size = int(st.st_size or 0)
                     mtime = float(st.st_mtime or 0.0)
-                except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                except OSError:
                     size = 0
                     mtime = 0.0
 
@@ -182,20 +200,13 @@ class CerebroPipeline:
                     )
                 )
 
-        # Log any validation warnings (non-fatal — bad groups are skipped, valid ones proceed)
         if errors:
-            msg = "; ".join(errors)
-            self._log(f"Deletion plan warnings (skipped groups): {msg}", level="warning")
-        # Abort only if NO valid operations remain (nothing to do)
+            self._log(f"Deletion plan warnings: {'; '.join(errors)}", level="warning")
         if groups and not operations:
-            self._log(
-                "Deletion plan: groups present but no valid operations "
-                "(all keepers missing or all delete paths already gone)",
-                level="error",
-            )
+            self._log("Deletion plan: no valid operations", level="error")
             raise ValueError(
                 "Deletion plan: no valid operations. "
-                "All keep files are missing or all delete targets have already been removed."
+                "All keep files are missing, all delete targets gone, or all blocked by policy."
             )
 
         stats = {
@@ -204,7 +215,6 @@ class CerebroPipeline:
             "bytes": sum(int(op.size or 0) for op in operations),
             "validated_at": datetime.now().isoformat(),
         }
-
         self._log(f"Plan validated: files={stats['files']} bytes={stats['bytes']}")
         return ExecutableDeletePlan(
             scan_id=scan_id,
@@ -215,8 +225,65 @@ class CerebroPipeline:
             source=source,
         )
 
+    def build_explicit_paths_plan(
+        self,
+        paths: List[str],
+        *,
+        scan_id: str = "explicit",
+        mode: str = "trash",
+        source: str = "explicit",
+    ) -> ExecutableDeletePlan:
+        """
+        Build a plan from a flat list of paths with no group/keeper invariant
+        (used when user has explicitly marked individual files).
+        Still enforces hardlink policy and enriches metadata.
+        """
+        operations: List[ExecutableDeleteOperation] = []
+        errors: List[str] = []
+
+        for raw in paths:
+            del_path = Path(raw)
+            if not del_path.exists():
+                continue
+            if self._check_hardlink(del_path, errors, "explicit"):
+                continue
+            try:
+                st = del_path.stat()
+                size = int(st.st_size or 0)
+                mtime = float(st.st_mtime or 0.0)
+            except OSError:
+                size = 0
+                mtime = 0.0
+            operations.append(
+                ExecutableDeleteOperation(
+                    path=del_path,
+                    size=size,
+                    group_index=0,
+                    kept_path=None,
+                    mtime=mtime,
+                )
+            )
+
+        if errors:
+            self._log(f"Explicit paths plan warnings: {'; '.join(errors)}", level="warning")
+
+        stats = {
+            "groups": 0,
+            "files": len(operations),
+            "bytes": sum(int(op.size or 0) for op in operations),
+            "validated_at": datetime.now().isoformat(),
+        }
+        return ExecutableDeletePlan(
+            scan_id=scan_id,
+            mode=mode,
+            operations=operations,
+            stats=stats,
+            policy={"mode": mode},
+            source=source,
+        )
+
     # ------------------------------------------------------------------
-    # Execute plan (engine) + write audit (history) - AUTHORITATIVE
+    # Execute plan (engine) + write dual audit — AUTHORITATIVE
     # ------------------------------------------------------------------
 
     def execute_delete_plan(
@@ -225,41 +292,33 @@ class CerebroPipeline:
         progress_cb: Optional[Callable[[int, int, str], bool]] = None,
     ) -> DeletionResult:
         """
-        Execute validated deletion plan, then record audit trail.
+        Execute validated deletion plan, then record dual audit trail.
 
-        progress_cb(current, total, current_file_name) -> bool (continue?)
+        For permanent mode: caller MUST have called self.gate.issue_token() first
+        and embedded the token in plan.policy["token"].
+
+        progress_cb(current, total, current_file_name) -> bool (True = continue)
         """
         self._log(f"Executing delete plan scan={plan.scan_id} mode={plan.mode} ops={plan.total_files}")
 
-        # Safety latch: permanent deletions must be gated by a token.
+        # C-1/Decision A: permanent deletions verified via this pipeline's own gate.
         if str(plan.mode) == "permanent":
             token = None
             try:
                 token = (plan.policy or {}).get("token")
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+            except (AttributeError, TypeError):
                 token = None
-            gate = DeletionGate(
-                DeletionGateConfig(
-                    enabled=True,
-                    require_validation_mode=False,
-                    require_token=True,
-                    allow_plan_uuid_token=True,
-                )
-            )
-            if not token:
-                raise DeletionGateError("Permanent deletion blocked: missing token.")
-            if not gate.verify_token(str(token)):
-                raise DeletionGateError("Permanent deletion blocked: invalid or expired token.")
+            # assert_allowed() verifies + consumes the token atomically.
+            self.gate.assert_allowed(validation_mode=True, token=token)
 
-        policy = DeletionPolicy.PERMANENT if plan.mode == "permanent" else DeletionPolicy.TRASH
+        del_policy = DeletionPolicy.PERMANENT if plan.mode == "permanent" else DeletionPolicy.TRASH
         request = DeletionRequest(
-            policy=policy,
+            policy=del_policy,
             metadata={
                 "scan_id": plan.scan_id,
                 "source": plan.source,
                 "mode": plan.mode,
                 "operation_count": plan.total_files,
-                "token": (plan.policy or {}).get("token") if isinstance(plan.policy, dict) else None,
             },
         )
 
@@ -269,7 +328,6 @@ class CerebroPipeline:
             progress_cb=progress_cb,
         )
 
-        # Build per-file audit details from the plan and execution results
         deleted_set = {str(p) for p in batch.deleted}
         failed_map = {str(p): err for p, err in batch.failed}
 
@@ -281,7 +339,7 @@ class CerebroPipeline:
                 {
                     "path": p,
                     "group_index": int(op.group_index),
-                    "kept_path": str(op.kept_path),
+                    "kept_path": str(op.kept_path) if op.kept_path else None,
                     "bytes": int(op.size or 0),
                     "mtime": float(op.mtime or 0.0),
                     "status": status,
@@ -298,113 +356,102 @@ class CerebroPipeline:
             stats=dict(plan.stats or {}),
         )
 
-        # AUTHORITATIVE AUDIT WRITE (Pipeline owns history)
-        try:
-            self._history.record_deletion(
-                scan_id=plan.scan_id,
-                mode=plan.mode,
-                groups=int(plan.stats.get("groups", 0) or 0),
-                deleted=len(result.deleted),
-                failed=len(result.failed),
-                bytes_reclaimed=result.bytes_reclaimed,
-                source=plan.source or "review_page",
-                policy=plan.policy or {"mode": plan.mode},
-                details=details,
-            )
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
-            self._log(f"Audit write failed (non-fatal): {e}", level="warning")
+        # Dual audit (Decision C).
+        self._record_dual_audit(
+            deleted_paths=[str(p) for p in batch.deleted],
+            mode=plan.mode,
+            scan_id=plan.scan_id,
+            source=plan.source or "review_page",
+            groups=int(plan.stats.get("groups", 0) or 0),
+            failed=len(result.failed),
+            bytes_reclaimed=result.bytes_reclaimed,
+            policy=plan.policy or {"mode": plan.mode},
+            details=details,
+        )
 
         self._log(
-            f"Deletion complete scan={plan.scan_id} deleted={len(result.deleted)} failed={len(result.failed)} bytes={result.bytes_reclaimed}"
+            f"Deletion complete scan={plan.scan_id} deleted={len(result.deleted)} "
+            f"failed={len(result.failed)} bytes={result.bytes_reclaimed}"
         )
         return result
+
+    def _record_dual_audit(
+        self,
+        *,
+        deleted_paths: List[str],
+        mode: str,
+        scan_id: str,
+        source: str,
+        groups: int,
+        failed: int,
+        bytes_reclaimed: int,
+        policy: Dict[str, Any],
+        details: List[Dict[str, Any]],
+    ) -> None:
+        """Write to both HistoryStore (JSONL) and deletion_history_db (SQLite). Decision C."""
+        # 1) HistoryStore JSONL audit.
+        try:
+            self._history.record_deletion(
+                scan_id=scan_id,
+                mode=mode,
+                groups=groups,
+                deleted=len(deleted_paths),
+                failed=failed,
+                bytes_reclaimed=bytes_reclaimed,
+                source=source,
+                policy=policy,
+                details=details,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._log(f"HistoryStore audit write failed (non-fatal): {e}", level="warning")
+
+        # 2) deletion_history_db SQLite (UI history tab).
+        try:
+            from cerebro.v2.core.deletion_history_db import log_deletion_event  # type: ignore
+            for path_str in deleted_paths:
+                try:
+                    size = next(
+                        (d["bytes"] for d in details if d.get("path") == path_str), 0
+                    )
+                    log_deletion_event(path_str, int(size or 0), mode)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            self._log(f"deletion_history_db audit write failed (non-fatal): {e}", level="warning")
+
+
 # ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 scan pipeline)
+# LEGACY COMPATIBILITY SHIMS (v5 scan pipeline) — MC-4: moved here from inline
 # ==============================================================================
 
 class PipelineResult:
-    """
-    Legacy scan pipeline result placeholder.
-
-    Historical: existed to satisfy older v5 scan-worker imports. Those workers
-    (ScanWorker, FastScanWorker) and the FastPipeline / legacy PyQt surface
-    were removed in the post-v1 audit "single entrance" cleanup. This type is
-    kept as a no-op dataclass-ish placeholder so any out-of-tree code that
-    still imports it does not explode at import time.
-
-    The authoritative scan result handling lives in the engine layer
-    (BaseEngine.get_results() -> List[DuplicateGroup]).
-    """
+    """Legacy scan pipeline result placeholder. Do not use in new code."""
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 event signaling)
-# ==============================================================================
 
 class PipelineEvent:
-    """
-    Legacy pipeline event placeholder.
-
-    Exists ONLY to satisfy older v5 imports that reference
-    PipelineEvent during scan execution.
-
-    Event dispatching is now handled by controllers / StateBus.
-    """
+    """Legacy pipeline event placeholder. Do not use in new code."""
     def __init__(self, name: str = "", payload: dict | None = None):
         self.name = name
         self.payload = payload or {}
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 scan statistics)
-# ==============================================================================
 
 class PipelineStats:
-    """
-    Legacy pipeline statistics placeholder.
-
-    Exists ONLY to satisfy older v5 imports that expect
-    PipelineStats during scan execution.
-
-    Authoritative stats are now handled by:
-    - performance_monitor
-    - controllers
-    - result objects
-    """
+    """Legacy pipeline statistics placeholder. Do not use in new code."""
     def __init__(self, **kwargs):
-        # Allow arbitrary attributes for backward compatibility
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 import stability)
-# ==============================================================================
 
 def create_default_pipeline():
-    """
-    Legacy factory used by older v5 code paths (scan workers, main bootstrap).
-
-    Returns:
-        CerebroPipeline (authoritative implementation)
-    """
+    """Legacy factory. Returns CerebroPipeline (authoritative implementation)."""
     return CerebroPipeline()
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 cancellation token)
-# ==============================================================================
 
 class CancelToken:
-    """
-    Legacy cancellation token.
-
-    Used by older core modules (grouping, discovery, hashing)
-    to cooperatively cancel long-running operations.
-
-    In the new architecture, cancellation is handled by
-    workers and controllers. This class exists ONLY to
-    preserve backward compatibility.
-    """
+    """Legacy cancellation token. Do not use in new code."""
 
     def __init__(self):
         self._cancelled = False
@@ -415,106 +462,45 @@ class CancelToken:
     def is_cancelled(self) -> bool:
         return self._cancelled
 
-    # Backward compatibility aliases
     @property
     def cancelled(self) -> bool:
         return self._cancelled
 
     def __call__(self) -> bool:
-        """Allow token to be called as a function."""
         return self._cancelled
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 pipeline request)
-# ==============================================================================
 
 class PipelineRequest:
-    """
-    Legacy pipeline request container.
+    """Legacy pipeline request container. Do not use in new code."""
 
-    Used by older scan workers and core stages to pass:
-    - scan configuration
-    - cancel token
-    - progress hooks
-
-    In the new architecture, these responsibilities live
-    in workers/controllers. This class exists ONLY for
-    backward compatibility.
-    """
-
-    def __init__(
-        self,
-        config=None,
-        cancel_token: CancelToken | None = None,
-        progress_cb=None,
-        **kwargs
-    ):
+    def __init__(self, config=None, cancel_token: CancelToken | None = None, progress_cb=None, **kwargs):
         self.config = config
         self.cancel_token = cancel_token or CancelToken()
         self.progress_cb = progress_cb
-
-        # Allow arbitrary legacy attributes
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 delete plan)
-# ==============================================================================
 
 class DeletePlan:
-    """
-    Legacy delete plan placeholder.
-
-    Used by older decision/curation logic to represent
-    an intended deletion outcome before execution.
-
-    In the new architecture, this role is fulfilled by
-    ExecutableDeletePlan. This class exists ONLY for
-    backward compatibility.
-    """
+    """Legacy delete plan placeholder. Do not use in new code."""
 
     def __init__(self, **kwargs):
-        # Store arbitrary legacy attributes
         for k, v in kwargs.items():
             setattr(self, k, v)
 
     def to_executable(self):
-        """
-        Best-effort adapter for legacy code paths that
-        expect a conversion step.
-        """
         return self
 
-# ==============================================================================
-# LEGACY COMPATIBILITY SHIMS (v5 delete plan item)
-# ==============================================================================
 
 class DeletePlanItem:
-    """
-    Legacy delete plan item.
+    """Legacy delete plan item. Do not use in new code."""
 
-    Represents a single file-level delete/keep decision
-    produced by older decision logic.
-
-    In the new architecture, this role is handled by
-    ExecutableDeleteOperation. This class exists ONLY
-    for backward compatibility.
-    """
-
-    def __init__(
-        self,
-        path=None,
-        keep: bool | None = None,
-        group_index: int | None = None,
-        score: float | None = None,
-        **kwargs
-    ):
+    def __init__(self, path=None, keep: bool | None = None, group_index: int | None = None,
+                 score: float | None = None, **kwargs):
         self.path = path
         self.keep = keep
         self.group_index = group_index
         self.score = score
-
-        # Allow arbitrary legacy attributes
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -533,5 +519,3 @@ __all__ = [
     "PipelineRequest",
     "create_default_pipeline",
 ]
-
-

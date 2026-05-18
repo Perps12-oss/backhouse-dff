@@ -136,12 +136,15 @@ class ConfigManager:
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self.config_file)
-            finally:
+                # L-5: tmp_path no longer exists after os.replace — no cleanup needed.
+            except Exception:
+                # Replace failed; remove the orphaned temp file if it still exists.
                 try:
                     if Path(tmp_path).exists():
                         Path(tmp_path).unlink()
                 except OSError:
                     pass
+                raise
             return True
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("Failed to save config: %s", exc)
@@ -201,8 +204,9 @@ class ConfigManager:
         try:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             shutil.copy2(self.config_file, self.backup_dir / f"corrupted_config_{stamp}.json")
-        except OSError:
-            pass
+        except OSError as exc:
+            # L-4: log swallowed PermissionError/OSError at warning so it shows up in logs.
+            logger.warning("Could not backup corrupted config: %s", exc)
 
     def _cleanup_old_backups(self) -> None:
         try:
@@ -211,7 +215,11 @@ class ConfigManager:
                 key=lambda p: p.stat().st_mtime,
             )
             for old in files[:-5]:
-                old.unlink(missing_ok=True)
+                try:
+                    old.unlink(missing_ok=True)
+                except OSError as exc:
+                    # L-4: log instead of silently swallowing.
+                    logger.warning("Could not remove old config backup %s: %s", old, exc)
         except OSError:
             pass
 

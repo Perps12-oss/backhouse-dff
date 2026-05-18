@@ -34,6 +34,7 @@ def _make_resume_page(bridge: _FakeBridge) -> DashboardPage:
     page._min_size_slider = ft.Slider(value=0)
     page._min_size_label = ft.Text(value="")
     page._exclude_paths_tf = ft.TextField(value="")
+    page._scan_archives_sw = ft.Switch(value=False)
     page._scan_archives_cb = ft.Checkbox(value=False)
     page._archives_warning = ft.Text(value="")
     page._archives_warning.visible = False
@@ -83,7 +84,7 @@ def test_cancel_resume_restores_multi_folder_mode_and_options(tmp_path: Path, mo
 
     assert int(page_after._min_size_slider.value) == 10
     assert page_after._exclude_paths_tf.value == f"{folder_a / 'skip'}\n{folder_b / 'cache'}"
-    assert page_after._scan_archives_cb.value is True
+    assert page_after._scan_archives_sw.value is True
     assert page_after._archives_warning.visible is True
     assert page_after._include_subfolders_sw.value is False
     assert page_after._begin_scan_called is True

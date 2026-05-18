@@ -77,18 +77,28 @@ def should_block_delete(
     *,
     hardlink_policy: HardlinkPolicy,
     follow_symlinks: bool = False,
+    allow_directory_delete: bool = False,
+    hardlink_nlink_threshold: int = 1,
 ) -> Optional[str]:
     """
     Returns a reason string if deletion should be blocked, else None.
+
+    allow_directory_delete: Set True only for engines that explicitly target
+        directories (EmptyFolderEngine, SimilarFolderEngine). Never set from
+        the generic file-deletion path.
+    hardlink_nlink_threshold: st_nlink value above which a file is treated as
+        hardlinked. Defaults to 1 (block on st_nlink > 1). Pass 3 on Windows
+        to avoid false-positives from NTFS system links.
     """
     try:
-        if path.is_dir():
+        if path.is_dir() and not allow_directory_delete:
             return "is_directory"
         if not path.exists():
             return "missing"
-        ident = FileIdentity.from_path(path, follow_symlinks=follow_symlinks)
-        if ident.is_hardlinked() and not hardlink_policy.allow_hardlink_deletes:
-            return f"hardlink_protected (st_nlink={ident.nlink})"
+        if not path.is_dir():
+            ident = FileIdentity.from_path(path, follow_symlinks=follow_symlinks)
+            if ident.nlink > hardlink_nlink_threshold and not hardlink_policy.allow_hardlink_deletes:
+                return f"hardlink_protected (st_nlink={ident.nlink})"
     except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
         return f"stat_failed: {e}"
     return None

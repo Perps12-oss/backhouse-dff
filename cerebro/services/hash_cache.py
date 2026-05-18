@@ -159,9 +159,35 @@ class HashCache:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sig ON file_hashes(size, mtime_ns, dev, inode)")
         cur = conn.execute("PRAGMA user_version;")
         v = int(cur.fetchone()[0] or 0)
+        # LT-4: run real ALTER/rebuild migrations when schema version advances.
         if v < SCHEMA_VERSION:
+            self._migrate_schema(conn, from_version=v)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION};")
         conn.commit()
+
+    def _migrate_schema(self, conn: sqlite3.Connection, *, from_version: int) -> None:
+        """
+        LT-4: Apply incremental schema migrations.
+
+        Each migration block is guarded by the source version so it is
+        idempotent if applied again.  Migrations that cannot be expressed
+        as ALTER TABLE fall back to a backup-and-rebuild pattern.
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        # Example future migration skeleton (version 1 → 2):
+        # if from_version < 2:
+        #     try:
+        #         conn.execute("ALTER TABLE file_hashes ADD COLUMN new_column TEXT")
+        #         _log.info("hash_cache: migrated schema v1 → v2")
+        #     except sqlite3.OperationalError:
+        #         pass  # column already exists
+
+        # For now SCHEMA_VERSION == 1 and no migrations are needed;
+        # this method exists so future authors have a safe scaffold.
+        if from_version < SCHEMA_VERSION:
+            _log.info("hash_cache: schema at v%d, target v%d — no destructive migration needed", from_version, SCHEMA_VERSION)
 
     # ------------------------------------------------------------------
     # Quick hash

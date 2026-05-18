@@ -9,7 +9,10 @@ from cerebro.engines.base_engine import DuplicateGroup
 
 
 def _path_set(paths: Iterable[str]) -> Set[str]:
-    return {str(Path(p)) for p in paths}
+    # L-2: normalise with os.path.normcase(os.path.normpath()) to avoid
+    # false mismatches on Windows with mixed separators (forward vs back slash).
+    import os as _os
+    return {_os.path.normcase(_os.path.normpath(p)) for p in paths}
 
 
 def prune_paths_from_groups(
@@ -26,7 +29,11 @@ def prune_paths_from_groups(
         return list(groups)
     out: List[DuplicateGroup] = []
     for g in groups:
-        new_files = [f for f in g.files if str(f.path) not in rset]
+        import os as _os
+        new_files = [
+            f for f in g.files
+            if _os.path.normcase(_os.path.normpath(str(f.path))) not in rset
+        ]
         if len(new_files) < 2:
             continue
         out.append(

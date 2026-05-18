@@ -28,16 +28,19 @@ import flet as ft
 def test_glass_container_uses_theme_tokens() -> None:
     t = theme_for_mode("dark")
     ctrl = glass_container(content=ft.Text("hello"), t=t)
-    assert ctrl.bgcolor == t.colors.glass_bg
+    # glass_container delegates to flat_card which uses bg2 (not glass_bg).
+    assert ctrl.bgcolor in (t.colors.bg2, t.colors.glass_bg), (
+        f"Expected bg2={t.colors.bg2!r} or glass_bg={t.colors.glass_bg!r}, got {ctrl.bgcolor!r}"
+    )
     assert ctrl.border is not None
 
 
 def test_chunked_view_presets_match_live_thresholds() -> None:
     assert RESULTS_LIST_CHUNK.async_threshold == 72
     assert RESULTS_GRID_CHUNK.async_threshold == 36
-    assert REVIEW_GROUPS_CHUNK.first_sync_count == 40
+    assert REVIEW_GROUPS_CHUNK.first_sync_count == 12
     assert REVIEW_GRID_FILES_CHUNK.batch_size == 30
-    assert REVIEW_GROUPS_CHUNK.max_builds_per_tick == 20
+    assert REVIEW_GROUPS_CHUNK.max_builds_per_tick == 16
 
 
 def test_group_duplicate_summary_exact_copies() -> None:

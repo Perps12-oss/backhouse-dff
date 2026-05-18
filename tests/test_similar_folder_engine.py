@@ -35,6 +35,9 @@ def _run_engine(folders, options=None, protected=None):
     )
     progress_events = []
     engine.start(lambda p: progress_events.append(p))
+    # H-5: start() is non-blocking — wait for the background thread to finish.
+    if engine._scan_thread is not None:
+        engine._scan_thread.join(timeout=30)
     return engine.get_results(), progress_events
 
 

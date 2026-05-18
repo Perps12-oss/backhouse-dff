@@ -1,9 +1,10 @@
-import re
-
 from cerebro.core.session import SessionManager
 
 
-def test_build_effective_plan_generates_secure_default_token(tmp_path):
+def test_build_effective_plan_no_self_generated_token(tmp_path):
+    """H-4: without a pipeline, permanent plan token must be None, not a self-generated string.
+    Self-generated tokens would never be accepted by any DeletionGate instance.
+    """
     sm = SessionManager(persist_path=tmp_path / "sessions")
     scan_id = "scan_1"
 
@@ -11,14 +12,10 @@ def test_build_effective_plan_generates_secure_default_token(tmp_path):
     sm.set_groups(scan_id, groups=[{"group_id": 1}])
     sm.set_delete_intent(scan_id, tmp_path / "a.txt")
 
-    plan = sm.build_effective_plan(scan_id)
+    plan = sm.build_effective_plan(scan_id, policy="permanent")
     assert plan is not None
-
-    token = plan["token"]
-    assert isinstance(token, str)
-    assert token.startswith("ui_")
-    assert len(token) >= 16
-    assert re.match(r"^ui_[A-Za-z0-9_-]{10,}$", token)
+    # Token must be None — no pipeline was provided, so no registered token exists.
+    assert plan["token"] is None
 
 
 def test_build_effective_plan_respects_supplied_token(tmp_path):

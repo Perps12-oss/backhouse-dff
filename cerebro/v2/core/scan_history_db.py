@@ -36,6 +36,8 @@ class ScanHistoryDB:
 
     def _init_schema(self) -> None:
         with self._lock:
+            # M-5: WAL mode for better concurrent read performance.
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS scan_history (
@@ -162,10 +164,24 @@ class ScanHistoryDB:
 
 
 _DEFAULT_DB: ScanHistoryDB | None = None
+_DEFAULT_DB_LOCK: "threading.Lock"
+
+
+def _get_db_lock() -> "threading.Lock":
+    global _DEFAULT_DB_LOCK
+    try:
+        return _DEFAULT_DB_LOCK
+    except NameError:
+        import threading as _threading
+        _DEFAULT_DB_LOCK = _threading.Lock()
+        return _DEFAULT_DB_LOCK
 
 
 def get_scan_history_db() -> ScanHistoryDB:
+    """M-1: Double-checked locking for thread-safe singleton initialisation."""
     global _DEFAULT_DB
     if _DEFAULT_DB is None:
-        _DEFAULT_DB = ScanHistoryDB()
+        with _get_db_lock():
+            if _DEFAULT_DB is None:
+                _DEFAULT_DB = ScanHistoryDB()
     return _DEFAULT_DB

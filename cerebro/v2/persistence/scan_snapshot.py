@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -18,6 +20,36 @@ _VERSION = 1
 _LAST_NAME = "last.json"
 _SUMMARY_NAME = "last_summary.json"
 _SUMMARY_VERSION = 1
+
+
+def _atomic_write_text(path: Path, data: str) -> None:
+    """M-7: Write data to path atomically using mkstemp + os.replace."""
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _prune_old_snapshots(snap_dir: Path, *, keep: int = 50) -> None:
+    """P-4: Cap scan_*.json files to the `keep` newest."""
+    try:
+        files = sorted(snap_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[keep:]:
+            try:
+                old.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 def _snap_dir() -> Path:
@@ -79,10 +111,7 @@ def _write_last_scan_summary(
             "groups_count": len(groups),
         }
         d = _snap_dir()
-        (d / _SUMMARY_NAME).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=0),
-            encoding="utf-8",
-        )
+        _atomic_write_text(d / _SUMMARY_NAME, json.dumps(payload, ensure_ascii=False, indent=0))
     except (OSError, TypeError, ValueError, AttributeError) as e:
         _log.warning("write last_summary: %s", e)
 
@@ -133,7 +162,11 @@ def save_scan_results_snapshot(
     scan_mode: str,
     session_ts: float,
 ) -> None:
-    """Write ``last.json`` + a session-keyed file for history matching."""
+    """Write ``last.json`` + a session-keyed file for history matching.
+
+    M-7: all writes use mkstemp + os.replace (atomic) to prevent corruption
+    on crash mid-write.
+    """
     if not groups:
         return
     try:
@@ -145,9 +178,11 @@ def save_scan_results_snapshot(
         }
         data = json.dumps(payload, ensure_ascii=False, indent=0)
         d = _snap_dir()
-        (d / _LAST_NAME).write_text(data, encoding="utf-8")
+        _atomic_write_text(d / _LAST_NAME, data)
         key = f"{float(session_ts):.9f}".replace(".", "_")
-        (d / f"scan_{key}.json").write_text(data, encoding="utf-8")
+        _atomic_write_text(d / f"scan_{key}.json", data)
+        # P-4: cap scan_*.json files at 50 newest.
+        _prune_old_snapshots(d, keep=50)
     except (OSError, TypeError, ValueError, AttributeError) as e:
         _log.warning("save_scan_results_snapshot: %s", e)
         return

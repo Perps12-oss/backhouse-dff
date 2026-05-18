@@ -44,6 +44,7 @@ class LargeFileEngine(BaseEngine):
         self._progress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
         self._pause_event = threading.Event()
+        self._scan_thread: threading.Thread | None = None
 
     def get_name(self) -> str:
         return "Large File Finder"
@@ -80,7 +81,14 @@ class LargeFileEngine(BaseEngine):
         self._pause_event.clear()
         self._results = []
         self._state = ScanState.SCANNING
-        self._run_scan(progress_callback)
+        # H-5: non-blocking — run on daemon thread so start() returns immediately.
+        self._scan_thread = threading.Thread(
+            target=self._run_scan,
+            args=(progress_callback,),
+            daemon=True,
+            name="ScanThread-large-files",
+        )
+        self._scan_thread.start()
 
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
         min_bytes  = self._options.get("min_size_mb", 100) * 1024 * 1024
@@ -144,8 +152,10 @@ class LargeFileEngine(BaseEngine):
 
         # Wrap each file in its own group (informational — not actually duplicates)
         for gid, df in enumerate(top_files):
-            dg = DuplicateGroup(group_id=gid, files=[df])
-            dg.reclaimable = df.size  # user can reclaim by moving/deleting
+            # L-1: pass reclaimable to the constructor so it survives snapshot
+            # round-trips (__post_init__ would otherwise recalculate it to 0
+            # since single-file groups have no keeper subtraction).
+            dg = DuplicateGroup(group_id=gid, files=[df], reclaimable=df.size)
             self._results.append(dg)
 
         self._state = ScanState.COMPLETED

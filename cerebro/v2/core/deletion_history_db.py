@@ -127,12 +127,16 @@ class HistoryManager:
 
 
 _DEFAULT_MANAGER: HistoryManager | None = None
+_DEFAULT_MANAGER_LOCK = threading.Lock()
 
 
 def get_default_history_manager() -> HistoryManager:
+    """M-1: Double-checked locking for thread-safe singleton init."""
     global _DEFAULT_MANAGER
     if _DEFAULT_MANAGER is None:
-        _DEFAULT_MANAGER = HistoryManager()
+        with _DEFAULT_MANAGER_LOCK:
+            if _DEFAULT_MANAGER is None:
+                _DEFAULT_MANAGER = HistoryManager()
     return _DEFAULT_MANAGER
 
 
