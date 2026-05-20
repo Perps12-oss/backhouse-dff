@@ -1000,6 +1000,24 @@ class TurboScanner:
             except sqlite3.Error:
                 _ta_prefetch = {}
         _ta_writeback: "deque" = _deque()
+        total_jobs = max(1, candidates_in)
+        processed_jobs_global = 0
+
+        if emit is not None:
+            try:
+                emit(
+                    ScanStage.TIER_A_PREFILTER,
+                    0,
+                    total_jobs,
+                    "",
+                    metrics={
+                        "total_files_in_scope": scope_total or discovered_count,
+                        "files_processed": 0,
+                        "candidates_found": candidates_in,
+                    },
+                )
+            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
+                pass
 
         def _ta_compute(path: Path, mtime: float, size_key: Any, nbytes: int) -> Optional[str]:
             """Cache-aware Tier-A read (base prefix only; escalated reads bypass cache)."""
@@ -1036,6 +1054,7 @@ class TurboScanner:
             keyed: Dict[tuple, list] = _dd(list)
             total_jobs = max(1, len(all_jobs))
             processed_jobs = 0
+            processed_jobs_global = 0
             next_pct_log = 10
             _submit_chunk = 4096
             try:
@@ -1062,6 +1081,7 @@ class TurboScanner:
                         else:
                             keyed[(size_key, ta_hash)].append((path, mtime))
                         processed_jobs += 1
+                        processed_jobs_global += 1
                         pct = int((processed_jobs / total_jobs) * 100)
                         if pct >= next_pct_log:
                             logger.info(
@@ -1071,7 +1091,9 @@ class TurboScanner:
                                 total_jobs,
                             )
                             next_pct_log += 10
-                        _tier_a_emit_progress(processed_jobs, total_jobs, str(path))
+                        _tier_a_emit_progress(
+                            processed_jobs_global, total_jobs, str(path)
+                        )
 
                 survivors: Dict[Any, List[Tuple[Path, float]]] = {}
                 for (size_key, _), grp_paths in keyed.items():
@@ -1096,6 +1118,7 @@ class TurboScanner:
             #  • Queue depth stays bounded (effective_workers tasks in flight per group).
             #  • Cancel checks happen at group boundaries, not just per-file.
             survivors_adaptive: Dict[Any, List[Tuple[Path, float]]] = {}
+            processed_jobs_global = 0
             try:
                 for size_key, paths in size_groups.items():
                     if cancel_event is not None and cancel_event.is_set():
@@ -1140,6 +1163,10 @@ class TurboScanner:
                             ta_hash = None
                         bucket = ta_hash if ta_hash is not None else "__error__"
                         keyed_grp[bucket].append((path, mtime))
+                        processed_jobs_global += 1
+                        _tier_a_emit_progress(
+                            processed_jobs_global, total_jobs, str(path)
+                        )
 
                     # Merge survivors back into size_key bucket.
                     for bucket_paths in keyed_grp.values():

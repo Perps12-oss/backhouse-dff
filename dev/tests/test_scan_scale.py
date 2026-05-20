@@ -150,6 +150,16 @@ def test_scan_hud_normalizes_tier_a_stage() -> None:
     assert ScanHUD._normalize_scan_stage_for_ui("tier_a_prefilter") == ScanStage.TIER_A_PREFILTER
 
 
+def test_whole_scan_bar_ratio_tier_a_advances() -> None:
+    from cerebro.engines.scan_stage import ScanStage
+
+    r0 = ScanHUD._whole_scan_bar_ratio(ScanStage.TIER_A_PREFILTER, 0, 100_000)
+    r1 = ScanHUD._whole_scan_bar_ratio(ScanStage.TIER_A_PREFILTER, 50_000, 100_000)
+    r2 = ScanHUD._whole_scan_bar_ratio(ScanStage.TIER_A_PREFILTER, 100_000, 100_000)
+    assert 0.15 < r0 < 0.2
+    assert r0 < r1 < r2 < 0.95
+
+
 @pytest.mark.slow
 def test_synthetic_100k_grouping_db_path(tmp_path: Path) -> None:
     """Optional nightly: DB grouping over 100k rows stays bounded in memory."""

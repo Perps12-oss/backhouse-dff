@@ -73,10 +73,9 @@ class ScanHUDCallbacks:
 class ScanHUD(ft.Container):
     """Progress ring, timers, dual-phase card, chunk bar, and cancel fork UI."""
 
+    # Indeterminate only when no meaningful ratio exists yet (discovery w/ unknown total).
     _RING_INDETERMINATE_STAGES = frozenset({
         ScanStage.DISCOVERING,
-        ScanStage.GROUPING_BY_SIZE,
-        ScanStage.TIER_A_PREFILTER,
     })
 
     def __init__(
@@ -104,6 +103,7 @@ class ScanHUD(ft.Container):
         self._bar_active_markers: Set[int] = set()
         self._bar_is_complete: bool = False
         self._bar_last_dupes: int = 0
+        self._bar_whole_ratio: float = 0.0
         self._headline_pulse_tick: int = 0
         self._counter_help_tip_base = (
             "Duplicate detection only reads files whose size matches at least one other file in "
@@ -437,8 +437,24 @@ class ScanHUD(ft.Container):
             width=_BAR_WIDTH,
             height=_BAR_HEIGHT,
         )
+        self._bar_pct_label = ft.Text(
+            "0%",
+            size=14,
+            weight=ft.FontWeight.W_700,
+            color=t.colors.warning,
+            width=52,
+            text_align=ft.TextAlign.RIGHT,
+        )
         self._bar_row = ft.Container(
-            content=self._bar_stack,
+            content=ft.Row(
+                [
+                    self._bar_stack,
+                    self._bar_pct_label,
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=s.sm,
+            ),
             visible=False,
         )
         self._draw_bar()
@@ -492,6 +508,10 @@ class ScanHUD(ft.Container):
         self._ring_counter_tip.icon_color = tokens.colors.fg_muted
         self._phase_hash_caption.color = tokens.colors.fg_muted
         self._autosave_hint.color = tokens.colors.fg_muted
+        if self._bar_is_complete:
+            self._bar_pct_label.color = tokens.colors.success
+        else:
+            self._bar_pct_label.color = tokens.colors.warning
         self.apply_pill_chrome()
 
     def apply_pill_chrome(self) -> None:
@@ -517,8 +537,10 @@ class ScanHUD(ft.Container):
         self._bar_active_markers.clear()
         self._bar_is_complete = False
         self._bar_last_dupes = 0
-        self._bar_row.visible = False
+        self._bar_whole_ratio = 0.0
+        self._bar_row.visible = True
         self._bar_overlay.visible = False
+        self._sync_bar_percent_label(0.0)
         self._draw_bar()
         self._ring.value = None
         self._ring.color = ScanHUD._heat_color_for_ratio(0.0)
@@ -599,7 +621,10 @@ class ScanHUD(ft.Container):
         self._view_results_btn.visible = True
         self._bar_is_complete = True
         self._bar_active_markers.clear()
+        self._bar_whole_ratio = 1.0
         self._bar_row.visible = True
+        self._bar_pct_label.color = self._t.colors.success
+        self._sync_bar_percent_label(1.0)
         self._ring_counter_tip.visible = False
         cast = self._bar_overlay.content
         if isinstance(cast, ft.Text):
@@ -694,14 +719,58 @@ class ScanHUD(ft.Container):
             return scanned / total
         if stage == ScanStage.DISCOVERING and total > 0:
             return scanned / total
-        if stage in (ScanStage.GROUPING_BY_SIZE, ScanStage.TIER_A_PREFILTER):
-            if stage == ScanStage.TIER_A_PREFILTER and total > 0:
-                return min(scanned / total, 0.95)
-            return 0.34
+        if stage in (ScanStage.GROUPING_BY_SIZE, ScanStage.TIER_A_PREFILTER) and total > 0:
+            return min(scanned / total, 0.95)
         if stage == ScanStage.DISCOVERING:
             return 0.06
         if total > 0:
             return min(scanned / total, 1.0)
+        return 0.05
+
+    @staticmethod
+    def _whole_scan_bar_ratio(
+        stage: str,
+        scanned: int,
+        total: int,
+        *,
+        files_catalogued: int = 0,
+    ) -> float:
+        """Map per-phase counters to one 0..1 value for the amber slice bar.
+
+        Tier-A dominates wall time on large libraries; it gets most of the bar.
+        Phase-local ``scanned/total`` resets are normal (e.g. Tier-A 0/N candidates);
+        each band uses only that phase's denominator so the bar never jumps backward.
+        """
+        sc = max(0, int(scanned))
+        tot = max(0, int(total))
+        cat = max(0, int(files_catalogued))
+        if stage == ScanStage.DISCOVERING:
+            end = 0.08
+            if tot > 0:
+                return min(end, end * (sc / tot))
+            return min(end, max(0.02, end * 0.35)) if cat > 0 else 0.01
+        if stage == ScanStage.GROUPING_BY_SIZE:
+            lo, hi = 0.08, 0.16
+            if tot > 0:
+                return lo + (hi - lo) * min(1.0, sc / tot)
+            return lo
+        if stage == ScanStage.TIER_A_PREFILTER:
+            lo, hi = 0.16, 0.94
+            if tot > 0:
+                return lo + (hi - lo) * min(1.0, sc / tot)
+            return lo
+        if stage == ScanStage.HASHING_PARTIAL:
+            lo, hi = 0.94, 0.99
+            if tot > 0:
+                return lo + (hi - lo) * min(1.0, sc / tot)
+            return lo
+        if stage == ScanStage.HASHING_FULL:
+            lo, hi = 0.99, 1.0
+            if tot > 0:
+                return lo + (hi - lo) * min(1.0, sc / tot)
+            return hi
+        if stage == ScanStage.COMPLETE:
+            return 1.0
         return 0.05
 
     @staticmethod
@@ -1017,8 +1086,15 @@ class ScanHUD(ft.Container):
                 f"Step 1 · Indexing — grouping {sc:,} files by size "
                 "(finding paths that could be duplicate candidates)."
             )
-            self._phase_hash_bar.value = 0
-            self._phase_hash_caption.value = "Not started — waits for grouping to finish."
+            if tot > 0:
+                ratio = min(max(sc / tot, 0.0), 1.0)
+                self._phase_hash_bar.value = ratio * 0.12
+                self._phase_hash_caption.value = (
+                    f"Grouping: {sc:,} / {tot:,} ({ratio * 100:.1f}% of catalogued paths)."
+                )
+            else:
+                self._phase_hash_bar.value = None
+                self._phase_hash_caption.value = "Grouping by size…"
         elif stage == ScanStage.TIER_A_PREFILTER:
             self._phase_prep_status.color = t.colors.success
             self._phase_prep_status.value = (
@@ -1293,26 +1369,63 @@ class ScanHUD(ft.Container):
         )
         self._ring_timer.value = self._build_scan_timer_line()
 
-        # Canvas chunk bar — visible only during hashing phases.
-        is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
-        if is_hashing and total > 0:
+        # Amber slice bar — whole-scan progress (discovery → grouping → Tier-A → hash).
+        active_scan = stage in (
+            ScanStage.DISCOVERING,
+            ScanStage.GROUPING_BY_SIZE,
+            ScanStage.TIER_A_PREFILTER,
+            ScanStage.HASHING_PARTIAL,
+            ScanStage.HASHING_FULL,
+        )
+        if active_scan and not self._bar_is_complete:
             self._bar_row.visible = True
-            new_slices = min(_BAR_SLICES, int(scanned / total * _BAR_SLICES))
-            self._bar_slices = new_slices
-            dupes = int(data.get("duplicates_found", 0) or 0)
-            if dupes > self._bar_last_dupes:
+            ratio = self._whole_scan_bar_ratio(
+                stage,
+                int(scanned),
+                int(total),
+                files_catalogued=int(self._scan_files_catalogued),
+            )
+            new_slices = min(_BAR_SLICES, max(0, int(ratio * _BAR_SLICES)))
+            self._bar_slices = max(self._bar_slices, new_slices)
+            self._bar_whole_ratio = max(self._bar_whole_ratio, min(1.0, ratio))
+            self._sync_bar_percent_label(self._bar_whole_ratio)
+            dupes = int(candidates_found)
+            is_hashing = stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL)
+            if is_hashing and dupes > self._bar_last_dupes:
                 self._flash_bar_marker(max(0, new_slices - 1))
                 self._bar_last_dupes = dupes
             else:
                 self._draw_bar()
-        else:
-            if not is_hashing:
-                self._bar_row.visible = False
-                self._bar_slices = 0
-                self._draw_bar()
+            overlay = self._bar_overlay.content
+            if isinstance(overlay, ft.Text):
+                if stage == ScanStage.TIER_A_PREFILTER and total > 0:
+                    overlay.value = f"Pre-filter {int(scanned):,} / {int(total):,}"
+                elif stage == ScanStage.GROUPING_BY_SIZE and total > 0:
+                    overlay.value = f"Grouping {int(scanned):,} / {int(total):,}"
+                elif stage == ScanStage.DISCOVERING:
+                    overlay.value = (
+                        f"Indexing {int(files_processed):,}"
+                        + (f" / {int(total_files_in_scope):,}" if total_files_in_scope > 0 else "")
+                    )
+                elif is_hashing and total > 0:
+                    overlay.value = f"Hashing {int(scanned):,} / {int(total):,}"
+                else:
+                    overlay.value = ""
+                self._bar_overlay.visible = bool(overlay.value)
+        elif stage not in (ScanStage.COMPLETE, ScanStage.CANCELLED) and not self._bar_is_complete:
+            self._bar_row.visible = False
+            self._draw_bar()
 
         self._callbacks.on_sync_pause_scan_hero_button()
         self._callbacks.on_request_page_update()
+
+    def _sync_bar_percent_label(self, ratio: float) -> None:
+        """Update the trailing ``NN%`` beside the amber slice bar."""
+        if self._bar_is_complete:
+            self._bar_pct_label.value = "100%"
+            return
+        pct = int(round(min(1.0, max(0.0, float(ratio))) * 100))
+        self._bar_pct_label.value = f"{pct}%"
 
     def _draw_bar(self) -> None:
         w = float(_BAR_WIDTH)

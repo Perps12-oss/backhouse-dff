@@ -208,7 +208,12 @@ class BackendService:
                 (progress.files_scanned or 0) != self._last_dispatched_scanned
                 or (progress.current_file or "") != self._last_dispatched_path
             )
-            min_gap = 0.09 if stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL) else 0.22
+            if stage in (ScanStage.HASHING_PARTIAL, ScanStage.HASHING_FULL):
+                min_gap = 0.09
+            elif stage == ScanStage.TIER_A_PREFILTER:
+                min_gap = 0.12
+            else:
+                min_gap = 0.22
             now = _time.monotonic()
             if is_terminal or phase_changed or moved or (now - self._last_progress_time) >= min_gap:
                 self._last_progress_time = now
