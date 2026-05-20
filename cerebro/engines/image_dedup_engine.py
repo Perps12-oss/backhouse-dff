@@ -300,7 +300,7 @@ class ImageDedupEngine(BaseEngine):
             return
 
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._results = []
         self._start_time = time.time()
@@ -313,14 +313,10 @@ class ImageDedupEngine(BaseEngine):
 
         self._callback = progress_callback
 
-        # Start scan thread
-        self._scan_thread = threading.Thread(
-            target=self._run_scan,
-            args=(progress_callback,),
-            daemon=True,
-            name=f"ScanThread-photos"
-        )
-        self._scan_thread.start()
+        try:
+            self._run_scan(progress_callback)
+        finally:
+            self.shutdown_workers()
 
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
         """Run scan in a background thread."""
@@ -542,10 +538,8 @@ class ImageDedupEngine(BaseEngine):
                 for pending in future_to_job:
                     pending.cancel()
                 return []
-            # H-1: honour pause — block this thread until resume() clears the event.
-            while self._pause_event.is_set() and not self._cancel_event.is_set():
-                import time as _time
-                _time.sleep(0.05)
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                return []
             if self._cancel_event.is_set():
                 return []
             idx, image_path, mtime, size, sig = future_to_job[fut]
@@ -737,22 +731,28 @@ class ImageDedupEngine(BaseEngine):
 
     def pause(self) -> None:
         """Pause the current scan."""
-        if self._scan_thread and self._scan_thread.is_alive():
-            self._pause_event.set()
-            self._state = ScanState.PAUSED
+        self._pause_event.clear()
+        self._state = ScanState.PAUSED
 
     def resume(self) -> None:
         """Resume a paused scan."""
-        if self._scan_thread and self._scan_thread.is_alive():
-            self._pause_event.clear()
-            self._state = ScanState.SCANNING
+        self._pause_event.set()
+        self._state = ScanState.SCANNING
 
     def cancel(self) -> None:
         """Cancel the current scan."""
         self._cancel_event.set()
-        self._pause_event.clear()
-        if self._worker_pool:
-            self._worker_pool.shutdown(wait=False, cancel_futures=True)
+        self._pause_event.set()
+        self.shutdown_workers()
+
+    def shutdown_workers(self) -> None:
+        pool = getattr(self, "_worker_pool", None)
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            self._worker_pool = None
 
     def get_results(self) -> List[DuplicateGroup]:
         """

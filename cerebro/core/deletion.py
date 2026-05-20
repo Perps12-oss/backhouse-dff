@@ -80,8 +80,14 @@ def _write_fallback_manifest(original_path: str, dest_path: str, size: int) -> N
         })
         with open(_FALLBACK_MANIFEST, "a", encoding="utf-8") as fh:
             fh.write(entry + "\n")
-    except OSError:
-        pass  # manifest write failure must never abort a deletion
+    except OSError as exc:
+        # Must never abort a deletion; surface incomplete undo coverage.
+        _log.warning(
+            "fallback trash manifest write failed for %s -> %s: %s",
+            original_path,
+            dest_path,
+            exc,
+        )
 
 
 class DeletionPort:
@@ -201,11 +207,14 @@ class PermanentDeletionAdapter(DeletionPort):
 
 
 class DirectoryDeletionAdapter(DeletionPort):
-    """Deletes directory trees via shutil.rmtree.
+    """Deletes directory trees when allow_directory_delete is True (C-3).
 
-    Only activated when request.allow_directory_delete is True (C-3).
-    Used exclusively by EmptyFolderEngine and SimilarFolderEngine plans.
+    PERMANENT: shutil.rmtree. TRASH: same send2trash / managed-trash path as files.
+    Used by EmptyFolderEngine and SimilarFolderEngine plans.
     """
+
+    def __init__(self) -> None:
+        self._trash_adapter = TrashDeletionAdapter()
 
     def can_handle(self, policy: DeletionPolicy) -> bool:
         return policy in (DeletionPolicy.PERMANENT, DeletionPolicy.TRASH)
@@ -232,6 +241,8 @@ class DirectoryDeletionAdapter(DeletionPort):
                 policy=request.policy,
                 error="Path is not a directory",
             )
+        if request.policy == DeletionPolicy.TRASH:
+            return self._trash_adapter.delete(path, request)
         try:
             shutil.rmtree(path)
             return SingleDeletionResult(

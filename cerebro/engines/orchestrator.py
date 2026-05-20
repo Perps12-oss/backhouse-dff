@@ -20,10 +20,9 @@ from cerebro.engines.base_engine import (
     ScanState,
 )
 
-# Import engines (these will be created in subsequent tasks)
-# For now, we'll create placeholder imports that will be updated
-
 logger = logging.getLogger(__name__)
+
+_CANCEL_JOIN_TIMEOUT_SEC = 30.0
 
 
 class ScanOrchestrator:
@@ -177,6 +176,7 @@ class ScanOrchestrator:
                     self._progress_callback(progress)
 
             self._active_engine.start(wrapper_callback)
+            self._active_engine.wait_until_done(timeout=None)
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             if self._progress_callback:
                 error_progress = ScanProgress(
@@ -217,11 +217,18 @@ class ScanOrchestrator:
                 "orchestrator.cancel: waiting for scan thread %s to stop",
                 thread.name,
             )
-            thread.join(timeout=5.0)
+            thread.join(timeout=_CANCEL_JOIN_TIMEOUT_SEC)
             logger.info(
                 "orchestrator.cancel: wait complete thread_alive=%s",
                 thread.is_alive(),
             )
+        engine = self._active_engine
+        if engine is not None:
+            try:
+                engine.shutdown_workers()
+            except Exception:
+                logger.exception("orchestrator.cancel: engine shutdown_workers failed")
+            engine.wait_until_done(timeout=_CANCEL_JOIN_TIMEOUT_SEC)
 
     def get_results(self) -> List[DuplicateGroup]:
         """
@@ -288,5 +295,10 @@ class ScanOrchestrator:
             True if scan completed, False if timeout.
         """
         if self._scan_thread:
-            return self._scan_thread.join(timeout=timeout) is None
+            self._scan_thread.join(timeout=timeout)
+        engine = self._active_engine
+        if engine is not None:
+            engine.wait_until_done(timeout=timeout)
+        if self._scan_thread and self._scan_thread.is_alive():
+            return False
         return True

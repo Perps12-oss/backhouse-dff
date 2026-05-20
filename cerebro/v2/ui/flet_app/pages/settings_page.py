@@ -663,6 +663,11 @@ class SettingsPage(ft.Column):
                     size=t.typography.size_base,
                 ),
                 ft.Divider(color=t.colors.border3, height=1),
+                ft.OutlinedButton(
+                    "Export diagnostic bundle",
+                    icon=ft.icons.Icons.BUG_REPORT_OUTLINED,
+                    on_click=self._export_diagnostics,
+                ),
                 ft.Text("Thanks for using Cerebro. ✨", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
             ],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -817,6 +822,15 @@ class SettingsPage(ft.Column):
             self._select_settings_tab("general")
         else:
             self._bridge.show_snackbar("Settings saved successfully.", success=True)
+
+    def _export_diagnostics(self, _e: ft.ControlEvent) -> None:
+        try:
+            from cerebro.v2.diagnostics import export_diagnostic_bundle
+
+            path = export_diagnostic_bundle()
+            self._bridge.show_snackbar(f"Diagnostic bundle saved: {path}", success=True)
+        except Exception as exc:
+            self._bridge.show_snackbar(f"Export failed: {exc}", error=True)
 
     def _on_cancel(self, e):
         key = self._selected_settings_tab_key()

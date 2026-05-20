@@ -45,7 +45,9 @@ from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC
 from cerebro.v2.ui.flet_app.media_preview import build_media_placeholder
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_INSPECT_EDGE, get_thumbnail_cache
+from cerebro.v2.ui.flet_app.components.common.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review_flow import skeletons
+from cerebro.v2.session_schema import validate_review_session_payload
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 
 if TYPE_CHECKING:
@@ -166,6 +168,15 @@ class ReviewFlowHost(ft.Column):
                     content=overview_body,
                 )
         elif screen == "browse":
+            if (
+                len(self._state.scan_results) > 500
+                and prev_screen != "browse"
+                and not self._reduce_motion
+            ):
+                self._content.content = skeletons.browse_skeleton(
+                    t, reduce_motion=self._reduce_motion
+                )
+                safe_update(self._content)
             page = getattr(self._bridge, "flet_page", None)
             if self._browse_view is None:
                 self._browse_view = BrowseScreenView(
@@ -176,6 +187,7 @@ class ReviewFlowHost(ft.Column):
                     on_open_group_detail=self._browse_open_detail,
                     on_close_group_detail=self._browse_close_detail,
                     on_toggle_file_mark=self._browse_toggle_file_mark,
+                    on_toggle_group_mark=self._browse_toggle_group_marks,
                     on_start_delete_ceremony=self._open_apply_sheet,
                     on_proceed_execute=self._open_apply_sheet,
                     on_apply_smart_rule=self._apply_smart_rule_to_all,
@@ -314,9 +326,16 @@ class ReviewFlowHost(ft.Column):
         if screen == "browse":
             if key in ("arrowup", "up"):
                 self._state.browse_focus_index = max(0, self._state.browse_focus_index - 1)
+                self._render_active_screen()
                 return True
             if key in ("arrowdown", "down"):
-                self._state.browse_focus_index += 1
+                groups = self._state.visible_groups()
+                if groups:
+                    self._state.browse_focus_index = min(
+                        self._state.browse_focus_index + 1,
+                        len(groups) - 1,
+                    )
+                self._render_active_screen()
                 return True
             if key == "space":
                 if self._state.browse_detail_group_id is not None:
@@ -644,7 +663,10 @@ class ReviewFlowHost(ft.Column):
     def _apply_execute_deletes(self) -> None:
         buckets = self._state.cart_buckets()
         paths = [str(f.path) for f in buckets["delete"]]
-        simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        simulate = (
+            os.environ.get("CEREBRO_DEBUG", "").strip() in ("1", "true", "yes")
+            and os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        )
         if simulate:
             self._push_delete_undo_bundle(paths)
             self._apply_undo_snapshot = self._state.undo_stack[-1] if self._state.undo_stack else None
@@ -679,11 +701,9 @@ class ReviewFlowHost(ft.Column):
                     self._apply_progress_label.value = f"{done}/{total} processed ({pct}%)"
                 self._safe_update(self._apply_outer)
 
-            flet_page = self._bridge.flet_page
-            if hasattr(flet_page, "run_thread"):
-                flet_page.run_thread(_ui_progress)
-            else:
-                _ui_progress()
+            from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
+            run_on_ui_thread(self._bridge.flet_page, _ui_progress, refresh_page=False)
 
         def on_done(new_groups, deleted_count, failed_count, bytes_reclaimed, exc) -> None:
             def _finish() -> None:
@@ -712,11 +732,9 @@ class ReviewFlowHost(ft.Column):
                 self._update_sidebar_counts_only()
                 self._show_apply_undo_toast(simulated=False)
 
-            flet_page = self._bridge.flet_page
-            if hasattr(flet_page, "run_thread"):
-                flet_page.run_thread(_finish)
-            else:
-                _finish()
+            from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
+            run_on_ui_thread(self._bridge.flet_page, _finish, refresh_page=False)
 
         self._delete_service.delete_and_prune_async(
             paths,
@@ -731,7 +749,10 @@ class ReviewFlowHost(ft.Column):
         self._show_toast(msg, action_label="Undo", on_action=self._toast_undo_last_apply)
 
     def _toast_undo_last_apply(self, _e=None) -> None:
-        simulate = os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        simulate = (
+            os.environ.get("CEREBRO_DEBUG", "").strip() in ("1", "true", "yes")
+            and os.environ.get("CEREBRO_REVIEW_SIMULATE_APPLY", "").strip() in ("1", "true", "yes")
+        )
         if not simulate:
             self._delete_service.undo_last_trash_delete()
         if self._apply_undo_snapshot is not None:
@@ -817,6 +838,43 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.sync_checkbox_marks()
             self._browse_view.update_cart_chrome()
+        self._update_sidebar_counts_only()
+
+    def _browse_toggle_group_marks(self, group_id: int, mark: bool) -> None:
+        """Mark or clear all duplicate copies in a group (keeps one scoped file unmarked)."""
+        gid = int(group_id)
+        group = self._state.group_by_id(gid)
+        if not group or not group.files:
+            return
+        scoped = [f for f in group.files if self._state.file_in_selection_media_scope(f)]
+        if len(scoped) <= 1:
+            return
+        keeper_path = str(scoped[0].path)
+        sel = self._state.set_selections.setdefault(gid, SetSelection())
+        self._state.smart_rule_by_group.pop(gid, None)
+        for f in scoped:
+            p = str(f.path)
+            if self._state.is_path_protected(p):
+                continue
+            if mark:
+                if p == keeper_path:
+                    self._state.marked_paths.discard(p)
+                    sel.deleted_paths.discard(p)
+                    sel.kept_paths.add(p)
+                else:
+                    self._state.marked_paths.add(p)
+                    sel.deleted_paths.add(p)
+                    sel.kept_paths.discard(p)
+            else:
+                self._state.marked_paths.discard(p)
+                sel.deleted_paths.discard(p)
+                sel.kept_paths.discard(p)
+        self._state._recompute_cart_counters()
+        self._push_marked_paths_to_store()
+        if self._browse_view:
+            self._browse_view.sync_checkbox_marks()
+            self._browse_view.update_cart_chrome()
+            self._browse_view._refresh_group_marked_lines()
         self._update_sidebar_counts_only()
 
     def _apply_smart_rule_to_all(self, rule: str) -> None:
@@ -1502,14 +1560,18 @@ class ReviewFlowHost(ft.Column):
         if not path.exists():
             return
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            return
+        ok, err, payload = validate_review_session_payload(raw)
+        if not ok:
+            _log.warning("Ignoring invalid review session: %s", err)
             return
         self._state.marked_paths = set(payload.get("marked_paths", []))
         self._state.selected_set_ids = set(payload.get("selected_set_ids", []))
         layout_raw = payload.get("inspect_layout_by_set", {})
+        parsed: dict[int, tuple[int, int, bool]] = {}
         if isinstance(layout_raw, dict):
-            parsed: dict[int, tuple[int, int, bool]] = {}
             for k, v in layout_raw.items():
                 try:
                     gid = int(k)
@@ -1517,19 +1579,10 @@ class ReviewFlowHost(ft.Column):
                         parsed[gid] = (int(v[0]), int(v[1]), bool(v[2]))
                 except (TypeError, ValueError):
                     continue
-            self._state.inspect_layout_by_set_id = parsed
-            # P0-4 — cap inspect_layout_by_set_id at 200 entries
-            while len(self._state.inspect_layout_by_set_id) > 200:
-                oldest = next(iter(self._state.inspect_layout_by_set_id))
-                del self._state.inspect_layout_by_set_id[oldest]
-        screen = payload.get("active_screen")
-        if screen == "cart":
-            screen = "browse"
-        if screen in {"execute", "report"}:
-            screen = "browse"
-        if screen in {"overview", "browse", "inspect"}:
-            self._router.reset_to_overview()
-            self._router.navigate(screen)
+        self._state.inspect_layout_by_set_id = parsed
+        screen = str(payload.get("active_screen", "browse"))
+        self._router.reset_to_overview()
+        self._router.navigate(screen)
         self._state._recompute_cart_counters()
 
     def _save_snapshot_async(self, path_str: str, snapshot_json: str, done_cb=None) -> None:
@@ -1586,12 +1639,7 @@ class ReviewFlowHost(ft.Column):
 
     @staticmethod
     def _safe_update(ctrl: ft.Control | None) -> None:
-        if ctrl is None:
-            return
-        try:
-            ctrl.update()
-        except Exception:
-            pass
+        safe_update(ctrl)
 
     def enable_full_inspect(self) -> None:
         self._inspect_stub = False

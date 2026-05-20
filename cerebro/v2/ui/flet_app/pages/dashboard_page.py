@@ -620,7 +620,10 @@ class DashboardPage(ft.Column):
     # User Interactions
     # ------------------------------------------------------------------
     def _on_archives_cb_change(self, e: ft.ControlEvent) -> None:
-        enabled = bool(e.control.value)
+        # Archive extraction not implemented — keep disabled in UI.
+        enabled = False
+        if e.control is not None:
+            e.control.value = False
         self._scan_options["scan_archives"] = enabled
         self._archives_warning.visible = enabled
         DashboardPage._safe_update(self._archives_warning)
@@ -726,7 +729,7 @@ class DashboardPage(ft.Column):
         self._scan_options["min_size_bytes"] = int(conf.get("min_size_bytes", 0) or 0)
         ex = conf.get("exclude_paths", [])
         self._scan_options["exclude_paths"] = [str(x) for x in ex] if isinstance(ex, list) else []
-        self._scan_options["scan_archives"] = bool(conf.get("scan_archives", False))
+        self._scan_options["scan_archives"] = False
         self._scan_options["include_subfolders"] = bool(conf.get("include_subfolders", True))
         self._scan_options["index_only"] = bool(conf.get("index_only", False))
         self._scan_options["verify_duplicates"] = bool(conf.get("verify_duplicates", False))
@@ -1231,7 +1234,7 @@ class DashboardPage(ft.Column):
         merged_options = dict(self._scan_options)
         if isinstance(options, dict):
             merged_options.update(options)
-        merged_options["scan_archives"] = bool(merged_options.get("scan_archives", False))
+        merged_options["scan_archives"] = False
         merged_options["min_size_bytes"] = int(merged_options.get("min_size_bytes", 0) or 0)
         raw_ex = merged_options.get("exclude_paths", [])
         merged_options["exclude_paths"] = [str(x) for x in raw_ex] if isinstance(raw_ex, list) else []
@@ -1380,11 +1383,24 @@ class DashboardPage(ft.Column):
             btn.text = "Pause scan"
             btn.icon = ft.icons.Icons.PAUSE
             btn.style = pill_outlined_button_style(self._t)
+        mp_mode = len(self._folders) > 1
         btn.visible = True
-        btn.disabled = False
+        if mp_mode and not paused:
+            btn.disabled = True
+            btn.tooltip = (
+                "Pause is unavailable during multi-folder scans "
+                "(parallel hashing). Cancel and scan one folder at a time to pause."
+            )
+        else:
+            btn.disabled = False
+            btn.tooltip = None
         DashboardPage._safe_update(btn)
         try:
-            self._scan_hud.sync_pause_button(is_paused=paused, is_scanning=show)
+            self._scan_hud.sync_pause_button(
+                is_paused=paused,
+                is_scanning=show,
+                pause_disabled=mp_mode and not paused,
+            )
         except Exception:
             pass
 

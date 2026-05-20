@@ -55,14 +55,16 @@ class DashboardScanOptionsPanel:
             italic=True,
         )
         self.scan_archives_sw = ft.Switch(
-            label="Scan inside archives",
+            label="Scan inside archives (coming soon)",
             value=False,
+            disabled=True,
             active_color="#F59E0B",
-            label_text_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
+            label_text_style=ft.TextStyle(color=t.colors.fg_muted, size=t.typography.size_sm),
+            tooltip="Archive extraction is not yet implemented; this option is disabled.",
             on_change=on_archives_change,
         )
         self.archives_warning = ft.Text(
-            "⚠ Very slow — archives may be gigabytes. Use only for forensic or backup dedup.",
+            "Archive scanning is not available yet — enable when a future release adds extraction.",
             size=t.typography.size_xs,
             color="#F59E0B",
             italic=True,

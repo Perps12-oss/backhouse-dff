@@ -7,6 +7,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import io
 import logging
+import os
 import shutil
 import subprocess
 from collections import OrderedDict
@@ -21,6 +22,7 @@ _log = logging.getLogger(__name__)
 _MAX_CACHE = 384
 _MAX_EDGE = 112
 _JPEG_QUALITY = 82
+_MAX_PREVIEW_BYTES = int(os.environ.get("CEREBRO_PREVIEW_MAX_BYTES", str(50 * 1024 * 1024)))
 
 # Progressive preview tiers (same LRU; keys prefixed so eviction stays coherent).
 TINY_BROWSE_EDGE = 32
@@ -177,6 +179,13 @@ class ThumbnailCache:
         if not p.is_file() or not is_previewable_path(p):
             self._remember(key, None)
             return None
+        try:
+            if p.stat().st_size > _MAX_PREVIEW_BYTES:
+                self._remember(key, None)
+                return None
+        except OSError:
+            self._remember(key, None)
+            return None
 
         b64 = decode_preview_jpeg_b64(p, _MAX_EDGE, _JPEG_QUALITY)
         if b64 is None:
@@ -314,3 +323,16 @@ def get_thumbnail_cache() -> ThumbnailCache:
     if _DEFAULT_CACHE is None:
         _DEFAULT_CACHE = ThumbnailCache()
     return _DEFAULT_CACHE
+
+
+def shutdown_thumbnail_cache(wait: bool = False) -> None:
+    """Release the global thumbnail worker pool on app exit."""
+    global _DEFAULT_CACHE
+    cache = _DEFAULT_CACHE
+    _DEFAULT_CACHE = None
+    if cache is None:
+        return
+    try:
+        cache._pool.shutdown(wait=wait, cancel_futures=True)
+    except Exception:
+        _log.debug("thumbnail pool shutdown failed", exc_info=True)

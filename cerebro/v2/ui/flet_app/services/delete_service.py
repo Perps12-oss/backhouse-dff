@@ -107,8 +107,18 @@ class DeleteService:
             return DeleteFilesResult(0, len(paths), 0, [], failures)
 
         if policy == DeletionPolicy.TRASH:
+            plan = self._pipeline.build_explicit_paths_plan(
+                existing_paths,
+                scan_id="delete_service",
+                mode="trash",
+                source="delete_service",
+            )
+            validated_paths = [str(op.path) for op in plan.operations]
+            blocked = set(existing_paths) - set(validated_paths)
+            for bp in sorted(blocked):
+                failures.append((bp, "Blocked by deletion policy (hardlink/symlink guard)"))
             deleted_paths, move_failures = self._delete_to_managed_trash(
-                existing_paths, sizes_by_path, progress_cb
+                validated_paths, sizes_by_path, progress_cb
             )
             failures.extend(move_failures)
             deleted_n = len(deleted_paths)

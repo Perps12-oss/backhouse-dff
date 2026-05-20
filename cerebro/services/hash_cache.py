@@ -30,6 +30,19 @@ from typing import Optional, Tuple
 
 SCHEMA_VERSION = 1
 
+# SQLite INTEGER is signed 64-bit; Windows/network stat() can return larger values.
+_SQLITE_INT_MAX = 9223372036854775807
+_SQLITE_INT_MIN = -9223372036854775808
+
+
+def _clamp_sqlite_int(value: int) -> int:
+    v = int(value)
+    if v > _SQLITE_INT_MAX:
+        return _SQLITE_INT_MAX
+    if v < _SQLITE_INT_MIN:
+        return _SQLITE_INT_MIN
+    return v
+
 
 @dataclass(frozen=True, slots=True)
 class StatSignature:
@@ -38,6 +51,12 @@ class StatSignature:
     mtime_ns: int
     dev: int = 0
     inode: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "size", _clamp_sqlite_int(self.size))
+        object.__setattr__(self, "mtime_ns", _clamp_sqlite_int(self.mtime_ns))
+        object.__setattr__(self, "dev", _clamp_sqlite_int(self.dev))
+        object.__setattr__(self, "inode", _clamp_sqlite_int(self.inode))
 
     @staticmethod
     def from_path(path: Path, *, follow_symlinks: bool = False) -> "StatSignature":

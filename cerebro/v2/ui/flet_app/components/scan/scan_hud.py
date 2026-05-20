@@ -831,7 +831,13 @@ class ScanHUD(ft.Container):
     def reset_cancel_choice_for_new_scan(self) -> None:
         self._reset_cancel_choice_for_new_scan()
 
-    def sync_pause_button(self, *, is_paused: bool, is_scanning: bool) -> None:
+    def sync_pause_button(
+        self,
+        *,
+        is_paused: bool,
+        is_scanning: bool,
+        pause_disabled: bool = False,
+    ) -> None:
         """Update the pause button to reflect current scan state.
 
         Called by the dashboard whenever scan paused/resumed state changes.
@@ -850,7 +856,13 @@ class ScanHUD(ft.Container):
             self._pause_btn.icon = ft.icons.Icons.PAUSE
             self._pause_btn.style = pill_outlined_button_style(t)
         self._pause_btn.visible = True
-        self._pause_btn.disabled = False
+        self._pause_btn.disabled = bool(pause_disabled and not is_paused)
+        if pause_disabled and not is_paused:
+            self._pause_btn.tooltip = (
+                "Pause unavailable during multi-folder parallel scan"
+            )
+        else:
+            self._pause_btn.tooltip = None
         ScanHUD._safe_update(self._pause_btn)
 
     def _present_cancel_waiting_for_results(self, *, phase_files: int) -> None:
@@ -1379,12 +1391,9 @@ class ScanHUD(ft.Container):
                 if not self._scan_timer_active:
                     break
                 try:
-                    if hasattr(page, "run_thread"):
-                        page.run_thread(self._apply_tick_scan_hud)
-                    elif hasattr(page, "run_task"):
-                        page.run_task(self._async_tick_scan_elapsed)
-                    else:
-                        self._apply_tick_scan_hud()
+                    from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
+                    run_on_ui_thread(page, self._apply_tick_scan_hud, refresh_page=False)
                 except Exception:
                     _log.debug("scan elapsed tick scheduling failed", exc_info=True)
 

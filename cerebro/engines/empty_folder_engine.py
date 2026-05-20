@@ -133,18 +133,10 @@ class EmptyFolderEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
-        # H-2: non-blocking — run on a daemon thread so start() returns immediately,
-        # consistent with BaseEngine contract and SimilarFolderEngine / LargeFileEngine.
-        self._scan_thread = threading.Thread(
-            target=self._run_scan,
-            args=(progress_callback,),
-            daemon=True,
-            name="ScanThread-empty-folders",
-        )
-        self._scan_thread.start()
+        self._run_scan(progress_callback)
 
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
         try:
@@ -172,8 +164,8 @@ class EmptyFolderEngine(BaseEngine):
         for base in self._folders:
             if self._cancel_event.is_set():
                 break
-            while self._pause_event.is_set():
-                time.sleep(0.1)
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                break
 
             roots = _collect_empty_roots(Path(base), protected_set)
 
@@ -240,11 +232,11 @@ class EmptyFolderEngine(BaseEngine):
         ))
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:

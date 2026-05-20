@@ -217,30 +217,23 @@ class SimilarFolderEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
-        # H-5: non-blocking — run on daemon thread so start() returns immediately.
-        self._scan_thread = threading.Thread(
-            target=self._run_scan,
-            args=(progress_callback,),
-            daemon=True,
-            name="ScanThread-similar-folders",
-        )
-        self._scan_thread.start()
+        self._run_scan(progress_callback)
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:
         self._cancel_event.set()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.CANCELLED
 
     def get_results(self) -> List[DuplicateGroup]:
@@ -316,8 +309,8 @@ class SimilarFolderEngine(BaseEngine):
             for i in range(total_folders):
                 if self._cancel_event.is_set():
                     break
-                while self._pause_event.is_set():
-                    time.sleep(0.05)
+                if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                    break
                 folders_processed += 1
                 if folders_processed % 25 == 0:
                     self._progress = ScanProgress(
@@ -344,8 +337,8 @@ class SimilarFolderEngine(BaseEngine):
             for idx, (pi, pj) in enumerate(candidates):
                 if self._cancel_event.is_set():
                     break
-                while self._pause_event.is_set():
-                    time.sleep(0.05)
+                if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                    break
                 if idx % 50 == 0:
                     self._progress = ScanProgress(
                         state=ScanState.SCANNING,

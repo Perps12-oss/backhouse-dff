@@ -39,6 +39,10 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.13"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,13 +50,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff mypy pytest pytest-memray
+          pip install -r dev/requirements-ci.txt
+          pip install pytest-memray
+
+      - name: pip-audit
+        run: pip-audit -r requirements.txt
+
+      - name: Secret pattern scan
+        run: |
+          python dev/scripts/scan_secrets.py
 
       - name: Ruff (scoped)
         run: |
@@ -63,6 +75,9 @@ jobs:
             cerebro/core/preview.py \
             cerebro/engines/orchestrator.py \
             cerebro/engines/turbo_file_engine.py \
+            cerebro/engines/base_engine.py \
+            cerebro/v2/ui/flet_app/services/ui_marshal.py \
+            cerebro/v2/persistence/results_store.py \
             cerebro/v2/ui/flet_app/pages/review_flow/host.py \
             cerebro/v2/ui/flet_app/pages/review_flow/apply_sheet.py \
             dev/tests/test_deletion_gate.py \
@@ -75,11 +90,18 @@ jobs:
       - name: Mypy (scoped)
         run: |
           python -m mypy --follow-imports=skip --ignore-missing-imports main.py
+          python -m mypy --follow-imports=skip --ignore-missing-imports cerebro/engines/orchestrator.py cerebro/v2/coordinator.py
 
       - name: Pytest
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb
-          xvfb-run -a python -m pytest -q
+          xvfb-run -a python -m pytest -m "not slow" -q
+
+      - name: Coverage (safety modules)
+        run: |
+          python -m pytest dev/tests/test_deletion_gate.py dev/tests/test_deletion_gate_integration.py \
+            dev/tests/test_orchestrator_engine_lifecycle.py dev/tests/test_ui_marshal.py \
+            --cov=cerebro/core/safety --cov=cerebro/engines/orchestrator --cov-report=term-missing -q
 
       - name: Runtime smoke
         run: |
@@ -103,3 +125,27 @@ jobs:
       - name: Memory bounds
         run: |
           xvfb-run -a python -m pytest dev/tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin
+
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Windows smoke tests
+        run: |
+          python -m pytest dev/tests/test_deletion_gate.py dev/tests/test_deletion_gate_integration.py `
+            dev/tests/test_directory_deletion_flag.py dev/tests/test_session_schema_validation.py `
+            dev/tests/test_ui_marshal.py dev/tests/test_engine_pause_contract.py `
+            dev/tests/test_trash_pipeline_validation.py dev/tests/test_hash_cache_sqlite_int.py -q

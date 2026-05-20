@@ -201,6 +201,9 @@ class StateBridge:
         if dirty_updated and action_name not in self._structural_actions:
             return
 
+        from cerebro.v2.ui.flet_app.flet_thread import assert_flet_thread
+
+        assert_flet_thread(msg="StateBridge._on_store_change page.update")
         try:
             self._page.update()
         except Exception:
@@ -208,14 +211,10 @@ class StateBridge:
 
     def _on_stats_refreshed(self, _stats: Dict[str, Any]) -> None:
         """Refresh UI when background stats cache finishes recomputing."""
+        from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
         cb = self._on_stats_refresh_ui or self._safe_page_update
-        try:
-            if hasattr(self._page, "run_thread"):
-                self._page.run_thread(cb)
-            else:
-                cb()
-        except Exception:
-            pass
+        run_on_ui_thread(self._page, cb)
 
     def _safe_page_update(self) -> None:
         try:

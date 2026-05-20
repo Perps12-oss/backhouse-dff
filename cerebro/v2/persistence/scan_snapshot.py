@@ -7,6 +7,9 @@ import logging
 import os
 import tempfile
 import time
+
+_SNAPSHOT_MAX_GROUPS = int(os.environ.get("CEREBRO_SNAPSHOT_MAX_GROUPS", "25000"))
+_SNAPSHOT_MAX_BYTES = int(os.environ.get("CEREBRO_SNAPSHOT_MAX_BYTES", str(50 * 1024 * 1024)))
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -170,26 +173,56 @@ def save_scan_results_snapshot(
     if not groups:
         return
     try:
+        _write_last_scan_summary(groups, scan_mode, float(session_ts))
+    except (OSError, TypeError, ValueError, AttributeError) as e:
+        _log.warning("save_scan_results_snapshot summary: %s", e)
+
+    spill_session_id = f"{float(session_ts):.9f}"
+    if len(groups) > _SNAPSHOT_MAX_GROUPS:
+        try:
+            from cerebro.v2.persistence.results_store import get_results_store
+
+            get_results_store().import_groups(
+                spill_session_id,
+                groups,
+                scan_mode=str(scan_mode or "files"),
+                created_ts=float(session_ts),
+            )
+            _log.info(
+                "save_scan_results_snapshot: spilled %d groups to ResultsStore session %s",
+                len(groups),
+                spill_session_id,
+            )
+        except Exception as e:
+            _log.warning("results_store spill failed: %s", e)
+        groups_to_write = groups[:_SNAPSHOT_MAX_GROUPS]
+        payload_meta = {"results_store_session": spill_session_id, "total_groups": len(groups)}
+    else:
+        groups_to_write = groups
+        payload_meta = {}
+
+    try:
         payload: Dict[str, Any] = {
             "version": _VERSION,
             "session_ts": float(session_ts),
             "scan_mode": str(scan_mode or "files"),
-            "groups": [_group_to_dict(g) for g in groups],
+            "groups": [_group_to_dict(g) for g in groups_to_write],
+            **payload_meta,
         }
         data = json.dumps(payload, ensure_ascii=False, indent=0)
+        if len(data.encode("utf-8")) > _SNAPSHOT_MAX_BYTES:
+            _log.warning(
+                "save_scan_results_snapshot: payload %d bytes exceeds cap; writing summary only",
+                len(data.encode("utf-8")),
+            )
+            return
         d = _snap_dir()
         _atomic_write_text(d / _LAST_NAME, data)
-        key = f"{float(session_ts):.9f}".replace(".", "_")
+        key = spill_session_id.replace(".", "_")
         _atomic_write_text(d / f"scan_{key}.json", data)
-        # P-4: cap scan_*.json files at 50 newest.
         _prune_old_snapshots(d, keep=50)
     except (OSError, TypeError, ValueError, AttributeError) as e:
         _log.warning("save_scan_results_snapshot: %s", e)
-        return
-    try:
-        _write_last_scan_summary(groups, scan_mode, float(session_ts))
-    except (OSError, TypeError, ValueError, AttributeError) as e:
-        _log.warning("save_scan_results_snapshot summary: %s", e)
 
 
 def _read_payload(path: Path) -> Optional[Dict[str, Any]]:

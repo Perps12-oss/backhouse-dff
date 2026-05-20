@@ -11,36 +11,31 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import flet as ft
 
 from cerebro.engines.base_engine import DuplicateGroup, ScanProgress, ScanState
 from cerebro.engines.scan_stage import ScanStage
 from cerebro.engines.orchestrator import ScanOrchestrator
+from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
+if TYPE_CHECKING:
+    from cerebro.v2.coordinator import CerebroCoordinator
 
 _log = logging.getLogger(__name__)
-
-
-def _flet_page_session_alive(page: ft.Page) -> bool:
-    """True if the Flet page still has a live transport (window not closed mid-scan)."""
-    try:
-        sess = getattr(page, "session", None)
-        if sess is None:
-            return False
-        _ = sess.connection  # noqa: SLF001 — public Flet API surface
-        return True
-    except RuntimeError as exc:
-        if "destroyed session" in str(exc).lower():
-            return False
-        raise
 
 
 class BackendService:
     """Facade over ScanOrchestrator with threaded execution and Flet-safe callbacks."""
 
-    def __init__(self, page: Optional[ft.Page] = None) -> None:
+    def __init__(
+        self,
+        page: Optional[ft.Page] = None,
+        coordinator: Optional["CerebroCoordinator"] = None,
+    ) -> None:
         self._orchestrator = ScanOrchestrator()
+        self._coordinator = coordinator
         self._cancel_event = threading.Event()
         self._scanning = False
         self._scan_lock = threading.Lock()
@@ -117,6 +112,8 @@ class BackendService:
 
         def _worker() -> None:
             try:
+                if self._coordinator is not None:
+                    self._coordinator.scan_started(combined_mode)
                 all_results: List[DuplicateGroup] = []
                 for engine_mode in resolved_modes:
                     if self._cancel_event.is_set():
@@ -168,6 +165,8 @@ class BackendService:
         """Pause the active scan if possible."""
         try:
             self._orchestrator.pause()
+            if self._coordinator is not None:
+                self._coordinator.scan_paused()
         except Exception:
             _log.exception("Pause failed")
 
@@ -175,6 +174,8 @@ class BackendService:
         """Resume a paused scan if possible."""
         try:
             self._orchestrator.resume()
+            if self._coordinator is not None:
+                self._coordinator.scan_resumed()
         except Exception:
             _log.exception("Resume failed")
 
@@ -190,63 +191,12 @@ class BackendService:
     # -- Internal -------------------------------------------------------------
 
     def _deliver_on_ui_thread(self, fn: Callable[..., None], *args: Any) -> None:
-        """Marshal *fn* onto the Flet session asyncio loop.
-
-        ``Page.run_thread`` uses ``loop.run_in_executor`` (worker thread). Store
-        listeners and Flet control mutations are not safe there — scan completion
-        could dispatch ``ScanCompleted`` while the Review subtree never repaints.
-
-        ``Page.run_task`` schedules a coroutine via ``asyncio.run_coroutine_threadsafe``
-        onto ``page.session.connection.loop``, which is the supported path from
-        scanner/progress threads back to UI work.
-        """
-        page = self._page
-        if page is None:
-            fn(*args)
-            return
-        if not hasattr(page, "run_task"):
-            fn(*args)
-            return
-
-        if not _flet_page_session_alive(page):
-            _log.debug(
-                "Skipping UI marshal (Flet session ended): %s",
-                getattr(fn, "__name__", repr(fn)),
-            )
-            return
-
-        async def _run_ui() -> None:
-            fn(*args)
-            try:
-                if hasattr(page, "update_async"):
-                    await page.update_async()  # type: ignore[misc]
-                else:
-                    page.update()
-            except Exception:
-                try:
-                    page.update()
-                except Exception:
-                    pass
-
-        try:
-            page.run_task(_run_ui)
-        except RuntimeError as exc:
-            if "destroyed session" in str(exc).lower():
-                _log.debug(
-                    "Skipping UI marshal (Flet session ended): %s",
-                    getattr(fn, "__name__", repr(fn)),
-                )
-                return
-            _log.exception("Failed to schedule UI callback via page.run_task")
-        except Exception:
-            _log.exception("Failed to schedule UI callback via page.run_task")
-            try:
-                fn(*args)
-            except Exception:
-                _log.exception("Fallback UI callback failed")
+        run_on_ui_thread(self._page, fn, *args)
 
     def _handle_progress(self, progress: ScanProgress) -> None:
         import time as _time
+        if self._coordinator is not None:
+            self._coordinator.report_scan_progress(progress)
         is_terminal = progress.state in (ScanState.COMPLETED, ScanState.CANCELLED, ScanState.ERROR)
         # Allow terminal events through even when cancel was requested.
         if self._cancel_event.is_set() and not is_terminal:

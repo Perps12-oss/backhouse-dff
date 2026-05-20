@@ -1,5 +1,5 @@
 # CEREBRO UI Architecture
-_Last updated: 2026-05-18_
+_Last updated: 2026-05-20_
 
 ## Launch path
 
@@ -47,7 +47,13 @@ Three screens inside one host:
 
 Shared modules: `host.py`, `state.py`, `router.py`, `apply_sheet.py`, `progress_sidebar.py`, `smart_rules.py`, `labels.py`, `filters.py`.
 
-Deletion intent uses `DeleteService` → `CerebroPipeline` with audit `source: "review_flow"` (legacy history rows may still say `review_page`).
+**UI thread safety:** control mutations go through `services/ui_marshal.run_on_ui_thread()` (wraps `page.run_task`). Do not call `page.update()` from engine/worker threads.
+
+**Session resume:** `host._try_resume_session` validates JSON via `cerebro/v2/session_schema.py` before restoring marked paths and layout.
+
+**Large result sets:** browse uses chunked rendering (`BROWSE_*_CHUNK`); overflow banner when sync cap would apply. Scan snapshots spill to `ResultsStore` when group count exceeds `CEREBRO_SNAPSHOT_MAX_GROUPS`.
+
+Deletion intent uses `DeleteService` → `CerebroPipeline` with audit `source: "review_flow"` (legacy history rows may still say `review_page`). Trash deletes always call `build_explicit_paths_plan` before managed-trash move.
 
 ## Engine and state integration
 

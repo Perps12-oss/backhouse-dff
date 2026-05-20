@@ -172,7 +172,7 @@ class MusicDedupEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
         self._run_scan(progress_callback)
@@ -201,8 +201,8 @@ class MusicDedupEngine(BaseEngine):
         for i, af in enumerate(audio_files):
             if self._cancel_event.is_set():
                 break
-            while self._pause_event.is_set():
-                time.sleep(0.1)
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                break
             t = _extract_tags(af)
             if t is not None:
                 tags_map[af] = t
@@ -282,11 +282,11 @@ class MusicDedupEngine(BaseEngine):
         )
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:

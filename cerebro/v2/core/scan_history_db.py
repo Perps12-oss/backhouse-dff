@@ -38,6 +38,7 @@ class ScanHistoryDB:
         with self._lock:
             # M-5: WAL mode for better concurrent read performance.
             self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS scan_history (

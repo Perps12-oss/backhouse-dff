@@ -100,7 +100,7 @@ def _main(page: ft.Page) -> None:
 
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
-    backend = BackendService(page)
+    backend = BackendService(page, coordinator=coordinator)
     bridge = StateBridge(page, store, coordinator, backend)
     _log.info("init: services ready  +%.0fms", (_time.monotonic() - _t0) * 1000)
     settings = bridge.get_settings()
@@ -646,11 +646,31 @@ def _main(page: ft.Page) -> None:
 
     register_global_shortcuts(page, layout, bridge, on_unhandled=_on_other_keyboard)
 
+    def _shutdown_app_resources() -> None:
+        try:
+            bridge.unsubscribe()
+        except Exception:
+            _log.debug("bridge unsubscribe failed", exc_info=True)
+        try:
+            time_keeper.dispose()
+        except Exception:
+            _log.debug("time_keeper dispose failed", exc_info=True)
+        try:
+            from cerebro.v2.ui.flet_app.services.thumbnail_cache import shutdown_thumbnail_cache
+
+            shutdown_thumbnail_cache(wait=False)
+        except Exception:
+            _log.debug("thumbnail cache shutdown failed", exc_info=True)
+
     def _on_window_event(e: ft.WindowEvent) -> None:
+        if e.data == "close":
+            _shutdown_app_resources()
         if e.data in {"close", "resized", "moved", "maximize", "unmaximize"}:
             _persist_window_state()
 
     page.window.on_event = _on_window_event
+    if hasattr(page, "on_disconnect"):
+        page.on_disconnect = lambda _e: _shutdown_app_resources()
 
     def _on_route_change(e: ft.RouteChangeEvent) -> None:
         key = key_for_route(e.route)

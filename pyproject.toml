@@ -44,7 +44,18 @@ select = [
 testpaths = ["dev/tests"]
 markers = [
     "limit_memory: pytest-memray memory ceiling (no-op without --memray flag)",
+    "slow: long-running tests (excluded from fast CI)",
+    "windows: Windows-only behavior",
+    "flet_e2e: headless Flet smoke tests",
 ]
+
+[tool.coverage.run]
+source = ["cerebro"]
+omit = ["dev/*", "*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 0
+show_missing = true
 
 [tool.mypy]
 python_version = "3.10"

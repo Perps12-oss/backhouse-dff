@@ -9,11 +9,14 @@ from pathlib import Path
 
 import pytest
 
+import shutil
+
 from cerebro.core.deletion import (
     DeletionEngine,
     DeletionPolicy,
     DeletionRequest,
     DirectoryDeletionAdapter,
+    TrashDeletionAdapter,
 )
 from cerebro.core.fs_policy import HardlinkPolicy, should_block_delete
 
@@ -78,3 +81,30 @@ def test_directory_adapter_requires_flag(tmp_path):
     result = adapter.delete(d, req_allowed)
     assert result.success is True
     assert not d.exists()
+
+
+def test_directory_adapter_trash_delegates_to_trash_adapter(tmp_path, monkeypatch):
+    """TRASH policy must not call shutil.rmtree; it uses TrashDeletionAdapter."""
+    d = tmp_path / "dir_trash"
+    d.mkdir()
+    rmtree_calls: list[object] = []
+    delegated: list[tuple[Path, DeletionPolicy]] = []
+
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: rmtree_calls.append(a))
+
+    def _fake_trash_delete(self, path, request):
+        delegated.append((path, request.policy))
+        from cerebro.core.deletion import SingleDeletionResult
+
+        return SingleDeletionResult(success=True, path=path, policy=request.policy)
+
+    monkeypatch.setattr(TrashDeletionAdapter, "delete", _fake_trash_delete)
+
+    adapter = DirectoryDeletionAdapter()
+    req = DeletionRequest(policy=DeletionPolicy.TRASH, allow_directory_delete=True)
+    result = adapter.delete(d, req)
+
+    assert result.success is True
+    assert delegated == [(d, DeletionPolicy.TRASH)]
+    assert rmtree_calls == []
+    assert d.exists()

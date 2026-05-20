@@ -193,7 +193,7 @@ class DocumentDedupEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._callback = progress_callback
@@ -227,8 +227,8 @@ class DocumentDedupEngine(BaseEngine):
                     cb(ScanProgress(state=ScanState.CANCELLED))
                     return
 
-                while self._pause_event.is_set():
-                    time.sleep(0.05)
+                if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                    break
 
                 text = _extract_text(path)
                 if len(text) < min_chars:
@@ -367,16 +367,16 @@ class DocumentDedupEngine(BaseEngine):
         return groups
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:
         self._cancel_event.set()
-        self._pause_event.clear()
+        self._pause_event.set()
 
     def get_results(self) -> List[DuplicateGroup]:
         return self._results

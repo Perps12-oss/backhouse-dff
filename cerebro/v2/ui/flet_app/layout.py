@@ -194,7 +194,13 @@ class AppLayout(ft.Column):
 
             self._nav_icons[route.key] = icon
 
-            nav_button_row.controls.append(pill)
+            nav_button_row.controls.append(
+                ft.Semantics(
+                    label=f"Navigate to {route.label}",
+                    button=True,
+                    content=pill,
+                )
+            )
 
 
 

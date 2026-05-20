@@ -35,7 +35,6 @@ from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 _GRID_THUMB_EDGE = 140
 _FILE_THUMB_EDGE = 88
 _LIST_THUMB_EDGE = 44
-_MAX_GROUP_CHECKBOXES = 6
 _THUMB_LOAD_CAP = 32
 
 
@@ -50,6 +49,7 @@ class BrowseScreenView:
         on_open_group_detail,
         on_close_group_detail,
         on_toggle_file_mark,
+        on_toggle_group_mark=None,
         on_start_delete_ceremony,
         on_proceed_execute,
         on_apply_smart_rule=None,
@@ -65,6 +65,7 @@ class BrowseScreenView:
         self._on_open_group_detail = on_open_group_detail
         self._on_close_group_detail = on_close_group_detail
         self._on_toggle_file_mark = on_toggle_file_mark
+        self._on_toggle_group_mark = on_toggle_group_mark
         self._on_start_delete_ceremony = on_start_delete_ceremony
         self._on_proceed_execute = on_proceed_execute
         self._on_apply_smart_rule = on_apply_smart_rule
@@ -113,6 +114,7 @@ class BrowseScreenView:
         self._detail_grid: Optional[ft.GridView] = None
         self._mark_checkboxes: dict[str, ft.Checkbox] = {}
         self._mark_checkbox_groups: dict[str, int] = {}
+        self._group_mark_checkboxes: dict[int, ft.Checkbox] = {}
         # Phase 3.1 — overflow banner
         self._overflow_banner: ft.Container = ft.Container(visible=False)
         # Phase 3.2 — page navigation
@@ -295,6 +297,7 @@ class BrowseScreenView:
         gen = self._browse_thumb_gen
         self._mark_checkboxes.clear()
         self._mark_checkbox_groups.clear()
+        self._group_mark_checkboxes.clear()
         self._group_marked_lines.clear()
         # Never call controls.clear() before ChunkedViewBuilder.render(): render bumps
         # generation (aborting in-flight async tails) and only then assigns host.controls.
@@ -335,12 +338,17 @@ class BrowseScreenView:
                 )
             ]
         elif self._chunked is None:
-            if grid_mode:
-                self._list.controls.clear()
-                self._group_grid.controls = [self._build_group_grid_tile(g) for g in groups[:1000]]
-            else:
-                self._group_grid.controls.clear()
-                self._list.controls = [self._build_group_row(g) for g in groups[:1000]]
+            self._group_grid.controls.clear()
+            self._list.controls = [
+                ft.Container(
+                    padding=16,
+                    content=ft.Text(
+                        "Loading browse view…",
+                        color=t.colors.fg_muted,
+                        size=t.typography.size_sm,
+                    ),
+                )
+            ]
         else:
             chunk_preset = BROWSE_TILES_CHUNK_CONFIG if grid_mode else BROWSE_GROUPS_CHUNK_CONFIG
             host = self._group_grid if grid_mode else self._list
@@ -351,6 +359,19 @@ class BrowseScreenView:
             def _kick_thumbs() -> None:
                 self._schedule_browse_thumbs(gen)
 
+            def _trailing_overflow(overflow: int) -> ft.Control | None:
+                if overflow <= 0:
+                    return None
+                return ft.Container(
+                    padding=8,
+                    content=ft.Text(
+                        f"{overflow:,} more groups on this page are not shown. "
+                        "Use filters or pagination to narrow results.",
+                        color=t.colors.fg_muted,
+                        size=11,
+                    ),
+                )
+
             self._chunked.render(
                 host,
                 groups,
@@ -358,6 +379,7 @@ class BrowseScreenView:
                     self._build_group_grid_tile(g) if grid_mode else self._build_group_row(g)
                 ),
                 config=chunk_preset,
+                trailing_builder=_trailing_overflow,
                 after_chunk=_kick_thumbs,
                 on_complete=lambda: (_kick_thumbs(), safe_update(host)),
                 on_abort=lambda: safe_update(host),
@@ -536,7 +558,7 @@ class BrowseScreenView:
                 self._sort_text,
                 self._thumb_view_switch,
                 ft.Text(
-                    "Mark files with checkboxes, then Apply cleanup",
+                    "Mark duplicate sets below, or open a set to choose individual files",
                     size=t.typography.size_xs,
                     color=t.colors.fg_muted,
                     italic=True,
@@ -682,6 +704,10 @@ class BrowseScreenView:
             if gid is None:
                 continue
             cb.value = self._file_marked_for_delete(path, gid)
+        for gid, cb in list(self._group_mark_checkboxes.items()):
+            group = self._state.group_by_id(gid)
+            if group is not None:
+                cb.value = self._group_mark_checkbox_value(group)
         if repaint:
             self._repaint_marks_surface()
 
@@ -1025,38 +1051,51 @@ class BrowseScreenView:
         )
         return placeholder, {}
 
-    def _build_file_checkbox_row(self, group: DuplicateGroup) -> ft.Control:
+    def _group_deletable_files(self, group: DuplicateGroup) -> list[DuplicateFile]:
+        """Scoped duplicate copies that may be marked (excludes one keeper and protected paths)."""
+        scoped = [f for f in group.files if self._state.file_in_selection_media_scope(f)]
+        if len(scoped) <= 1:
+            return []
+        keeper_path = str(scoped[0].path)
+        out: list[DuplicateFile] = []
+        for f in scoped[1:]:
+            p = str(f.path)
+            if p == keeper_path:
+                continue
+            if self._state.is_path_protected(p):
+                continue
+            out.append(f)
+        return out
+
+    def _group_mark_checkbox_value(self, group: DuplicateGroup) -> bool:
+        deletable = self._group_deletable_files(group)
+        if not deletable:
+            return False
+        gid = group.group_id
+        return all(self._file_marked_for_delete(str(f.path), gid) for f in deletable)
+
+    def _build_group_mark_control(self, group: DuplicateGroup) -> ft.Control:
+        """One labeled checkbox per duplicate set on grid/list cards (not per mystery slot)."""
         t = self._t
         gid = group.group_id
-        items: list[ft.Control] = []
-        overflow = 0
-        for i, f in enumerate(group.files):
-            if i >= _MAX_GROUP_CHECKBOXES:
-                overflow = len(group.files) - _MAX_GROUP_CHECKBOXES
-                break
-            p = str(f.path)
-            prot = self._state.is_path_protected(p)
-            checked = self._file_marked_for_delete(p, gid)
+        deletable = self._group_deletable_files(group)
+        if not deletable:
+            return ft.Container(height=0)
+        n = len(deletable)
+        label = f"Mark {n} duplicate{'s' if n != 1 else ''} for removal"
 
-            def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = gid) -> None:
-                self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
+        def _toggle(e: ft.ControlEvent, g: int = gid) -> None:
+            if self._on_toggle_group_mark is None:
+                return
+            self._on_toggle_group_mark(g, bool(getattr(e.control, "value", False)))
 
-            in_media_scope = self._state.file_in_selection_media_scope(f)
-            cb = ft.Checkbox(value=checked, disabled=prot or not in_media_scope, on_change=_toggle)
-            self._mark_checkboxes[p] = cb
-            self._mark_checkbox_groups[p] = gid
-            items.append(cb)
-        if overflow > 0:
-            items.append(
-                ft.Text(f"+{overflow}", size=t.typography.size_xs - 1, color=t.colors.fg_muted)
-            )
-        return ft.Row(
-            items,
-            spacing=2,
-            wrap=True,
-            alignment=ft.MainAxisAlignment.CENTER,
-            run_spacing=2,
+        cb = ft.Checkbox(
+            label=label,
+            value=self._group_mark_checkbox_value(group),
+            on_change=_toggle,
         )
+        self._group_mark_checkboxes[gid] = cb
+        return cb
 
     def _apply_grid_hero_preview(
         self,
@@ -1220,7 +1259,7 @@ class BrowseScreenView:
             content=ft.Column(
                 [
                     ft.Container(content=hero, alignment=ft.Alignment.CENTER),
-                    self._build_file_checkbox_row(group),
+                    self._build_group_mark_control(group),
                     title,
                     sub,
                     meta,
@@ -1276,7 +1315,7 @@ class BrowseScreenView:
                                 spacing=2,
                                 expand=True,
                             ),
-                            self._build_file_checkbox_row(group),
+                            self._build_group_mark_control(group),
                             ft.Icon(ft.icons.Icons.SHIELD, size=16, color=t.colors.warning, visible=protected),
                             ft.IconButton(
                                 icon=ft.icons.Icons.ARROW_FORWARD,
