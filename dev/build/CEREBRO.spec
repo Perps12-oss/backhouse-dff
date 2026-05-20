@@ -2,8 +2,8 @@
 """
 PyInstaller spec for CEREBRO (Flet + Flutter desktop).
 
-Build (onedir, no console):
-  pyinstaller --noconfirm CEREBRO.spec
+Build (onedir, no console) from repo root:
+  pyinstaller --noconfirm dev/build/CEREBRO.spec
 
 Output: dist/CEREBRO/CEREBRO.exe
 """
@@ -16,7 +16,7 @@ from PyInstaller.building.build_main import Analysis
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 block_cipher = None
-spec_root = Path(SPECPATH).resolve()
+_repo_root = Path(SPECPATH).resolve().parent.parent
 
 # --- Third-party assets ---
 datas: list[tuple[str, str]] = []
@@ -46,18 +46,18 @@ for pkg in ("flet", "PIL"):
 hiddenimports += collect_submodules("cerebro")
 
 # Theme JSON is loaded by path — ensure tree is present under _MEIPASS/cerebro/themes
-_themes = spec_root / "cerebro" / "themes"
+_themes = _repo_root / "cerebro" / "themes"
 if _themes.is_dir():
     datas.append((str(_themes), "cerebro/themes"))
 
 # Duplicate themes at repo root (some installs reference themes/builtin)
-_root_themes = spec_root / "themes"
+_root_themes = _repo_root / "themes"
 if _root_themes.is_dir():
     datas.append((str(_root_themes), "themes"))
 
 a = Analysis(
-    ["main.py"],
-    pathex=[str(spec_root)],
+    [str(_repo_root / "main.py")],
+    pathex=[str(_repo_root)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -94,7 +94,9 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(spec_root / "packaging" / "app.ico") if (spec_root / "packaging" / "app.ico").is_file() else None,
+    icon=str(_repo_root / "dev" / "packaging" / "app.ico")
+    if (_repo_root / "dev" / "packaging" / "app.ico").is_file()
+    else None,
 )
 
 coll = COLLECT(

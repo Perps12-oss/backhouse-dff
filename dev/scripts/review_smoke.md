@@ -1,6 +1,6 @@
 # Review smoke — quick reference
 
-Manual steps live in **`docs/review-smoke-checklist.md`** (update paths to `review_flow/` when editing that doc).
+Manual steps live in **`dev/docs/review-smoke-checklist.md`** (update paths to `review_flow/` when editing that doc).
 
 Optional compile check from repo root:
 

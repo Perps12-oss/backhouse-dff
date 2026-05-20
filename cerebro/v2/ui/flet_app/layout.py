@@ -224,7 +224,7 @@ class AppLayout(ft.Column):
 
 
 
-        gid = getattr(state_bridge, "active_gradient_id", "flet_base")
+        gid = getattr(state_bridge, "active_gradient_id", "material_purple")
 
         gradient = gradient_by_id(gid) or default_gradient()
 
@@ -416,7 +416,7 @@ class AppLayout(ft.Column):
 
         self._apply_nav_theme()
 
-        self.apply_shell_gradient(getattr(self._bridge, "active_gradient_id", "flet_base"))
+        self.apply_shell_gradient(getattr(self._bridge, "active_gradient_id", "material_purple"))
 
         if self.page is not None:
 

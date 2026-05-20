@@ -21,7 +21,7 @@ Exercises:
 Run from repo root:
 
     $env:PYTHONPATH="."
-    python scripts/smoke_engine_deps.py
+    python dev/scripts/smoke_engine_deps.py
 """
 from __future__ import annotations
 

@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+LAST_SESSION_UNAVAILABLE_MSG = (
+    "Last session has expired and cannot be reopened right now. "
+    "Run a new scan from Home."
+)
+
 _SETTINGS_PATH = Path.home() / ".cerebro" / "flet_ui_settings.json"
 
 
@@ -55,7 +60,7 @@ class StateBridge:
         self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
         self._on_theme_change: Optional[Callable[[str], None]] = None
         self._visual_theme: str = "dark"
-        self._active_gradient_id: str = "flet_base"
+        self._active_gradient_id: str = "material_purple"
         self._scan_session: Dict[str, Any] = {}
         self._suppress_page_update: bool = False
         self._last_page_update_ts: float = 0.0  # B3: throttle progress-tick updates
@@ -420,30 +425,46 @@ class StateBridge:
 
             get_default_history_manager().clear_history()
 
-    def open_last_session(self) -> None:
-        """Restore the last scan: in-memory backend results, else ``last.json`` on disk."""
+    def open_last_session(self) -> bool:
+        """Restore the last scan: in-memory backend results, else ``last.json`` on disk.
+
+        Returns True when review was opened with results; False when nothing could be restored
+        (a user-facing snackbar is shown).
+        """
+        def _restore(groups: List[DuplicateGroup], mode: str, *, success_detail: str) -> bool:
+            try:
+                self._coordinator.scan_completed(list(groups), mode or "files")
+                self._coordinator.set_active_tab("review")
+            except Exception:
+                _log.exception("open_last_session restore failed")
+                self.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
+                return False
+            self.show_snackbar(success_detail, success=True)
+            return True
+
         cached = self._backend.get_results()
         if cached:
             mode = self.state.scan_mode or "files"
-            self._coordinator.scan_completed(list(cached), mode)
-            self._coordinator.set_active_tab("review")
-            self.show_snackbar("Restored the last scan from memory.", success=True)
-            return
+            return _restore(list(cached), mode, success_detail="Restored the last scan from memory.")
+
+        snap = None
         try:
             from cerebro.v2.persistence.scan_snapshot import load_last_scan_snapshot
 
             snap = load_last_scan_snapshot()
         except Exception:
             _log.exception("load_last_scan_snapshot failed")
-            snap = None
         if snap:
             groups, mode, _ts = snap
             if groups:
-                self._coordinator.scan_completed(list(groups), mode or "files")
-                self._coordinator.set_active_tab("review")
-                self.show_snackbar("Restored last saved session from disk (last.json).", success=True)
-                return
-        self.show_snackbar("No scan results in memory or on disk. Run a new scan from Home.", info=True)
+                return _restore(
+                    list(groups),
+                    mode or "files",
+                    success_detail="Restored last saved session from disk (last.json).",
+                )
+
+        self.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
+        return False
 
     def get_settings(self) -> Dict[str, Any]:
         if not _SETTINGS_PATH.exists():
@@ -523,14 +544,17 @@ class StateBridge:
         action_label: str | None = None,
         on_action: Callable[[ft.ControlEvent], None] | None = None,
     ) -> None:
+        from cerebro.v2.ui.flet_app.theme import theme_for_mode
+
+        colors = theme_for_mode(self._visual_theme).colors
         if error:
-            bg = "#B91C1C"
+            bg = colors.danger
         elif success:
-            bg = "#166534"
+            bg = colors.success
         elif info:
-            bg = "#334155"
+            bg = ft.Colors.with_opacity(0.92, colors.bg3)
         else:
-            bg = "#1E293B"
+            bg = ft.Colors.with_opacity(0.92, colors.bg2)
         self._page.snack_bar = ft.SnackBar(
             content=ft.Text(str(message)),
             bgcolor=bg,

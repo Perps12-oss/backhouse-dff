@@ -88,4 +88,4 @@ Deletion intent uses `DeleteService` → `CerebroPipeline` with audit `source: "
 ## Notes
 
 - This document reflects the current Flet architecture only.
-- Archival docs under `docs/archive/` and `docs/plans/` may describe superseded ReviewPage decomposition.
+- Archival docs under `dev/docs/archive/` and `dev/docs/plans/` may describe superseded ReviewPage decomposition.

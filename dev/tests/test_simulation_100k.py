@@ -5,7 +5,7 @@ Covers the full logical pipeline without a live Flet page:
   scan → state dispatch → results filtering → select-all → delete & prune
 
 Run with:
-    pytest tests/test_simulation_100k.py -v
+    pytest dev/tests/test_simulation_100k.py -v
 """
 
 from __future__ import annotations

@@ -39,8 +39,8 @@
 Run scale tests locally:
 
 ```bash
-pytest tests/test_scan_scale.py -q
-pytest tests/test_scan_scale.py -m slow -q
+pytest dev/tests/test_scan_scale.py -q
+pytest dev/tests/test_scan_scale.py -m slow -q
 ```
 
 Phase timings appear in logs as `[Turbo] Phase timings: discovery=… grouping=… tier_a=…`.

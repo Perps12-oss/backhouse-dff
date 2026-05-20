@@ -10,6 +10,33 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  flet-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flet-version: ["0.80.0", "0.84.0"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "flet==${{ matrix.flet-version }}"
+          pip install pytest
+
+      - name: Flet compatibility tests
+        run: |
+          python -c "import flet; print('flet', getattr(__import__('flet.version', fromlist=['version']), 'version', '?'))"
+          python -m pytest dev/tests/test_flet_compat.py dev/tests/test_review_media_filter.py dev/tests/test_media_preview.py -q
+
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -38,11 +65,11 @@ jobs:
             cerebro/engines/turbo_file_engine.py \
             cerebro/v2/ui/flet_app/pages/review_flow/host.py \
             cerebro/v2/ui/flet_app/pages/review_flow/apply_sheet.py \
-            tests/test_deletion_gate.py \
-            tests/test_session_tokens.py \
-            tests/test_deletion_engine.py \
-            tests/test_deletion_gate_integration.py \
-            tests/test_preview_manager.py \
+            dev/tests/test_deletion_gate.py \
+            dev/tests/test_session_tokens.py \
+            dev/tests/test_deletion_engine.py \
+            dev/tests/test_deletion_gate_integration.py \
+            dev/tests/test_preview_manager.py \
             main.py
 
       - name: Mypy (scoped)
@@ -75,4 +102,4 @@ jobs:
 
       - name: Memory bounds
         run: |
-          xvfb-run -a python -m pytest tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin
+          xvfb-run -a python -m pytest dev/tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin

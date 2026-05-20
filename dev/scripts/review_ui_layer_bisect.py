@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 _REVIEW_FLOW_PKG = "cerebro/v2/ui/flet_app/pages/review_flow"
 _SMOKE_TARGETS = [_REVIEW_FLOW_PKG]
 

@@ -57,8 +57,8 @@ def build_progress_sidebar(
 
 def update_progress_sidebar_refs(refs: ProgressSidebarRefs, active: ReviewScreen, state: ReviewFlowState) -> None:
     screen_label = {"overview": "Overview", "browse": "Browse", "inspect": "Compare"}.get(active, active)
-    n_groups = len(state.scan_results)
-    marked = len(state.cart_buckets()["delete"])
+    n_groups = len(state.visible_groups())
+    marked = state.cart_delete_count
     reclaim = state.cart_delete_bytes
     refs.screen_label.value = screen_label
     refs.groups_text.value = f"{n_groups:,} groups"

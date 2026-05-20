@@ -1,4 +1,4 @@
-> **Superseded (2026-05):** V1 `ReviewPage`, `results_page.py`, and `pages/review/*` are retired. Live review UI is `cerebro/v2/ui/flet_app/pages/review_flow/` (`ReviewFlowHost`). See `docs/UI_ARCHITECTURE.md`.
+> **Superseded (2026-05):** V1 `ReviewPage`, `results_page.py`, and `pages/review/*` are retired. Live review UI is `cerebro/v2/ui/flet_app/pages/review_flow/` (`ReviewFlowHost`). See `dev/docs/UI_ARCHITECTURE.md`.
 
 🔍 Deep Code Audit — What’s Holding You Back
 1. Duplicate Logic Everywhere

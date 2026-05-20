@@ -1,4 +1,4 @@
-"""LRU thumbnail cache: image path → base64 JPEG for Flet ft.Image(src_base64=...)."""
+"""LRU preview cache: path → base64 JPEG (images, text snippets, video frames)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,14 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import io
 import logging
+import shutil
+import subprocess
 from collections import OrderedDict
 from pathlib import Path
 from functools import partial
 from typing import Awaitable, Callable, Iterable, Optional
+
+from cerebro.v2.ui.flet_app.media_preview import preview_kind_for_path
 
 _log = logging.getLogger(__name__)
 
@@ -38,6 +42,11 @@ def is_image_path(path: Path) -> bool:
     return path.suffix.lower() in _IMAGE_SUFFIXES
 
 
+def is_previewable_path(path: Path) -> bool:
+    """True when a JPEG preview can be attempted (image, text render, or video frame)."""
+    return preview_kind_for_path(path) != "icon"
+
+
 def _normalize_for_safe_convert(im):
     """Avoid Pillow warning for palette transparency stored as bytes."""
     try:
@@ -47,6 +56,106 @@ def _normalize_for_safe_convert(im):
     if im.mode == "P" and isinstance(transparency, (bytes, bytearray)):
         return im.convert("RGBA")
     return im
+
+
+def _pil_to_jpeg_b64(im, max_edge: int, quality: int) -> str:
+    from PIL import Image
+
+    im = _normalize_for_safe_convert(im)
+    im = im.convert("RGB")
+    im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _decode_image_file(path: Path, max_edge: int, quality: int) -> Optional[str]:
+    from PIL import Image
+
+    with Image.open(path) as im:
+        return _pil_to_jpeg_b64(im, max_edge, quality)
+
+
+def _decode_text_file(path: Path, max_edge: int, quality: int) -> Optional[str]:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        raw = path.read_bytes()[:8192]
+        text = raw.decode("utf-8", errors="replace")
+        lines = [ln.rstrip() for ln in text.splitlines()[:16] if ln.strip() or ln == ""]
+        if not lines:
+            lines = ["(empty)"]
+        w = h = max(32, int(max_edge))
+        im = Image.new("RGB", (w, h), (22, 27, 34))
+        draw = ImageDraw.Draw(im)
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+        y = 6
+        line_h = max(10, h // 14)
+        max_chars = max(8, w // 7)
+        for line in lines:
+            snippet = line[:max_chars]
+            draw.text((6, y), snippet, fill=(210, 218, 226), font=font)
+            y += line_h
+            if y >= h - line_h:
+                break
+        return _pil_to_jpeg_b64(im, max_edge, quality)
+    except Exception:
+        _log.debug("text thumbnail failed for %s", path, exc_info=True)
+        return None
+
+
+def _decode_video_file(path: Path, max_edge: int, quality: int) -> Optional[str]:
+    if not shutil.which("ffmpeg"):
+        return None
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        "00:00:01",
+        "-i",
+        str(path),
+        "-vframes",
+        "1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "pipe:1",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=10, check=False)
+        if proc.returncode != 0 or not proc.stdout:
+            return None
+        from PIL import Image
+
+        with Image.open(io.BytesIO(proc.stdout)) as im:
+            return _pil_to_jpeg_b64(im, max_edge, quality)
+    except Exception:
+        _log.debug("video thumbnail failed for %s", path, exc_info=True)
+        return None
+
+
+def decode_preview_jpeg_b64(path: Path, max_edge: int, quality: int) -> Optional[str]:
+    """Decode image, text snippet, or video frame to a JPEG base64 string."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    kind = preview_kind_for_path(p)
+    try:
+        if kind == "image":
+            return _decode_image_file(p, max_edge, quality)
+        if kind == "text":
+            return _decode_text_file(p, max_edge, quality)
+        if kind == "video":
+            return _decode_video_file(p, max_edge, quality)
+    except Exception:
+        _log.debug("preview decode failed for %s kind=%s", path, kind, exc_info=True)
+    return None
 
 
 class ThumbnailCache:
@@ -65,22 +174,12 @@ class ThumbnailCache:
             return self._data[key]
 
         p = Path(path)
-        if not p.is_file() or not is_image_path(p):
+        if not p.is_file() or not is_previewable_path(p):
             self._remember(key, None)
             return None
 
-        try:
-            from PIL import Image
-
-            with Image.open(p) as im:
-                im = _normalize_for_safe_convert(im)
-                im = im.convert("RGB")
-                im.thumbnail((_MAX_EDGE, _MAX_EDGE), Image.Resampling.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            _log.debug("thumbnail failed for %s", path, exc_info=True)
+        b64 = decode_preview_jpeg_b64(p, _MAX_EDGE, _JPEG_QUALITY)
+        if b64 is None:
             self._remember(key, None)
             return None
 
@@ -96,22 +195,12 @@ class ThumbnailCache:
             self._data.move_to_end(key)
             return self._data[key]
 
-        if not p.is_file() or not is_image_path(p):
+        if not p.is_file() or not is_previewable_path(p):
             self._remember(key, None)
             return None
 
-        try:
-            from PIL import Image
-
-            with Image.open(p) as im:
-                im = _normalize_for_safe_convert(im)
-                im = im.convert("RGB")
-                im.thumbnail((me, me), Image.Resampling.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            _log.debug("thumbnail failed for %s (edge=%s)", path, me, exc_info=True)
+        b64 = decode_preview_jpeg_b64(p, me, _JPEG_QUALITY)
+        if b64 is None:
             self._remember(key, None)
             return None
 
@@ -130,23 +219,13 @@ class ThumbnailCache:
             self._data.move_to_end(key)
             return self._data[key]
 
-        if not p.is_file() or not is_image_path(p):
+        if not p.is_file() or not is_previewable_path(p):
             self._remember(key, None)
             return None
 
         q = _TINY_JPEG_QUALITY_INSPECT if me >= 64 else _TINY_JPEG_QUALITY_BROWSE
-        try:
-            from PIL import Image
-
-            with Image.open(p) as im:
-                im = _normalize_for_safe_convert(im)
-                im = im.convert("RGB")
-                im.thumbnail((me, me), Image.Resampling.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=q, optimize=True)
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            _log.debug("tiny preview failed for %s edge=%s", path, me, exc_info=True)
+        b64 = decode_preview_jpeg_b64(p, me, q)
+        if b64 is None:
             self._remember(key, None)
             return None
 
@@ -164,22 +243,12 @@ class ThumbnailCache:
             self._data.move_to_end(key)
             return self._data[key]
 
-        if not p.is_file() or not is_image_path(p):
+        if not p.is_file() or not is_previewable_path(p):
             self._remember(key, None)
             return None
 
-        try:
-            from PIL import Image
-
-            with Image.open(p) as im:
-                im = _normalize_for_safe_convert(im)
-                im = im.convert("RGB")
-                im.thumbnail((_COMPARE_MAX_EDGE, _COMPARE_MAX_EDGE), Image.Resampling.LANCZOS)
-                buf = io.BytesIO()
-                im.save(buf, format="JPEG", quality=_COMPARE_JPEG_QUALITY, optimize=True)
-                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            _log.debug("compare preview failed for %s", path, exc_info=True)
+        b64 = decode_preview_jpeg_b64(p, _COMPARE_MAX_EDGE, _COMPARE_JPEG_QUALITY)
+        if b64 is None:
             self._remember(key, None)
             return None
 
@@ -216,7 +285,7 @@ class ThumbnailCache:
             tasks = [
                 asyncio.ensure_future(loop.run_in_executor(self._pool, worker, Path(p)))
                 for p in paths
-                if is_image_path(Path(p))
+                if is_previewable_path(Path(p))
             ]
         else:
             me = max(64, min(512, int(max_edge)))
@@ -224,7 +293,7 @@ class ThumbnailCache:
             tasks = [
                 asyncio.ensure_future(loop.run_in_executor(self._pool, worker, Path(p)))
                 for p in paths
-                if is_image_path(Path(p))
+                if is_previewable_path(Path(p))
             ]
         for done in asyncio.as_completed(tasks):
             try:

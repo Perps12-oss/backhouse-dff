@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
+from cerebro.v2.ui.flet_app.pages.review_flow.media_filter import (
+    file_media_bucket,
+    normalized_media_type,
+)
 
 ReviewScreen = Literal["overview", "browse", "inspect"]
 BrowseViewMode = Literal["list", "grid", "tree", "folder_diff"]
@@ -61,6 +65,9 @@ class ReviewFlowState:
     inspect_diff_enabled: bool = False
     inspect_blink_enabled: bool = False
     active_tag_filter: str = ""
+    # When enabled, deletion marks and smart-select only affect files in selection_media_type.
+    selection_media_filter_enabled: bool = False
+    selection_media_type: str = "pictures"
     # Phase 3.2 — pagination
     page_index: int = 0
     page_size: int = 200
@@ -75,6 +82,31 @@ class ReviewFlowState:
     # 1.2 — O(1) group lookup index (hidden from repr/eq)
     _group_index: dict = field(default_factory=dict, repr=False, compare=False)
 
+    def file_in_selection_media_scope(self, f: DuplicateFile) -> bool:
+        if not self.selection_media_filter_enabled:
+            return True
+        return file_media_bucket(f) == normalized_media_type(self.selection_media_type)
+
+    def group_has_selection_media_files(self, group: DuplicateGroup) -> bool:
+        """True when the group contains at least one file in the active media filter bucket."""
+        if not self.selection_media_filter_enabled:
+            return True
+        return any(self.file_in_selection_media_scope(f) for f in group.files)
+
+    def prune_marks_outside_media_scope(self) -> None:
+        """Drop deletion marks on files outside the active media filter."""
+        if not self.selection_media_filter_enabled:
+            return
+        for g in self.scan_results:
+            sel = self.set_selections.get(g.group_id)
+            for f in g.files:
+                if self.file_in_selection_media_scope(f):
+                    continue
+                p = str(f.path)
+                self.marked_paths.discard(p)
+                if sel:
+                    sel.deleted_paths.discard(p)
+
     def visible_groups(self) -> List[DuplicateGroup]:
         # 1.1 — memoization cache check
         cache_key = (
@@ -85,6 +117,8 @@ class ReviewFlowState:
             self.max_size_bytes,
             self.similarity_min,
             self.active_tag_filter,
+            self.selection_media_filter_enabled,
+            self.selection_media_type,
             self.sort_key,
             self.sort_desc,
         )
@@ -118,6 +152,8 @@ class ReviewFlowState:
         if self.active_tag_filter:
             tag = self.active_tag_filter.strip().lower()
             groups = [g for g in groups if tag in {t.lower() for t in self.tags_by_set.get(g.group_id, set())}]
+        if self.selection_media_filter_enabled:
+            groups = [g for g in groups if self.group_has_selection_media_files(g)]
         key = self.sort_key
         reverse = self.sort_desc
 
@@ -157,12 +193,14 @@ class ReviewFlowState:
             for f in g.files:
                 path = str(f.path)
                 size = int(getattr(f, "size", 0) or 0)
+                in_scope = self.file_in_selection_media_scope(f)
                 if sel and path in sel.protected_paths:
-                    pc += 1
-                elif path in self.marked_paths or (sel and path in sel.deleted_paths):
+                    if in_scope:
+                        pc += 1
+                elif in_scope and (path in self.marked_paths or (sel and path in sel.deleted_paths)):
                     dc += 1
                     db += size
-                elif sel and path in sel.kept_paths:
+                elif in_scope and sel and path in sel.kept_paths:
                     kc += 1
         self.cart_delete_count = dc
         self.cart_keep_count = kc
@@ -229,11 +267,13 @@ class ReviewFlowState:
             sel = self.set_selections.get(g.group_id)
             for f in g.files:
                 path = str(f.path)
+                in_scope = self.file_in_selection_media_scope(f)
                 if sel and path in sel.protected_paths:
-                    protected.append(f)
-                elif path in self.marked_paths or (sel and path in sel.deleted_paths):
+                    if in_scope:
+                        protected.append(f)
+                elif in_scope and (path in self.marked_paths or (sel and path in sel.deleted_paths)):
                     to_delete.append(f)
-                elif sel and path in sel.kept_paths:
+                elif in_scope and sel and path in sel.kept_paths:
                     to_keep.append(f)
         return {"delete": to_delete, "keep": to_keep, "protected": protected}
 

@@ -75,8 +75,8 @@ implementation commit lands.
 **CLOSURE COMPLETE (2026-04-22).** Implementation commits landed earlier
 (65ce5d1, a8bb998). On-branch verification confirms: no tracked files
 under `diagnostics/` (local logs only), `.gitignore` lists `diagnostics/`,
-`scripts/dev/phase1_scan_runner.py` is the canonical runner, and
-`docs/architecture/scan_paths.md` carries Waivers 1A–1C (see §Phase 1 waivers).
+`dev/scripts/dev/phase1_scan_runner.py` is the canonical runner, and
+`dev/docs/architecture/scan_paths.md` carries Waivers 1A–1C (see §Phase 1 waivers).
 
 ## Closure Commit — `chore(phase1-closure): reconcile Phase 1 artifacts`
 
@@ -90,14 +90,14 @@ One commit on `fix/post-v1-audit`. Scope:
    - `diagnostics/phase1_scan_20260420_015801.log`
 
 3. **Relocate the Phase 1 scan runner.** Move to
-   `scripts/dev/phase1_scan_runner.py` for re-run capability.
+   `dev/scripts/dev/phase1_scan_runner.py` for re-run capability.
    Same retention policy will apply to `_phase2_cache_experiment.py`
    at Phase 8 — retained until final cleanup, then evaluated for
    deletion.
 
 4. **Append three waivers to the scan-path audit doc** (was
    `cerebro/core/SCAN_PATHS.md`; **relocated** to
-   `docs/architecture/scan_paths.md` in Phase 8.3):
+   `dev/docs/architecture/scan_paths.md` in Phase 8.3):
 
    - **Waiver 1A:** `[DIAG:SUMMARY]` does not include
      `groups_dropped_self_dup` or `scan_type` fields as originally
@@ -116,15 +116,15 @@ One commit on `fix/post-v1-audit`. Scope:
      23 size groups, 1 final pair). This is the test tree, not the
      production dataset. Production reproduction was performed
      against the 5-root overlap set (16,965 files) documented in
-     `docs/bug-investigations/bug1-canonical-path-dedup.md`.
+     `dev/docs/bug-investigations/bug1-canonical-path-dedup.md`.
 
 ## Verify (all must be true after closure commit)
 
 - [x] `git ls-files diagnostics/` returns nothing
 - [x] `.gitignore` contains `diagnostics/`
-- [x] `scripts/dev/phase1_scan_runner.py` exists (`python scripts/dev/phase1_scan_runner.py`)
-- [x] `docs/architecture/scan_paths.md` contains the three waivers above
-- [x] Running `python scripts/dev/phase1_scan_runner.py <path>` completes
+- [x] `dev/scripts/dev/phase1_scan_runner.py` exists (`python dev/scripts/dev/phase1_scan_runner.py`)
+- [x] `dev/docs/architecture/scan_paths.md` contains the three waivers above
+- [x] Running `python dev/scripts/dev/phase1_scan_runner.py <path>` completes
       a turbo scan without error (log file under gitignored `diagnostics/`)
 
 ## Original Verify Bullets (status)
@@ -151,10 +151,10 @@ overlap). Defense-in-depth commits 835bc68 (singleton emit filter) and
 434fa7f (`_assert_no_self_duplicates` + guard logging) are live on the
 sole file-scan core (`TurboScanner`). **Step 3 (port to Paths B/D) is
 N/A:** `FastPipeline` (Path B) and `FileDedupEngine` (Path D) were removed
-in Cut 2 / Cut 3 — see `docs/architecture/scan_paths.md` §Historical Paths.
+in Cut 2 / Cut 3 — see `dev/docs/architecture/scan_paths.md` §Historical Paths.
 **Step 4 (strict posture)** is implemented via `CEREBRO_STRICT` in
 `cerebro/core/group_invariants.py`. **Step 5** — investigation doc at
-`docs/bug-investigations/bug1-canonical-path-dedup.md`.
+`dev/docs/bug-investigations/bug1-canonical-path-dedup.md`.
 
 ## Scope Change (Waiver 4) — Formally Recorded
 
@@ -175,7 +175,7 @@ enumerated twice.
 **Retention:** `normcase(realpath)` canonicalization IS retained,
 but in the defense-in-depth guard `_assert_no_self_duplicates`
 (434fa7f), not as the primary fix. Evidence: see
-`docs/bug-investigations/bug1-canonical-path-dedup.md` §Falsifications.
+`dev/docs/bug-investigations/bug1-canonical-path-dedup.md` §Falsifications.
 
 ## Sub-Phase Ledger (Post-Hoc Documented — Advisor Waiver Granted)
 
@@ -190,7 +190,7 @@ permitted without explicit approval.
 | 2c        | 434fa7f   | [date]     | `_assert_no_self_duplicates` + `[DIAG:GUARD]` |
 | 2d        | N/A       | Step 3     | Paths B/D removed — sole path TurboScanner |
 | 2e        | LANDED    | Step 4     | `CEREBRO_STRICT` in `group_invariants.py` |
-| doc       | LANDED    | Step 5     | `docs/bug-investigations/bug1-canonical-path-dedup.md` |
+| doc       | LANDED    | Step 5     | `dev/docs/bug-investigations/bug1-canonical-path-dedup.md` |
 
 ## Step 2 — DB Canonical-Path Invariant (Waiver 3 Resolution)
 
@@ -283,7 +283,7 @@ Verify: does any Cerebro launch path use `python -O`?
 Check:
 - Entry-point scripts (`cerebro`, `cerebro.exe`, `main.py`)
 - PyInstaller build flags if applicable
-- Packaging/installer configuration
+- dev/packaging/installer configuration
 - CI launch commands
 
 **Expected finding:** no `-O`. Therefore `__debug__` is True at
@@ -336,7 +336,7 @@ Docstring must explain:
 
 ### Location
 
-`docs/bug-investigations/bug1-canonical-path-dedup.md`
+`dev/docs/bug-investigations/bug1-canonical-path-dedup.md`
 
 ### Mandatory Sections
 
@@ -418,7 +418,7 @@ lines pasted verbatim, not referenced by file path alone.
       inline evidence
 - [ ] All 5 waivers either resolved or formally accepted with
       evidence
-- [ ] `docs/bug-investigations/bug1-canonical-path-dedup.md`
+- [ ] `dev/docs/bug-investigations/bug1-canonical-path-dedup.md`
       committed
 
 ---
@@ -452,7 +452,7 @@ Before any Phase 3 fix is written:
      the fix is live.
 
 5. Commit the investigation log (sanitized) to
-   `docs/bug-investigations/phase3_guard_order.log`. No verbal
+   `dev/docs/bug-investigations/phase3_guard_order.log`. No verbal
    wave-through.
 
 ## Phase 3 — Main (conditional on 3.0 finding)
@@ -500,7 +500,7 @@ Root cause: [one sentence based on 3.0 finding]
 - [DIAG:GUARD_ORDER] runtime assertion [if applicable]
 
 Fixes: scan count stuck at 49
-Refs: docs/bug-investigations/phase3_guard_order.log
+Refs: dev/docs/bug-investigations/phase3_guard_order.log
 ```
 
 ---
@@ -568,14 +568,14 @@ Before any Phase 5 fix is written:
    AND  arrow-B < 200ms per event
    AND  sort-C < 2000ms on ≥4,000 rows
    THEN Phase 5 DEFERRED to v1.2
-        Document at docs/backlog/phase5-results-virtualization.md
+        Document at dev/docs/backlog/phase5-results-virtualization.md
         with raw numbers
    ELSE Phase 5 proceeds as written
         Measured numbers become the "before" baseline
    ```
 
 4. Measurement log committed as
-   `docs/bug-investigations/phase5_pre_measure.md`:
+   `dev/docs/bug-investigations/phase5_pre_measure.md`:
    - Raw numbers per measurement
    - Hardware: CPU, RAM, disk type
    - Dataset: discovered count, emitted count, group count
@@ -614,7 +614,7 @@ Before any Phase 5 fix is written:
 ```
 perf(phase5): virtualize Results table for large result sets
 
-Pre-fix baseline: docs/bug-investigations/phase5_pre_measure.md
+Pre-fix baseline: dev/docs/bug-investigations/phase5_pre_measure.md
 - drag-A: [Nms]
 - arrow-B: [Nms/event]  
 - sort-C: [Nms]
@@ -806,9 +806,9 @@ AFTER:
 ### 8.2 — Harness Cleanup
 
 - Delete `diagnostics/_phase2_cache_experiment.py` outright
-  (git has history; `scripts/dev/` retention rejected).
+  (git has history; `dev/scripts/dev/` retention rejected).
   **2026-04-22:** file not present in-tree — nothing to delete.
-- Delete `scripts/dev/phase1_scan_runner.py` IF no longer needed
+- Delete `dev/scripts/dev/phase1_scan_runner.py` IF no longer needed
   (keep if there's an argument for re-runnability).
   **2026-04-22:** **retained** for reproducible DIAG-era reruns (now writes
   ``[Turbo] summary:`` lines post–Phase 8.1).
@@ -817,12 +817,12 @@ AFTER:
 
 ### 8.3 — Documentation Relocation
 
-- ~~Move `SCAN_PATHS.md` → `docs/architecture/scan_paths.md`~~ **Done (Phase 8.3)**
-- Confirm `docs/bug-investigations/` contains:
+- ~~Move `SCAN_PATHS.md` → `dev/docs/architecture/scan_paths.md`~~ **Done (Phase 8.3)**
+- Confirm `dev/docs/bug-investigations/` contains:
   - `bug1-canonical-path-dedup.md` — **present**
   - `phase3_guard_order.log` — **present**
   - `phase5_pre_measure.md` — **present** (retroactive artifact; Phase 5 shipped)
-- Confirm `docs/backlog/phase5-results-virtualization.md` exists
+- Confirm `dev/docs/backlog/phase5-results-virtualization.md` exists
   IFF Phase 5 was deferred. **N/A** — Phase 5 was not deferred.
 
 ### 8.4 — Code Comments Above Defensive Structures
@@ -845,7 +845,7 @@ regress, phase + date context.
   > 2026-04-20, post-v1 audit).
   > Regression indicator: missing [ROOT_DEDUP] log line, OR
   > non-monotonic Phase 1 → Phase 2 → Phase 3 counts.
-  > Investigation: docs/bug-investigations/bug1-canonical-path-dedup.md
+  > Investigation: dev/docs/bug-investigations/bug1-canonical-path-dedup.md
 
 - **`_assert_no_self_duplicates` in
   `cerebro/core/group_invariants.py`** — defense-in-depth guard:
@@ -860,10 +860,10 @@ regress, phase + date context.
 
 Run full regression scan against production 5-root overlap set.
 Capture verification log to
-`docs/releases/v1.1.0/final_verification.log` (tracked path; no
+`dev/docs/releases/v1.1.0/final_verification.log` (tracked path; no
 `git add -f`).
 
-**Automated subset (2026-04-22)** — run `python scripts/post_v1_audit_verify.py`
+**Automated subset (2026-04-22)** — run `python dev/scripts/post_v1_audit_verify.py`
 from repo root; it appends/writes the log and runs pytest + smoke scripts.
 Verified in CI/local:
 
@@ -871,7 +871,7 @@ Verified in CI/local:
 - [x] Forbidden ``[DIAG:DISCOVERY|REDUCE|PAIR|SUMMARY|EMIT|TURBO:]`` absent from
       all ``cerebro/**/*.py`` (pytest)
 - [x] ``[DIAG:GUARD]`` only via ``logger.debug`` in ``turbo_scanner.py`` (pytest)
-- [x] ``CEREBRO_STRICT=1`` synthetic self-dup raises (``tests/test_group_invariants.py``)
+- [x] ``CEREBRO_STRICT=1`` synthetic self-dup raises (``dev/tests/test_group_invariants.py``)
 - [x] ``CEREBRO_STRICT`` unset: synthetic self-dup logs + drops (same)
 - [x] ``dedupe_roots()`` collapses parent+child roots (pytest)
 - [x] DB invariant SQL **N/A** as written — no ``canonical_path`` column on
@@ -913,10 +913,10 @@ UX improvements:
 - Actionable engine status with dep detection (Phase 7: [SHA])
 
 Documentation:
-- docs/plans/post-v1-audit-plan.md — working contract
-- docs/bug-investigations/bug1-canonical-path-dedup.md
-- docs/architecture/scan_paths.md
-- docs/releases/v1.1.0/final_verification.log
+- dev/docs/plans/post-v1-audit-plan.md — working contract
+- dev/docs/bug-investigations/bug1-canonical-path-dedup.md
+- dev/docs/architecture/scan_paths.md
+- dev/docs/releases/v1.1.0/final_verification.log
 ```
 
 ### 8.7 — Squash-Merge to Main
@@ -956,19 +956,19 @@ Every edit to this file requires a line here.
   decisions (§0–§H). Supersedes the original plan and all chat-
   history spec. Working contract for all remaining work.
 - **2026-04-22** — Phase 1 closure verified in-tree (no tracked
-  `diagnostics/` paths; runner at `scripts/dev/phase1_scan_runner.py`;
-  waivers recorded in `docs/architecture/scan_paths.md`). Document-only reconciliation
+  `diagnostics/` paths; runner at `dev/scripts/dev/phase1_scan_runner.py`;
+  waivers recorded in `dev/docs/architecture/scan_paths.md`). Document-only reconciliation
   commit; no code delta required beyond this plan update.
 - **2026-04-22** — Phase 2 Step 3 **closed by architecture**: Paths B
   (`FastPipeline`) and D (`FileDedupEngine`) removed from the codebase
   (Cut 2 / Cut 3); port-to-B/D tasks are N/A. Step 4 (`CEREBRO_STRICT`)
   and Step 5 (bug1 investigation doc) already satisfied in-tree.
 - **2026-04-22** — Phase 8.3: `cerebro/core/SCAN_PATHS.md` relocated to
-  `docs/architecture/scan_paths.md`; all in-repo plan references updated.
-- **2026-04-22** — Phase 8.5 automated subset: ``scripts/post_v1_audit_verify.py``,
-  ``tests/test_post_v1_audit_verification.py``,
-  ``tests/test_group_invariants.py``,
-  tracked ``docs/releases/v1.1.0/final_verification.log`` (see git log on
+  `dev/docs/architecture/scan_paths.md`; all in-repo plan references updated.
+- **2026-04-22** — Phase 8.5 automated subset: ``dev/scripts/post_v1_audit_verify.py``,
+  ``dev/tests/test_post_v1_audit_verification.py``,
+  ``dev/tests/test_group_invariants.py``,
+  tracked ``dev/docs/releases/v1.1.0/final_verification.log`` (see git log on
   ``fix/post-v1-audit``). Manual 5-root bars still operator-owned before tag
   ``v1.1.0-post-audit``.
 

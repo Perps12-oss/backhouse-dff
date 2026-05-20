@@ -1,6 +1,6 @@
 """
 Memory bounds tests — run with pytest-memray:
-  pytest tests/test_memory_bounds.py --memray
+  pytest dev/tests/test_memory_bounds.py --memray
 
 Each test is decorated with @pytest.mark.limit_memory to assert a ceiling.
 Without --memray the decorator is a no-op so these tests also run in regular CI.

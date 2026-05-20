@@ -4,8 +4,8 @@ Relocated from diagnostics/_run_phase1_scan.py (Phase 1 closure commit).
 Log output written to diagnostics/ (gitignored).
 
 Usage:
-    python scripts/dev/phase1_scan_runner.py <path>
-    python scripts/dev/phase1_scan_runner.py  # defaults to jhjl test tree
+    python dev/scripts/dev/phase1_scan_runner.py <path>
+    python dev/scripts/dev/phase1_scan_runner.py  # defaults to jhjl test tree
 """
 import sys
 import logging
@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Repo root on sys.path
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

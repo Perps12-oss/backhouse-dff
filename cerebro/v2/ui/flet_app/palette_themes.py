@@ -37,10 +37,18 @@ class PalettePreset:
     # Material 3 seed (matches primary unless noted)
     seed: str
 
+    # Destructive / soft text (Apply cleanup, reduced-glare accents)
+    action_critical: str = "#FF6F61"
+    fg_soft: str = "#E0E0E0"
+
+
+DEFAULT_SUCCESS_DARK = "#34D399"
+DEFAULT_ACTION_CRITICAL = "#FF6F61"
+DEFAULT_FG_SOFT = "#E0E0E0"
 
 FLET_BASE_PRESET = PalettePreset(
     id="flet_base",
-    name="Flet Base",
+    name="Classic Green",
     is_dark=True,
     bg="#121212",
     bg2="#1e1e1e",
@@ -50,10 +58,12 @@ FLET_BASE_PRESET = PalettePreset(
     fg_muted="#737373",
     primary="#1DB954",
     danger="#E91429",
-    success="#1DB954",
+    success=DEFAULT_SUCCESS_DARK,
     warning="#F59E0B",
     border="#2a2a2a",
     nav_bg="#1e1e1e",
+    action_critical=DEFAULT_ACTION_CRITICAL,
+    fg_soft=DEFAULT_FG_SOFT,
     seed="#1DB954",
 )
 
@@ -88,11 +98,14 @@ _LEGACY_PRESET_ALIASES: dict[str, str] = {
 }
 
 
+DEFAULT_PRESET_ID = "material_purple"
+
+
 def resolve_preset_id(preset_id: str) -> str:
-    """Map stored settings id to a current gradient or flet_base id."""
+    """Map stored settings id to a current gradient or preset id."""
     pid = (preset_id or "").strip().lower()
     if not pid:
-        return "flet_base"
+        return DEFAULT_PRESET_ID
     return _LEGACY_PRESET_ALIASES.get(pid, pid)
 
 
@@ -115,6 +128,9 @@ def derive_preset_from_base(
     name: str,
     primary: str,
     seed: str | None = None,
+    success: str | None = None,
+    action_critical: str | None = None,
+    fg_soft: str | None = None,
 ) -> PalettePreset:
     """Build a palette from flet_base surfaces with gradient-driven accent."""
     return replace(
@@ -123,5 +139,7 @@ def derive_preset_from_base(
         name=name,
         primary=primary,
         seed=seed or primary,
-        success=primary,
+        success=success if success is not None else base.success,
+        action_critical=action_critical if action_critical is not None else base.action_critical,
+        fg_soft=fg_soft if fg_soft is not None else base.fg_soft,
     )

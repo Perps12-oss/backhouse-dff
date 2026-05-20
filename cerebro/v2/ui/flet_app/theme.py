@@ -121,6 +121,9 @@ class ColorTokens:
     glass_border: str = "#E2E8F0"
 
     accent: str = "#3B82F6"
+    action_critical: str = "#FF6F61"
+    action_critical_hover: str = "#E85A4D"
+    fg_soft: str = "#374151"
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,9 @@ class DarkColorTokens:
     glass_border: str = "#324765"
 
     accent: str = "#35E7FF"
+    action_critical: str = "#FF6F61"
+    action_critical_hover: str = "#E85A4D"
+    fg_soft: str = "#E0E0E0"
 
 
 @dataclass(frozen=True)
@@ -249,6 +255,10 @@ def _tokens_from_preset(preset: "PalettePreset") -> ColorTokens:
     bgr, bgg, bgb = int(bgh[0:2], 16), int(bgh[2:4], 16), int(bgh[4:6], 16)
     row_sel = f"#{(bgr+pr)//2:02X}{(bgg+pg)//2:02X}{(bgb+pb)//2:02X}"
 
+    crit = getattr(preset, "action_critical", "#FF6F61") or "#FF6F61"
+    crit_hover = _darken(crit) if preset.is_dark else _lighten(crit)
+    fg_soft = getattr(preset, "fg_soft", preset.fg2) or preset.fg2
+
     return ColorTokens(
         primary=preset.primary,
         primary_hover=hover,
@@ -256,6 +266,9 @@ def _tokens_from_preset(preset: "PalettePreset") -> ColorTokens:
         danger_hover=danger_hover,
         success=preset.success,
         warning=preset.warning,
+        action_critical=crit,
+        action_critical_hover=crit_hover,
+        fg_soft=fg_soft,
         bg=preset.bg,
         bg2=preset.bg2,
         bg3=preset.bg3,

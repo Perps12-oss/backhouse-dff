@@ -29,4 +29,4 @@ Run after changes to `review_flow/host.py`, `review_flow/screens/browse.py`, `re
 
 ## Script pointer
 
-See `scripts/review_smoke.md` for a compile check command (no automated runner).
+See `dev/scripts/review_smoke.md` for a compile check command (no automated runner).

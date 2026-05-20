@@ -1,6 +1,6 @@
 # Cerebro Scan Path Audit
 
-*Canonical copy:* `docs/architecture/scan_paths.md` (relocated from
+*Canonical copy:* `dev/docs/architecture/scan_paths.md` (relocated from
 `cerebro/core/SCAN_PATHS.md` in Phase 8.3).
 
 *Last revised: post-v1 audit — Cuts 1–3 ("single entrance") + Phase 8
@@ -33,7 +33,7 @@ ScanOrchestrator.start_scan(mode, folders, …)   ← the only entrance
 
 At scale (50k+ files), discovery streams rows into `CheckpointDB` and grouping
 uses `iter_files_by_size` instead of a full in-memory catalogue. See
-`docs/architecture/scan_scale.md`.
+`dev/docs/architecture/scan_scale.md`.
 
 `mode="files_classic"` no longer exists. `FileDedupEngine` (the old
 independent classic pipeline, ~600 LOC) was removed in Cut 3.
@@ -71,7 +71,7 @@ risk explicitly ("C" in the one-entrance decision gate).
   sole file-dedup core.
 - `cerebro/core/group_invariants.py` — docstring no longer lists
   file_dedup_engine among its callers.
-- `tests/test_turbo_engine_regressions.py` — `files_classic in
+- `dev/tests/test_turbo_engine_regressions.py` — `files_classic in
   get_available_modes()` flipped to `not in`, documenting the invariant.
 
 ## TurboScanner logging (Phase 8.1 — post-audit cleanup)
@@ -99,7 +99,7 @@ These applied while `[DIAG:*]` instrumentation was live at INFO:
 - **Waiver 1B** — `_diagnose_pair()` capped at 8 invocations per scan.
   **Obsolete** — function removed with Phase 8.1.
 - **Waiver 1C** — Phase 1 sample log used the `jhjl` test tree; production
-  evidence is documented in `docs/bug-investigations/bug1-canonical-path-dedup.md`.
+  evidence is documented in `dev/docs/bug-investigations/bug1-canonical-path-dedup.md`.
   **Still accurate.**
 
 ## Bug 1 canonical-path dedup — status
@@ -108,4 +108,4 @@ Fixed in Phase 2a via `cerebro/core/root_dedup.py::dedupe_roots()` at the root
 layer, plus the `_assert_no_self_duplicates` guard in
 `cerebro/core/group_invariants.py` at the group layer. Both guards remain live
 on `TurboScanner`, which is now the only file-dedup core. Full evidence in
-`docs/bug-investigations/bug1-canonical-path-dedup.md`.
+`dev/docs/bug-investigations/bug1-canonical-path-dedup.md`.

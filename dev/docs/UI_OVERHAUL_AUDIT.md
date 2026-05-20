@@ -2,7 +2,7 @@
 
 > **Archival:** Written before the Flet shell migration.
 > It documents a removed monolithic/AppShell path and is kept for historical
-> reference only. For the active UI structure, see `docs/UI_ARCHITECTURE.md`.
+> reference only. For the active UI structure, see `dev/docs/UI_ARCHITECTURE.md`.
 
 ## 1. Top-level window class and file (historical)
 

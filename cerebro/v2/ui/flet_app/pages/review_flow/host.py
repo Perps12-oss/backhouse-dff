@@ -14,6 +14,10 @@ from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state.actions import FileSelectionChanged, GroupsPruned
 from cerebro.v2.ui.flet_app.components.layout.responsive_grid import is_narrow_viewport
 from cerebro.v2.ui.flet_app.pages.review_flow.apply_sheet import ApplyOutcomeModel, ApplyStep, build_apply_sheet_column
+from cerebro.v2.ui.flet_app.pages.review_flow.browse_workbench import (
+    build_browse_workstation_sidebar,
+    refresh_browse_workstation_sidebar,
+)
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import (
     ProgressSidebarRefs,
     build_progress_sidebar,
@@ -23,6 +27,10 @@ from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.inspect import build_inspect_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.overview import build_overview_screen
+from cerebro.v2.ui.flet_app.pages.review_flow.media_filter import (
+    filter_paths_for_media_scope,
+    normalized_media_type,
+)
 from cerebro.v2.ui.flet_app.pages.review_flow.state import (
     ReviewFlowState,
     SetSelection,
@@ -35,6 +43,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
 from cerebro.core.deletion import DeletionPolicy
 from cerebro.v2.ui.flet_app.services.delete_service import DeleteService
 from cerebro.v2.ui.flet_app.components.common.safe_controls import IMAGE_PLACEHOLDER_SRC
+from cerebro.v2.ui.flet_app.media_preview import build_media_placeholder
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import TINY_INSPECT_EDGE, get_thumbnail_cache
 from cerebro.v2.ui.flet_app.pages.review_flow import skeletons
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
@@ -62,6 +71,8 @@ class ReviewFlowHost(ft.Column):
         self._grid = ft.ListView(expand=True)
         self._workstation_sidebar = ft.Container(width=0)
         self._sidebar_refs: Optional[ProgressSidebarRefs] = None
+        self._browse_sidebar_shell: Optional[ft.Container] = None
+        self._browse_workbench_slot: Optional[ft.Container] = None
         self._toast_layer = ft.Stack([])
         self._overlay_layer = ft.Stack([])
         self._filter_sheet: Optional[ft.AlertDialog] = None
@@ -102,12 +113,25 @@ class ReviewFlowHost(ft.Column):
             screen = self._state.active_screen
         if screen != "browse":
             self._state.browse_detail_group_id = None
+        if self._state.scan_results:
+            self._state._recompute_cart_counters()
         self._reduce_motion = bool(self._bridge.is_reduce_motion_enabled())
         prev_screen = self._last_render_screen
         page_width = getattr(self._bridge.flet_page, "width", None)
-        if is_narrow_viewport(page_width):
+        narrow = is_narrow_viewport(page_width)
+        if narrow:
             self._workstation_sidebar = ft.Container(width=0)
             self._sidebar_refs = None
+        elif screen == "browse":
+            if self._browse_sidebar_shell is None:
+                self._browse_sidebar_shell, self._sidebar_refs, self._browse_workbench_slot = (
+                    build_browse_workstation_sidebar(t, self._state, self._on_progress_jump)
+                )
+            else:
+                refresh_browse_workstation_sidebar(
+                    self._sidebar_refs, self._browse_sidebar_shell, self._state
+                )
+            self._workstation_sidebar = self._browse_sidebar_shell
         else:
             self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
                 t, screen, self._state, self._on_progress_jump
@@ -156,6 +180,7 @@ class ReviewFlowHost(ft.Column):
                     on_proceed_execute=self._open_apply_sheet,
                     on_apply_smart_rule=self._apply_smart_rule_to_all,
                     on_undo_smart=self._undo,
+                    on_media_filter_changed=self._on_media_filter_changed,
                     reduce_motion=self._reduce_motion,
                 )
                 if page is not None:
@@ -168,8 +193,19 @@ class ReviewFlowHost(ft.Column):
             self._content.content = self._browse_view.root
             self._grid = self._browse_view.list_host
             self._ensure_content_visible()
+            if narrow:
+                self._browse_view.set_narrow_mode(True)
+            else:
+                self._browse_view.set_narrow_mode(False)
+                if self._browse_workbench_slot is not None:
+                    self._browse_view.attach_workbench(self._browse_workbench_slot)
             if prev_screen != "browse" or not list(getattr(self._browse_view.list_host, "controls", None) or []):
                 self._browse_view.refresh()
+            else:
+                self._browse_view.refresh_workbench_chrome(
+                    in_detail=self._state.browse_detail_group_id is not None
+                )
+            self._update_sidebar_counts_only()
         elif screen == "inspect":
             self._repair_inspect_indices_for_selection()
             inspect_col, slot_a, slot_b = build_inspect_screen(
@@ -224,6 +260,7 @@ class ReviewFlowHost(ft.Column):
             self._state.invalidate_visible_cache()
         self._try_resume_session()
         if self._state.scan_results:
+            self._state._recompute_cart_counters()
             self._repair_review_surface(self._state.active_screen)
         else:
             self._render_active_screen()
@@ -754,6 +791,17 @@ class ReviewFlowHost(ft.Column):
     def _browse_toggle_file_mark(self, path: str, group_id: int, mark: bool) -> None:
         p = str(path)
         gid = int(group_id)
+        group = self._state.group_by_id(gid)
+        if group is not None:
+            file_row = next((f for f in group.files if str(f.path) == p), None)
+            if file_row is not None and not self._state.file_in_selection_media_scope(file_row):
+                self._show_toast(
+                    f"Media filter is on — only "
+                    f"{normalized_media_type(self._state.selection_media_type)} files can be marked."
+                )
+                if self._browse_view:
+                    self._browse_view.sync_checkbox_marks()
+                return
         sel = self._state.set_selections.setdefault(gid, SetSelection())
         if mark:
             self._state.marked_paths.add(p)
@@ -773,33 +821,55 @@ class ReviewFlowHost(ft.Column):
 
     def _apply_smart_rule_to_all(self, rule: str) -> None:
         from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
+
         self._state.push_undo_snapshot()
         groups = self._state.visible_groups()
         for group in groups:
-            if len(group.files) < 2:
+            scoped = (
+                [f for f in group.files if self._state.file_in_selection_media_scope(f)]
+                if self._state.selection_media_filter_enabled
+                else list(group.files)
+            )
+            if len(scoped) < 2:
                 continue
             try:
-                keeper = apply_rule_with_pipeline(rule, group.files)
+                keeper = apply_rule_with_pipeline(rule, scoped)
             except Exception:
-                keeper = group.files[0]
+                keeper = scoped[0]
             gid = group.group_id
             sel = self._state.set_selections.setdefault(gid, SetSelection())
             keeper_path = str(keeper.path)
-            sel.kept_paths.clear()
-            sel.deleted_paths.clear()
-            sel.kept_paths.add(keeper_path)
             for f in group.files:
                 p = str(f.path)
-                if p != keeper_path:
-                    self._state.marked_paths.add(p)
-                    sel.deleted_paths.add(p)
-                else:
+                if not self._state.file_in_selection_media_scope(f):
+                    continue
+                if p == keeper_path:
+                    sel.kept_paths.add(p)
+                    sel.deleted_paths.discard(p)
                     self._state.marked_paths.discard(p)
+                else:
+                    sel.kept_paths.discard(p)
+                    sel.deleted_paths.add(p)
+                    self._state.marked_paths.add(p)
             self._state.smart_rule_by_group[gid] = rule
         self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.refresh()
+        self._update_sidebar_counts_only()
+
+    def _on_media_filter_changed(self, enabled: bool, media_type: str) -> None:
+        self._state.selection_media_filter_enabled = bool(enabled)
+        self._state.selection_media_type = normalized_media_type(media_type)
+        self._state.prune_marks_outside_media_scope()
+        self._state.invalidate_visible_cache()
+        self._state.page_index = 0
+        self._state._recompute_cart_counters()
+        self._push_marked_paths_to_store()
+        if self._browse_view:
+            self._browse_view.refresh_media_filter_chrome()
+            self._browse_view.refresh(rebuild=True)
+        self._update_sidebar_counts_only()
 
     def _ensure_content_visible(self) -> None:
         try:
@@ -811,9 +881,23 @@ class ReviewFlowHost(ft.Column):
     def _update_sidebar_counts_only(self) -> None:
         """Refresh sidebar stats in place — never replace the Row child (avoids blank main pane)."""
         page_width = getattr(self._bridge.flet_page, "width", None)
-        if is_narrow_viewport(page_width):
-            return
+        narrow = is_narrow_viewport(page_width)
         screen = self._router.active_screen()
+        if narrow:
+            if self._browse_view is not None and screen == "browse":
+                self._browse_view.refresh_workbench_chrome(
+                    in_detail=self._state.browse_detail_group_id is not None
+                )
+            return
+        if screen == "browse" and self._browse_sidebar_shell is not None and self._sidebar_refs is not None:
+            refresh_browse_workstation_sidebar(
+                self._sidebar_refs, self._browse_sidebar_shell, self._state
+            )
+            if self._browse_view is not None:
+                self._browse_view.refresh_workbench_chrome(
+                    in_detail=self._state.browse_detail_group_id is not None
+                )
+            return
         if self._sidebar_refs is None:
             self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
                 self._t, screen, self._state, self._on_progress_jump
@@ -964,11 +1048,27 @@ class ReviewFlowHost(ft.Column):
         notify: bool = True,
         _recompute: bool = True,
     ) -> None:
+        scoped_deletes = filter_paths_for_media_scope(
+            group.files,
+            delete_paths,
+            enabled=self._state.selection_media_filter_enabled,
+            media_type=self._state.selection_media_type,
+        )
         sel = self._state.set_selections.setdefault(group.group_id, SetSelection())
-        self._state.marked_paths -= sel.deleted_paths
-        sel.deleted_paths = set(delete_paths)
-        sel.kept_paths = {str(f.path) for f in group.files if str(f.path) not in delete_paths}
-        self._state.marked_paths.update(delete_paths)
+        for f in group.files:
+            p = str(f.path)
+            if not self._state.file_in_selection_media_scope(f):
+                continue
+            self._state.marked_paths.discard(p)
+            sel.deleted_paths.discard(p)
+            sel.kept_paths.discard(p)
+        for p in scoped_deletes:
+            sel.deleted_paths.add(p)
+            self._state.marked_paths.add(p)
+        for f in group.files:
+            p = str(f.path)
+            if self._state.file_in_selection_media_scope(f) and p not in scoped_deletes:
+                sel.kept_paths.add(p)
         if _recompute:
             self._state._recompute_cart_counters()
         if notify:
@@ -987,7 +1087,11 @@ class ReviewFlowHost(ft.Column):
         )
         pick_i = left_i if physical_side == 0 else right_i
         keep = group.files[pick_i]
-        delete_paths = {str(f.path) for f in group.files if str(f.path) != str(keep.path)}
+        delete_paths = {
+            str(f.path)
+            for f in group.files
+            if str(f.path) != str(keep.path) and self._state.file_in_selection_media_scope(f)
+        }
         self._state.push_undo_snapshot()
         self._apply_paths_for_group(group, delete_paths)
         self._inspect_next()
@@ -1008,7 +1112,10 @@ class ReviewFlowHost(ft.Column):
         if not group:
             return
         self._state.push_undo_snapshot()
-        self._apply_paths_for_group(group, {str(f.path) for f in group.files})
+        delete_paths = {
+            str(f.path) for f in group.files if self._state.file_in_selection_media_scope(f)
+        }
+        self._apply_paths_for_group(group, delete_paths)
 
     def _inspect_mark_next(self) -> None:
         self._inspect_delete_all()
@@ -1045,17 +1152,24 @@ class ReviewFlowHost(ft.Column):
             tiny_b64 = await loop.run_in_executor(cache._pool, cache.get_preview_tiny_base64, p, TINY_INSPECT_EDGE)
             if gen != self._inspect_preview_generation:
                 return
-            layers: list[ft.Control] = []
-            if tiny_b64:
-                layers.append(
-                    ft.Image(
-                        src=f"data:image/jpeg;base64,{tiny_b64}",
-                        width=340,
-                        height=400,
-                        fit=ft.BoxFit.CONTAIN,
-                        border_radius=8,
-                    )
+            if not tiny_b64:
+                slot.content = ft.Container(
+                    width=340,
+                    height=400,
+                    alignment=ft.Alignment.CENTER,
+                    content=build_media_placeholder(p, 72, color=self._t.colors.fg_muted),
                 )
+                self._safe_update(slot)
+                return
+            layers: list[ft.Control] = [
+                ft.Image(
+                    src=f"data:image/jpeg;base64,{tiny_b64}",
+                    width=340,
+                    height=400,
+                    fit=ft.BoxFit.CONTAIN,
+                    border_radius=8,
+                )
+            ]
             full_img = ft.Image(
                 src=IMAGE_PLACEHOLDER_SRC,
                 width=340,
@@ -1098,19 +1212,28 @@ class ReviewFlowHost(ft.Column):
                 continue
             p = Path(str(path))
             tiny_b64 = cache.get_preview_tiny_base64(p, TINY_INSPECT_EDGE)
-            layers: list[ft.Control] = []
-            if tiny_b64:
-                layers.append(
-                    ft.Image(
-                        src=f"data:image/jpeg;base64,{tiny_b64}",
-                        width=340,
-                        height=400,
-                        fit=ft.BoxFit.CONTAIN,
-                        border_radius=8,
-                    )
+            if not tiny_b64:
+                slot.content = ft.Container(
+                    width=340,
+                    height=400,
+                    alignment=ft.Alignment.CENTER,
+                    content=build_media_placeholder(p, 72, color=self._t.colors.fg_muted),
                 )
+                self._safe_update(slot)
+                continue
+            layers: list[ft.Control] = [
+                ft.Image(
+                    src=f"data:image/jpeg;base64,{tiny_b64}",
+                    width=340,
+                    height=400,
+                    fit=ft.BoxFit.CONTAIN,
+                    border_radius=8,
+                )
+            ]
             full_b64 = cache.get_compare_preview_base64(p)
             if not full_b64:
+                slot.content = ft.Stack(controls=layers, width=340, height=400)
+                self._safe_update(slot)
                 continue
             full_img = ft.Image(
                 src=f"data:image/jpeg;base64,{full_b64}",
@@ -1352,8 +1475,10 @@ class ReviewFlowHost(ft.Column):
             }
         )
         self._state.restore_snapshot(snap)
+        self._state._recompute_cart_counters()
         if self._browse_view:
             self._browse_view.refresh()
+        self._update_sidebar_counts_only()
 
     def _redo(self) -> None:
         if not self._state.redo_stack:
@@ -1367,8 +1492,10 @@ class ReviewFlowHost(ft.Column):
             }
         )
         self._state.restore_snapshot(snap)
+        self._state._recompute_cart_counters()
         if self._browse_view:
             self._browse_view.refresh()
+        self._update_sidebar_counts_only()
 
     def _try_resume_session(self) -> None:
         path = Path.home() / ".cerebro" / "review_session.v1.json"
@@ -1403,6 +1530,7 @@ class ReviewFlowHost(ft.Column):
         if screen in {"overview", "browse", "inspect"}:
             self._router.reset_to_overview()
             self._router.navigate(screen)
+        self._state._recompute_cart_counters()
 
     def _save_snapshot_async(self, path_str: str, snapshot_json: str, done_cb=None) -> None:
         """Phase 4 — Write snapshot to disk on a daemon thread (atomic via .tmp rename)."""

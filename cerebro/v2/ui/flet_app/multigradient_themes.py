@@ -20,8 +20,12 @@ class GradientTheme:
         return (self.gradient_top, self.gradient_bottom)
 
 
+_PREFERRED_THEME_IDS: Tuple[str, ...] = ("material_purple", "arctic_teal", "flet_base")
+
 GRADIENT_THEMES: Tuple[GradientTheme, ...] = (
-    GradientTheme("flet_base", "Flet Base", "#1a2228", "#121212", "#1DB954", "#9CA3AF"),
+    GradientTheme("material_purple", "Material Purple", "#1a2228", "#121212", "#BB86FC", "#9CA3AF"),
+    GradientTheme("arctic_teal", "Arctic Teal", "#1a2228", "#121212", "#14B8A6", "#9CA3AF"),
+    GradientTheme("flet_base", "Classic Green", "#1a2228", "#121212", "#1DB954", "#9CA3AF"),
     GradientTheme("gradient_emerald", "Emerald Mist", "#142820", "#121212", "#1DB954", "#6EE7B7"),
     GradientTheme("gradient_forest", "Forest Depth", "#152218", "#121212", "#22C55E", "#86EFAC"),
     GradientTheme("gradient_mint", "Mint Veil", "#132622", "#121212", "#10B981", "#6EE7B7"),
@@ -68,4 +72,18 @@ def gradient_by_id(theme_id: str) -> GradientTheme | None:
 
 
 def default_gradient() -> GradientTheme:
-    return GRADIENT_THEMES[0]
+    return gradient_by_id("material_purple") or GRADIENT_THEMES[0]
+
+
+def gradient_themes_for_picker() -> Tuple[GradientTheme, ...]:
+    """Themes for Settings dropdown: preferred defaults first, then the rest."""
+    by_id = {g.id: g for g in GRADIENT_THEMES}
+    ordered: list[GradientTheme] = []
+    for pid in _PREFERRED_THEME_IDS:
+        g = by_id.get(pid)
+        if g is not None:
+            ordered.append(g)
+    for g in GRADIENT_THEMES:
+        if g.id not in _PREFERRED_THEME_IDS:
+            ordered.append(g)
+    return tuple(ordered)

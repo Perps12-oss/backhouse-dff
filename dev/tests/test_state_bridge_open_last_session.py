@@ -10,7 +10,7 @@ import pytest
 
 from cerebro.engines.base_engine import DuplicateFile, DuplicateGroup
 from cerebro.v2.state import StateStore, create_initial_state
-from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
+from cerebro.v2.ui.flet_app.services.state_bridge import LAST_SESSION_UNAVAILABLE_MSG, StateBridge
 
 
 def _one_group() -> DuplicateGroup:
@@ -51,7 +51,7 @@ def test_open_last_session_from_memory_when_backend_has_results(
     bridge, snacks = bridge_and_snacks
     g = _one_group()
     bridge.backend.get_results.return_value = [g]
-    bridge.open_last_session()
+    assert bridge.open_last_session() is True
     bridge.coordinator.scan_completed.assert_called_once_with([g], "files")
     bridge.coordinator.set_active_tab.assert_called_once_with("review")
     assert len(snacks) == 1
@@ -74,7 +74,7 @@ def test_open_last_session_from_disk_when_memory_empty(
         _fake_load,
     )
     bridge.backend.get_results.return_value = []
-    bridge.open_last_session()
+    assert bridge.open_last_session() is True
     bridge.coordinator.scan_completed.assert_called_once_with([g], "photos")
     bridge.coordinator.set_active_tab.assert_called_once_with("review")
     assert len(snacks) == 1
@@ -93,10 +93,11 @@ def test_open_last_session_info_when_no_snapshot(
         lambda: None,
     )
     bridge.backend.get_results.return_value = []
-    bridge.open_last_session()
+    assert bridge.open_last_session() is False
     bridge.coordinator.scan_completed.assert_not_called()
     bridge.coordinator.set_active_tab.assert_not_called()
     assert len(snacks) == 1
+    assert snacks[0][0] == LAST_SESSION_UNAVAILABLE_MSG
     assert snacks[0][1].get("info") is True
 
 
@@ -110,7 +111,21 @@ def test_open_last_session_info_when_snapshot_has_empty_groups(
         lambda: ([], "files", 1.0),
     )
     bridge.backend.get_results.return_value = []
-    bridge.open_last_session()
+    assert bridge.open_last_session() is False
     bridge.coordinator.scan_completed.assert_not_called()
     assert len(snacks) == 1
+    assert snacks[0][0] == LAST_SESSION_UNAVAILABLE_MSG
+    assert snacks[0][1].get("info") is True
+
+
+def test_open_last_session_unavailable_when_restore_raises(
+    bridge_and_snacks: tuple[StateBridge, list[tuple[str, dict[str, Any]]]],
+) -> None:
+    bridge, snacks = bridge_and_snacks
+    g = _one_group()
+    bridge.backend.get_results.return_value = [g]
+    bridge.coordinator.scan_completed.side_effect = RuntimeError("stale session")
+    assert bridge.open_last_session() is False
+    assert len(snacks) == 1
+    assert snacks[0][0] == LAST_SESSION_UNAVAILABLE_MSG
     assert snacks[0][1].get("info") is True

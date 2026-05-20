@@ -5,11 +5,11 @@ Runs:
   * pytest on audit + core regression tests
   * headless smoke scripts (engine deps, virtual grid, thumb grid)
 
-Writes ``docs/releases/v1.1.0/final_verification.log`` (overwritten each run).
+Writes ``dev/docs/releases/v1.1.0/final_verification.log`` (overwritten each run).
 
 Usage (from repo root)::
 
-    python scripts/post_v1_audit_verify.py
+    python dev/scripts/post_v1_audit_verify.py
 
 Exit code 0 only if every subprocess succeeds.
 
@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = ROOT / "docs" / "releases" / "v1.1.0"
+ROOT = Path(__file__).resolve().parents[2]
+LOG_DIR = ROOT / "dev" / "docs" / "releases" / "v1.1.0"
 LOG_PATH = LOG_DIR / "final_verification.log"
 
 
@@ -61,8 +61,8 @@ def main() -> int:
         f"repo_root={ROOT}",
         "",
         "== Preconditions ==",
-        "- Phase 1–2 closure: recorded in docs/plans/post-v1-audit-plan.md",
-        "- Phase 8.1 DIAG:* removal: enforced by tests/test_post_v1_audit_verification.py",
+        "- Phase 1–2 closure: recorded in dev/docs/plans/post-v1-audit-plan.md",
+        "- Phase 8.1 DIAG:* removal: enforced by dev/tests/test_post_v1_audit_verification.py",
         "",
         "== pytest (audit + turbo + DB smoke) ==",
     ]
@@ -76,11 +76,11 @@ def main() -> int:
             "-m",
             "pytest",
             "-q",
-            "tests/test_post_v1_audit_verification.py",
-            "tests/test_group_invariants.py",
-            "tests/test_turbo_engine_regressions.py",
-            "tests/test_scan_history_db.py",
-            "tests/test_deletion_history_db.py",
+            "dev/tests/test_post_v1_audit_verification.py",
+            "dev/tests/test_group_invariants.py",
+            "dev/tests/test_turbo_engine_regressions.py",
+            "dev/tests/test_scan_history_db.py",
+            "dev/tests/test_deletion_history_db.py",
         ],
         lines,
         env,
@@ -91,21 +91,21 @@ def main() -> int:
         return rc
 
     lines.append("== smoke_engine_deps.py ==")
-    rc = _run([sys.executable, "scripts/smoke_engine_deps.py"], lines, env)
+    rc = _run([sys.executable, "dev/scripts/smoke_engine_deps.py"], lines, env)
     if rc != 0:
         lines.append("FAIL: smoke_engine_deps")
         LOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return rc
 
     lines.append("== smoke_virtual_grid.py ==")
-    rc = _run([sys.executable, "scripts/smoke_virtual_grid.py"], lines, env)
+    rc = _run([sys.executable, "dev/scripts/smoke_virtual_grid.py"], lines, env)
     if rc != 0:
         lines.append("FAIL: smoke_virtual_grid")
         LOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return rc
 
     lines.append("== smoke_thumb_grid.py ==")
-    rc = _run([sys.executable, "scripts/smoke_thumb_grid.py"], lines, env)
+    rc = _run([sys.executable, "dev/scripts/smoke_thumb_grid.py"], lines, env)
     if rc != 0:
         lines.append("FAIL: smoke_thumb_grid")
         LOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")

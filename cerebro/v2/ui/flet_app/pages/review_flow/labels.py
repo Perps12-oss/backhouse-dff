@@ -19,6 +19,21 @@ def duplicate_kind_label(similarity_type: str) -> str:
     return "Duplicate group"
 
 
+def duplicate_kind_tooltip(similarity_type: str) -> str:
+    st = (similarity_type or "").strip().lower()
+    if st == "exact":
+        return "Files share the same cryptographic hash — byte-for-byte identical."
+    if st in {"visual", "image", "perceptual"}:
+        return "Files look alike (perceptual hash) but may differ in bytes or metadata."
+    return "Grouped as duplicates by the active scan engine."
+
+
+def confidence_tooltip(confidence: float, similarity_type: str) -> str:
+    kind = duplicate_kind_tooltip(similarity_type)
+    line = confidence_line(confidence)
+    return f"{kind} {line}"
+
+
 def confidence_line(confidence: float) -> str:
     c = float(confidence or 0.0)
     if c >= 0.99:

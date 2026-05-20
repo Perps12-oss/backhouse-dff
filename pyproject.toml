@@ -10,7 +10,7 @@ dependencies = [
     "send2trash>=1.8.0",
     "imagehash>=4.3.1",
     "numpy>=1.24.0",
-    "flet>=0.25.0",
+    "flet>=0.84.0,<0.85.0",
     "structlog>=24.0.0",
     "xxhash>=3.5.0",
 ]
@@ -34,13 +34,14 @@ select = [
 "cerebro/cli.py" = ["T201"]          # intentional CLI user output
 "cerebro/__main__.py" = ["T201"]     # intentional startup output
 "cerebro/runtime_deps.py" = ["T201"] # intentional dependency-check output
-"scripts/**" = ["T201"]              # dev/smoke scripts
-"tests/**" = ["T201"]                # test diagnostic output
+"dev/scripts/**" = ["T201"]          # dev/smoke scripts
+"dev/tests/**" = ["T201"]            # test diagnostic output
 
 # ----------------------------------------------------------------------------
 # mypy — gradual typing
 # ----------------------------------------------------------------------------
 [tool.pytest.ini_options]
+testpaths = ["dev/tests"]
 markers = [
     "limit_memory: pytest-memray memory ceiling (no-op without --memray flag)",
 ]
@@ -49,5 +50,5 @@ markers = [
 python_version = "3.10"
 ignore_missing_imports = true   # third-party libs without stubs
 exclude = [
-    "tests/",
+    "dev/tests/",
 ]

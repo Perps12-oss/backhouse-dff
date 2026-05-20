@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, Dict
 import flet as ft
 
 from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import AUTO_MARK_RULE_OPTIONS
-from cerebro.v2.ui.flet_app.multigradient_themes import GRADIENT_THEMES
-from cerebro.v2.ui.flet_app.palette_themes import resolve_preset_id
+from cerebro.v2.ui.flet_app.multigradient_themes import gradient_by_id, gradient_themes_for_picker
+from cerebro.v2.ui.flet_app.palette_themes import DEFAULT_PRESET_ID, resolve_preset_id
 from cerebro.v2.ui.flet_app.design_system.cards import flat_card
 from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
+from cerebro.v2.ui.flet_app.flet_compat import dropdown_handler_kwargs
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
@@ -210,7 +211,7 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("file_mode", {})
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
-        self._settings["appearance"].setdefault("ui_theme_preset", "flet_base")
+        self._settings["appearance"].setdefault("ui_theme_preset", DEFAULT_PRESET_ID)
         perf = self._settings.setdefault("performance", {})
         perf.setdefault("max_threads", 0)
         perf.setdefault("hash_cache_enabled", True)
@@ -260,7 +261,7 @@ class SettingsPage(ft.Column):
         self._deletion_similarity_label.value = f"Matching level: {int(self._deletion_similarity_slider.value)}%"
 
         preset_id = resolve_preset_id(
-            str(self._settings["appearance"].get("ui_theme_preset", "flet_base"))
+            str(self._settings["appearance"].get("ui_theme_preset", DEFAULT_PRESET_ID))
         )
         self._bridge.apply_preset_theme(preset_id)
         if hasattr(self, "_theme_dropdown"):
@@ -379,24 +380,44 @@ class SettingsPage(ft.Column):
             )
         )
         selected_pid = resolve_preset_id(
-            str(self._settings["appearance"].get("ui_theme_preset", "flet_base"))
+            str(self._settings["appearance"].get("ui_theme_preset", DEFAULT_PRESET_ID))
         )
-        self._theme_preview = ft.Container(
-            width=48,
-            height=28,
-            border_radius=6,
-            border=ft.border.all(1, t.colors.border),
+        self._theme_preview = ft.Row(
+            [
+                ft.Container(
+                    width=48,
+                    height=28,
+                    border_radius=6,
+                    border=ft.border.all(1, t.colors.border),
+                ),
+                ft.Container(
+                    width=14,
+                    height=14,
+                    border_radius=7,
+                    border=ft.border.all(1, t.colors.border),
+                    tooltip="Accent",
+                ),
+                ft.Container(
+                    width=14,
+                    height=14,
+                    border_radius=7,
+                    border=ft.border.all(1, t.colors.border),
+                    tooltip="Apply cleanup (critical)",
+                ),
+            ],
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._update_theme_preview(selected_pid)
         self._theme_dropdown = ft.Dropdown(
             width=320,
             value=selected_pid,
             options=[
-                ft.dropdown.Option(key=g.id, text=g.name) for g in GRADIENT_THEMES
+                ft.dropdown.Option(key=g.id, text=g.name) for g in gradient_themes_for_picker()
             ],
-            on_select=self._on_theme_dropdown_change,
             border_radius=8,
             bgcolor=t.colors.bg3,
+            **dropdown_handler_kwargs(self._on_theme_dropdown_change),
         )
         content.controls.append(
             ft.Row(
@@ -654,7 +675,7 @@ class SettingsPage(ft.Column):
     # Theme picker
     # ------------------------------------------------------------------
     def _on_theme_dropdown_change(self, e: ft.ControlEvent) -> None:
-        preset_id = str(getattr(e.control, "value", "") or "flet_base")
+        preset_id = str(getattr(e.control, "value", "") or DEFAULT_PRESET_ID)
         self._on_preset_selected(preset_id)
 
     def _on_preset_selected(self, preset_id: str) -> None:
@@ -666,19 +687,25 @@ class SettingsPage(ft.Column):
             self._theme_dropdown.value = pid
 
     def _update_theme_preview(self, theme_id: str) -> None:
-        from cerebro.v2.ui.flet_app.multigradient_themes import gradient_by_id
-
         g = gradient_by_id(theme_id)
         if g is None or not hasattr(self, "_theme_preview"):
             return
-        self._theme_preview.gradient = ft.LinearGradient(
+        row = self._theme_preview
+        if not isinstance(row, ft.Row) or len(row.controls) < 3:
+            return
+        shell_sw = row.controls[0]
+        accent_sw = row.controls[1]
+        critical_sw = row.controls[2]
+        shell_sw.gradient = ft.LinearGradient(
             begin=ft.Alignment(0, -1),
             end=ft.Alignment(0, 1),
             colors=[g.gradient_top, g.gradient_bottom],
         )
+        accent_sw.bgcolor = g.accent
+        critical_sw.bgcolor = self._t.colors.action_critical
         if self._is_mounted():
             try:
-                self._theme_preview.update()
+                row.update()
             except RuntimeError:
                 pass
 
@@ -751,7 +778,7 @@ class SettingsPage(ft.Column):
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
         self._settings["appearance"]["ui_theme_preset"] = resolve_preset_id(
-            str(getattr(self._theme_dropdown, "value", None) or "flet_base")
+            str(getattr(self._theme_dropdown, "value", None) or DEFAULT_PRESET_ID)
         )
 
         self._settings["performance"]["max_threads"] = int(self._perf_threads_slider.value)
@@ -887,7 +914,7 @@ class SettingsPage(ft.Column):
         self._cancel_btn.style = ft.ButtonStyle(color=self._t.colors.fg2)
 
         pid = resolve_preset_id(
-            str(self._settings.get("appearance", {}).get("ui_theme_preset", "flet_base"))
+            str(self._settings.get("appearance", {}).get("ui_theme_preset", DEFAULT_PRESET_ID))
         )
         if hasattr(self, "_theme_dropdown"):
             self._theme_dropdown.value = pid

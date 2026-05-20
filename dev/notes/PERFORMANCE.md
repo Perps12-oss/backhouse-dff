@@ -5,7 +5,7 @@ This document captures how to measure UI flush cost for large duplicate sets and
 ## Chunked list profiling (`ChunkedViewBuilder`)
 
 1. Set environment variable `CEREBRO_PROFILE_CHUNKED=1` (or `true` / `yes`).
-2. Run the Flet app, complete a real scan so the Review tab has duplicate groups, open **Review** (v2 flow) → **Browse**, and scroll through the list. For synthetic large lists in automated or scratch tests, build `DuplicateGroup` lists (see `tests/review_flow_fixtures.duplicate_groups_for_tests`) and call `ReviewFlowHost.load_results` from a small script.
+2. Run the Flet app, complete a real scan so the Review tab has duplicate groups, open **Review** (v2 flow) → **Browse**, and scroll through the list. For synthetic large lists in automated or scratch tests, build `DuplicateGroup` lists (see `dev/tests/review_flow_fixtures.duplicate_groups_for_tests`) and call `ReviewFlowHost.load_results` from a small script.
 3. Watch logs for lines like `[CHUNK_PERF] async_tick safe_update XX.XX ms` emitted from `cerebro/v2/ui/flet_app/components/common/chunked_view.py`.
 
 **Interpretation**
@@ -25,7 +25,7 @@ This document captures how to measure UI flush cost for large duplicate sets and
 
 ## Optional local stress counts
 
-Generating **50k / 100k / 500k** synthetic groups is intentionally **not** part of CI (too slow / too much memory). For local experiments, generate a large list with `duplicate_groups_for_tests` in `tests/review_flow_fixtures.py`, pass it to `load_results` from a scratch script, then use `CEREBRO_PROFILE_CHUNKED` as above.
+Generating **50k / 100k / 500k** synthetic groups is intentionally **not** part of CI (too slow / too much memory). For local experiments, generate a large list with `duplicate_groups_for_tests` in `dev/tests/review_flow_fixtures.py`, pass it to `load_results` from a scratch script, then use `CEREBRO_PROFILE_CHUNKED` as above.
 
 ## Future work (not yet implemented)
 

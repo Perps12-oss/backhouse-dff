@@ -68,6 +68,16 @@ RULE_LABELS = [
     ("avoid_copy", 'Avoid "(1)" & "Copy"'),
 ]
 
+RULE_TOOLTIPS: dict[str, str] = {
+    "keep_newest": "Keep the file with the latest modification time; mark older copies for removal.",
+    "keep_oldest": "Keep the earliest modified file; mark newer copies for removal.",
+    "keep_largest": "Keep the largest file by size; mark smaller duplicates for removal.",
+    "keep_smallest": "Keep the smallest file; mark larger duplicates for removal.",
+    "keep_shortest_path": "Keep the file with the shortest path; useful when copies live in deeper folders.",
+    "avoid_copy": 'Prefer originals over names containing "(1)", "copy", or "copy of".',
+    "keep_first": "Keep the first file in the group list order; mark the rest for removal.",
+}
+
 # Deletion settings auto-mark: same rules plus list-order keeper.
 AUTO_MARK_RULE_OPTIONS = [*RULE_LABELS, ("keep_first", "Keep First")]
 

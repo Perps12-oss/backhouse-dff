@@ -158,12 +158,35 @@ def pill_filled_accent(
 
 def pill_filled_danger(t: ThemeTokens) -> ft.ButtonStyle:
     c = t.colors
+    label = text_on_fill(c.danger)
     return ft.ButtonStyle(
         bgcolor=c.danger,
-        color="#FFFFFF",
-        icon_color="#FFFFFF",
+        color=label,
+        icon_color=label,
         overlay_color=ft.Colors.with_opacity(0.20, c.danger_hover),
         padding=_PILL_PAD,
         shape=_PILL_SHAPE,
         text_style=ft.TextStyle(size=11, weight=ft.FontWeight.W_700),
+    )
+
+
+def pill_filled_critical(
+    t: ThemeTokens,
+    *,
+    padding: ft.Padding | None = None,
+    text_size: int = 12,
+    weight: str = ft.FontWeight.W_700,
+) -> ft.ButtonStyle:
+    """Irreversible actions only (Apply cleanup, confirmed delete). Routine CTAs use ``pill_filled_accent``."""
+    c = t.colors
+    fill = c.action_critical
+    label = text_on_fill(fill)
+    return ft.ButtonStyle(
+        bgcolor=fill,
+        color=label,
+        icon_color=label,
+        overlay_color=ft.Colors.with_opacity(0.18, c.action_critical_hover),
+        padding=padding or ft.Padding.symmetric(horizontal=16, vertical=10),
+        shape=_PILL_SHAPE,
+        text_style=ft.TextStyle(size=text_size, weight=weight),
     )

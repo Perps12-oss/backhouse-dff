@@ -24,6 +24,7 @@ from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
 from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
 from cerebro.v2.ui.flet_app.utils.shortcuts import register_global_shortcuts
+from cerebro.v2.ui.flet_app.flet_compat import assert_supported_flet
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 _log = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ def _clamp_window_to_virtual_screen(page: ft.Page) -> None:
 
 def run_flet_app() -> None:
     """Launch the Cerebro Flet UI."""
+    assert_supported_flet()
     ft.app(target=_main, port=0)
 
 
@@ -216,9 +218,9 @@ def _main(page: ft.Page) -> None:
         _fs0 = int(_appear0.get("font_size", 13) or 13)
     set_ui_font_size_px(_fs0)
 
-    from cerebro.v2.ui.flet_app.palette_themes import resolve_preset_id
+    from cerebro.v2.ui.flet_app.palette_themes import DEFAULT_PRESET_ID, resolve_preset_id
 
-    _preset_id = resolve_preset_id(str((_appear0 or {}).get("ui_theme_preset", "flet_base")))
+    _preset_id = resolve_preset_id(str((_appear0 or {}).get("ui_theme_preset", DEFAULT_PRESET_ID)))
     bridge.apply_preset_theme(_preset_id)
 
     dashboard_page = DashboardPage(bridge, folder_picker)

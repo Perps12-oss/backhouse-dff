@@ -3,7 +3,7 @@ from __future__ import annotations
 from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.state import ReviewFlowState
 
-from tests.review_flow_fixtures import duplicate_groups_for_tests
+from review_flow_fixtures import duplicate_groups_for_tests
 
 
 def test_router_push_and_back() -> None:

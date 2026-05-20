@@ -4,8 +4,8 @@ Post–v1 audit automated verification (Phase 8.5 subset).
 These tests encode checklist items that do not require the production
 5-root dataset or a GUI. Full manual bars (count inversion, ±1% emit
 baseline, long ``final_verification`` run logs) remain operator-owned —
-see ``docs/releases/v1.1.0/final_verification.log`` for the latest
-``scripts/post_v1_audit_verify.py`` aggregate output.
+see ``dev/docs/releases/v1.1.0/final_verification.log`` for the latest
+``dev/scripts/post_v1_audit_verify.py`` aggregate output.
 """
 from __future__ import annotations
 

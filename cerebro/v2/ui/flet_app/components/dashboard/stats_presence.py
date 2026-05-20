@@ -122,9 +122,9 @@ class DashboardStatsPresence:
       self._stats_row_signature = new_sig
       self._stats_row.visible = (scans_n > 0) or (dupes_n > 0) or (bytes_n > 0)
       cards = [
-          (ft.icons.Icons.SEARCH, "#22D3EE", "Scans Run", scans_n, f"{scans_n:,}"),
-          (ft.icons.Icons.CONTENT_COPY, "#A78BFA", "Duplicates Found", dupes_n, f"{dupes_n:,}"),
-          (ft.icons.Icons.STORAGE, "#34D399", "Space Recovered", bytes_n, fmt_size(bytes_n)),
+          (ft.icons.Icons.SEARCH, t.colors.primary, "Scans Run", scans_n, f"{scans_n:,}"),
+          (ft.icons.Icons.CONTENT_COPY, t.colors.accent, "Duplicates Found", dupes_n, f"{dupes_n:,}"),
+          (ft.icons.Icons.STORAGE, t.colors.success, "Space Recovered", bytes_n, fmt_size(bytes_n)),
       ]
       self._stat_value_texts = []
       self._stat_count_targets = []
@@ -235,10 +235,10 @@ class DashboardStatsPresence:
       since_7d = time.time() - 7 * 24 * 3600
       n_scans, g_sum, f_sum, b_sum = get_scan_history_db().aggregate_since(since_7d)
       chips: list[ft.Control] = [
-          self._insight_chip(t, "7-day scans", f"{n_scans}", "#22D3EE"),
-          self._insight_chip(t, "7-day duplicate paths (total)", f"{f_sum:,}", "#A78BFA"),
-          self._insight_chip(t, "7-day reclaimable (total)", fmt_size(int(b_sum)), "#34D399"),
-          self._insight_chip(t, "7-day groups (total)", f"{g_sum:,}", "#F472B6"),
+          self._insight_chip(t, "7-day scans", f"{n_scans}", t.colors.primary),
+          self._insight_chip(t, "7-day duplicate paths (total)", f"{f_sum:,}", t.colors.accent),
+          self._insight_chip(t, "7-day reclaimable (total)", fmt_size(int(b_sum)), t.colors.success),
+          self._insight_chip(t, "7-day groups (total)", f"{g_sum:,}", t.colors.warning),
       ]
 
       if summary:
@@ -249,9 +249,9 @@ class DashboardStatsPresence:
           b = summary.get("age_buckets") or {}
           chips.extend(
               [
-                  self._insight_chip(t, f"{prefix} · <7d files", fmt_size(int(b.get("under_7d", 0))), "#F97316"),
-                  self._insight_chip(t, f"{prefix} · 7–30d", fmt_size(int(b.get("d7_to_30", 0))), "#EAB308"),
-                  self._insight_chip(t, f"{prefix} · 30d+", fmt_size(int(b.get("over_30d", 0))), "#94A3B8"),
+                  self._insight_chip(t, f"{prefix} · <7d files", fmt_size(int(b.get("under_7d", 0))), t.colors.warning),
+                  self._insight_chip(t, f"{prefix} · 7–30d", fmt_size(int(b.get("d7_to_30", 0))), t.colors.fg_muted),
+                  self._insight_chip(t, f"{prefix} · 30d+", fmt_size(int(b.get("over_30d", 0))), t.colors.border_strong),
               ]
           )
           for row in (summary.get("top_folders") or [])[:2]:
@@ -262,7 +262,7 @@ class DashboardStatsPresence:
                       t,
                       f"{prefix} · {self._short_folder_label(pth, 36)}",
                       fmt_size(br),
-                      "#0EA5E9",
+                      t.colors.primary,
                   )
               )
 

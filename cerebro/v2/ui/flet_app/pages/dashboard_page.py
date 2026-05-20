@@ -216,13 +216,10 @@ class DashboardPage(ft.Column):
             return True
 
     def _hover_glow_color(self, variant: str = "primary") -> str:
-        if self._is_dark_theme():
-            if variant == "secondary":
-                return "#A78BFA"
-            return str(self._t.colors.accent)
+        c = self._t.colors
         if variant == "secondary":
-            return "#4F46E5"
-        return str(self._t.colors.accent)
+            return str(c.accent)
+        return str(c.primary)
 
     def _hover_shadow(self, color: str, strong: bool = False) -> ft.BoxShadow:
         return ft.BoxShadow(
@@ -543,7 +540,7 @@ class DashboardPage(ft.Column):
             cb = ft.Checkbox(
                 label=label,
                 value=(key in self._selected_modes),
-                active_color="#22D3EE",
+                active_color=t.colors.primary,
                 label_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
                 on_change=lambda e, k=key: self._on_scan_type_selected(k, e),
                 disabled=(key == "files" and has_specific),
@@ -611,10 +608,13 @@ class DashboardPage(ft.Column):
         return "Running: " + " + ".join(names)
 
     def _open_last_session(self, e=None):
+        from cerebro.v2.ui.flet_app.services.state_bridge import LAST_SESSION_UNAVAILABLE_MSG
+
         try:
             self._bridge.open_last_session()
-        except Exception as err:
-            _log.error(f"Failed to open last session: {err}")
+        except Exception:
+            _log.exception("Failed to open last session")
+            self._bridge.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
 
     # ------------------------------------------------------------------
     # User Interactions
@@ -871,8 +871,9 @@ class DashboardPage(ft.Column):
         inner = self._folder_panel._inner_container
         original = inner.border
         original_bg = inner.bgcolor
-        inner.border = ft.border.all(2, "#EF4444")
-        inner.bgcolor = ft.Colors.with_opacity(0.12, "#EF4444")
+        danger = self._t.colors.danger
+        inner.border = ft.border.all(2, danger)
+        inner.bgcolor = ft.Colors.with_opacity(0.12, danger)
         DashboardPage._safe_update(inner)
         await asyncio.sleep(0.35)
         inner.border = original

@@ -7,6 +7,7 @@ from typing import Callable, List, Literal, Optional, Tuple
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_filled_critical
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 ApplyStep = Literal["summary", "confirm", "progress", "outcome"]
@@ -76,7 +77,11 @@ def build_apply_sheet_column(
                 ft.Row(
                     [
                         footer_close,
-                        ft.FilledButton("Continue", on_click=on_continue_summary),
+                        ft.FilledButton(
+                            "Continue",
+                            on_click=on_continue_summary,
+                            style=pill_filled_accent(t, text_size=t.typography.size_sm),
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
                 ),
@@ -100,7 +105,11 @@ def build_apply_sheet_column(
                     [
                         ft.TextButton("Back", on_click=on_back_confirm),
                         footer_close,
-                        ft.FilledButton("Move files", on_click=on_apply),
+                        ft.FilledButton(
+                            "Move files",
+                            on_click=on_apply,
+                            style=pill_filled_critical(t, text_size=t.typography.size_sm),
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
                 ),

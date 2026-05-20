@@ -30,7 +30,7 @@ Status key: ✅ done · ⚠️ partial · ❌ not done
 |------|--------|------------|
 | `animate_if` / `animation_or_none` | ✅ | `utils/motion.py` |
 | `run_if_animated` | ✅ | `utils/motion.py` |
-| Unit tests (motion + shortcuts) | ✅ | `tests/test_flet_utils.py` |
+| Unit tests (motion + shortcuts) | ✅ | `dev/tests/test_flet_utils.py` |
 
 ## Global shortcuts
 
