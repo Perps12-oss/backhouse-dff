@@ -18,7 +18,10 @@ MC-5: _trash_history is an instance field (not a module global) so test fixtures
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -238,18 +241,67 @@ class DeleteService:
     # Internal managed-trash implementation (H-4: rollback on failure)
     # ------------------------------------------------------------------
 
+    def _managed_trash_root_for(self, src: Path, tx_id: str) -> Path:
+        """Return the managed-trash tx dir on the SAME volume as ``src`` when possible.
+
+        A same-volume move is an atomic rename: fast, and immune to the WinError 5
+        a read-only source file triggers when a cross-drive ``shutil.move`` tries to
+        ``unlink`` the original after copying it. Falls back to the home-volume trash
+        when a per-volume dir can't be created (e.g. read-only volume) or on POSIX,
+        where a mount point isn't reliably derivable from a path.
+        """
+        home_root = Path.home() / ".cerebro" / "trash" / "managed" / tx_id
+
+        # Same volume as home → no need to scatter trash dirs; use the home trash.
+        try:
+            if src.stat().st_dev == Path.home().stat().st_dev:
+                home_root.mkdir(parents=True, exist_ok=True)
+                return home_root
+        except OSError:
+            pass
+
+        # Different volume: on Windows place trash on the source drive so the move
+        # stays same-volume. POSIX mounts fall through to the home trash.
+        if sys.platform == "win32" and src.drive:
+            candidate = Path(src.drive + "\\") / ".cerebro" / "trash" / "managed" / tx_id
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                if candidate.stat().st_dev == src.stat().st_dev:
+                    return candidate
+            except OSError:
+                pass
+
+        home_root.mkdir(parents=True, exist_ok=True)
+        return home_root
+
+    @staticmethod
+    def _move_with_readonly_retry(src: Path, dst: Path) -> None:
+        """``shutil.move`` with a one-shot Windows retry that clears the read-only
+        attribute, which otherwise makes the source ``unlink`` fail with WinError 5."""
+        try:
+            shutil.move(str(src), str(dst))
+            return
+        except PermissionError:
+            # WinError 5 on a read-only file. Clearing write bits is destructive on
+            # POSIX (strips group/other), so only do this on Windows.
+            if sys.platform != "win32":
+                raise
+            os.chmod(src, stat.S_IWRITE)
+            _log.info("Cleared read-only attribute and retrying trash move: %s", src)
+            shutil.move(str(src), str(dst))
+
     def _delete_to_managed_trash(
         self,
         paths: list[str],
         sizes_by_path: dict[str, int],
         progress_cb: Optional[Callable[[int, int, str], None]],
     ) -> tuple[list[str], list[tuple[str, str]]]:
-        """Move files to ~/.cerebro/trash/managed/<tx_id>/ with rollback on mid-batch failure."""
-        trash_root = Path.home() / ".cerebro" / "trash" / "managed"
-        trash_root.mkdir(parents=True, exist_ok=True)
+        """Move files to a managed-trash dir with rollback on mid-batch failure.
+
+        The trash dir is placed on the same volume as each source file when possible
+        (see ``_managed_trash_root_for``) so the move is an atomic rename.
+        """
         tx_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        tx_root = trash_root / tx_id
-        tx_root.mkdir(parents=True, exist_ok=True)
 
         moved: list[tuple[str, str]] = []
         deleted_paths: list[str] = []
@@ -269,6 +321,7 @@ class DeleteService:
                 continue
 
             try:
+                tx_root = self._managed_trash_root_for(src, tx_id)
                 rel = src.drive.replace(":", "") + src.as_posix().replace(":", "")
                 safe_rel = rel.lstrip("/").replace("..", "_")
                 dst = tx_root / safe_rel
@@ -277,7 +330,7 @@ class DeleteService:
                 while dst.exists():
                     counter += 1
                     dst = dst.with_name(f"{dst.stem}__dup{counter}{dst.suffix}")
-                shutil.move(str(src), str(dst))
+                self._move_with_readonly_retry(src, dst)
                 moved.append((str(src), str(dst)))
                 deleted_paths.append(str(src))
             except (OSError, shutil.Error) as exc:

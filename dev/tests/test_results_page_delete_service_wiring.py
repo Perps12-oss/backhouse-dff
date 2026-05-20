@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _review_host_ast() -> ast.Module:
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parent.parent.parent
     path = root / "cerebro" / "v2" / "ui" / "flet_app" / "pages" / "review_flow" / "host.py"
     return ast.parse(path.read_text(encoding="utf-8"))
 

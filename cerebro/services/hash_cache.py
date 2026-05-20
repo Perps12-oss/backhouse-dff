@@ -546,3 +546,146 @@ class HashCache:
             conn = self._require_conn()
             conn.execute("DELETE FROM file_hashes")
             conn.commit()
+
+
+class TierAPrefixCache:
+    """Isolated cache of Tier-A prefix hashes (separate DB/table from ``HashCache``).
+
+    Why a *separate* store rather than the ``file_hashes`` table: that table keeps
+    one row per path with shared size/mtime/dev/inode columns, so a Tier-A writer
+    using a different stat signature would corrupt the full-hash entry that drives
+    real dedup (and therefore user deletions). Keeping Tier-A entries in their own
+    table makes that impossible.
+
+    Safety model: a Tier-A prefix hash can only ever *reject* a candidate; survivors
+    are always re-read by the quick/full-hash phases. So a stale cache entry yields,
+    at worst, a conservative *missed* duplicate — never a false match, and never a
+    wrong deletion. Entries are keyed by (path, size, mtime_ns, nbytes, algo) and
+    invalidate automatically when a file changes.
+
+    Access is single-threaded (the Tier-A driver thread does all get/set); a lock
+    guards writes defensively.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = Path(db_path)
+        self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
+
+    def open(self) -> None:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tier_a_prefix (
+              path TEXT PRIMARY KEY,
+              size INTEGER NOT NULL,
+              mtime_ns INTEGER NOT NULL,
+              nbytes INTEGER NOT NULL,
+              algo TEXT NOT NULL,
+              hash TEXT NOT NULL,
+              updated_ts REAL NOT NULL
+            )
+            """
+        )
+        conn.commit()
+        self._conn = conn
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.commit()
+                    self._conn.close()
+                except sqlite3.Error:
+                    pass
+                self._conn = None
+
+    @staticmethod
+    def mtime_to_ns(mtime: float) -> int:
+        """Deterministic float-seconds → int-ns key (stable for unchanged files)."""
+        return _clamp_sqlite_int(int(round(float(mtime) * 1_000_000_000)))
+
+    def get_many(self, keys: list) -> dict:
+        """Batch lookup.
+
+        ``keys`` — list of (path_str, size, mtime_ns, nbytes, algo).
+        Returns {path_str: hash} only for rows whose stored signature matches.
+        """
+        if self._conn is None or not keys:
+            return {}
+        want: dict = {}
+        for path_str, size, mtime_ns, nbytes, algo in keys:
+            want[str(path_str)] = (
+                _clamp_sqlite_int(size),
+                _clamp_sqlite_int(mtime_ns),
+                int(nbytes),
+                str(algo),
+            )
+        results: dict = {}
+        path_strs = list(want.keys())
+        for i in range(0, len(path_strs), HashCache._SQLITE_MAX_VARS):
+            chunk = path_strs[i : i + HashCache._SQLITE_MAX_VARS]
+            ph = ",".join("?" * len(chunk))
+            for row in self._conn.execute(
+                f"SELECT path, size, mtime_ns, nbytes, algo, hash "
+                f"FROM tier_a_prefix WHERE path IN ({ph})",
+                chunk,
+            ):
+                p, size, mtime_ns, nbytes, algo, h = row
+                if want.get(p) == (size, mtime_ns, int(nbytes), str(algo)):
+                    results[p] = h
+        return results
+
+    def set_many(self, rows: list) -> None:
+        """Batch upsert.
+
+        ``rows`` — list of (path_str, size, mtime_ns, nbytes, algo, hash).
+        """
+        if self._conn is None or not rows:
+            return
+        now = time.time()
+        payload = [
+            (
+                str(p),
+                _clamp_sqlite_int(size),
+                _clamp_sqlite_int(mtime_ns),
+                int(nbytes),
+                str(algo),
+                str(h),
+                now,
+            )
+            for (p, size, mtime_ns, nbytes, algo, h) in rows
+        ]
+        for attempt in range(5):
+            try:
+                with self._lock:
+                    self._conn.executemany(
+                        """
+                        INSERT INTO tier_a_prefix
+                          (path, size, mtime_ns, nbytes, algo, hash, updated_ts)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                          size=excluded.size, mtime_ns=excluded.mtime_ns,
+                          nbytes=excluded.nbytes, algo=excluded.algo,
+                          hash=excluded.hash, updated_ts=excluded.updated_ts
+                        """,
+                        payload,
+                    )
+                    self._conn.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower() and attempt < 4:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+
+    def clear_all(self) -> None:
+        if self._conn is None:
+            return
+        with self._lock:
+            self._conn.execute("DELETE FROM tier_a_prefix")
+            self._conn.commit()

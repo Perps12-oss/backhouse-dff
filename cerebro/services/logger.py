@@ -257,6 +257,15 @@ def _configure_root(
 
         formatter = _make_formatter()
 
+        # Windows consoles default to a legacy code page (cp1252), which mojibakes
+        # non-ASCII paths in console output (e.g. "¼áÞ¿¡á…"). Force UTF-8 so paths
+        # render correctly; backslashreplace guarantees we never crash on odd bytes.
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")  # type: ignore[union-attr]
+        except (ValueError, OSError):
+            pass
+
         sh = logging.StreamHandler(sys.stdout)
         sh.setLevel(level)
         sh.setFormatter(formatter)

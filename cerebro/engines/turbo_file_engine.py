@@ -22,11 +22,20 @@ Limitations (v1):
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+
+def _env_int(name: str) -> int:
+    """Read a non-negative int env override; 0 / unset / invalid → 0 (no override)."""
+    try:
+        return max(0, int(os.environ.get(name, "0") or "0"))
+    except (TypeError, ValueError):
+        return 0
 
 from cerebro.core.paths import default_cerebro_cache_dir
 from cerebro.core.utils import DEFAULT_SKIP_DIRS
@@ -101,12 +110,31 @@ def _detect_io_worker_cap(folders: List[Path]) -> tuple[int, str]:
             return _storage_cap_cache[drive]
 
         cap, label = _probe_windows_storage(drive)
+        # When physical-media type is unknown, the drive is often an external/USB
+        # device. Surface that so the conservative cap is at least actionable.
+        if label == "unknown" and drive and _is_removable_drive(drive):
+            label = "removable_unknown"
         if drive:
             _storage_cap_cache[drive] = (cap, label)
         return cap, label
 
     # Non-Windows: assume SATA SSD
     return 16, "sata_ssd_assumed"
+
+
+def _is_removable_drive(drive: str) -> bool:
+    """True if ``drive`` (a letter like 'I') is a removable/USB volume (Windows only)."""
+    import sys
+
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        DRIVE_REMOVABLE = 2
+        return ctypes.windll.kernel32.GetDriveTypeW(f"{drive}:\\") == DRIVE_REMOVABLE
+    except Exception:
+        return False
 
 
 def _probe_windows_storage(drive: Optional[str]) -> tuple[int, str]:
@@ -478,6 +506,15 @@ class TurboFileEngine(BaseEngine):
                 storage_label,
                 hash_workers,
             )
+            if storage_label in ("unknown", "removable_unknown") and _env_int(
+                "CEREBRO_TURBO_TIERA_WORKERS"
+            ) == 0:
+                logger.info(
+                    "Storage type %s — Tier-A uses a conservative worker cap. If this is a "
+                    "fast external SSD, set CEREBRO_TURBO_TIERA_WORKERS (e.g. 24) to speed up "
+                    "the candidate filter.",
+                    storage_label,
+                )
 
         # Phase-aware worker caps (Phase 3). When enable_phase_worker_policy is
         # active, Tier-A uses a conservative cap (avoid disk thrash on large reads),
@@ -496,6 +533,21 @@ class TurboFileEngine(BaseEngine):
             _tier_a_workers = 0
             _quick_hash_workers = 0
             _full_hash_workers = 0
+
+        # Power-user overrides (opt-in; 0/unset = no change). Lets users tune
+        # seek-bound external/unknown drives where auto-detection is conservative.
+        # Measure the effect via the "cand/s, workers=N" figure in the Tier-A log.
+        _hash_override = _env_int("CEREBRO_TURBO_HASH_WORKERS")
+        if _hash_override > 0:
+            hash_workers = max(1, min(_hash_override, 64))
+            logger.info("Hash workers overridden: CEREBRO_TURBO_HASH_WORKERS=%d", hash_workers)
+            if _enable_phase_policy and _env_int("CEREBRO_TURBO_TIERA_WORKERS") == 0:
+                _tier_a_workers = max(2, min(hash_workers, 32))
+        _tier_a_override = _env_int("CEREBRO_TURBO_TIERA_WORKERS")
+        if _tier_a_override > 0:
+            _enable_phase_policy = True
+            _tier_a_workers = max(1, min(_tier_a_override, 64))
+            logger.info("Tier-A workers overridden: CEREBRO_TURBO_TIERA_WORKERS=%d", _tier_a_workers)
 
         # Build TurboScanConfig from UI options — accept both naming conventions.
         use_cache = bool(opts.get("incremental_scan", True))

@@ -42,7 +42,7 @@ import sqlite3
 import mmap
 from cerebro.core.models import FileMetadata
 from cerebro.core.paths import default_cerebro_cache_dir
-from cerebro.services.hash_cache import HashCache, StatSignature
+from cerebro.services.hash_cache import HashCache, StatSignature, TierAPrefixCache
 from cerebro.services.logger import get_logger
 from cerebro.core.root_dedup import dedupe_roots
 from cerebro.core.group_invariants import _assert_no_self_duplicates
@@ -810,11 +810,21 @@ class TurboScanner:
         
         self.hash_cache = None
         self.dir_cache = None
-        
+        self.tier_a_cache = None
+
         if self.config.use_cache:
             self.hash_cache = HashCache(cache_dir / "hash_cache.sqlite")
             self.hash_cache.open()
-            
+
+            # Isolated Tier-A prefix cache: lets repeat scans skip the per-file
+            # prefix reads that dominate seek-bound scans. Separate DB so it can
+            # never corrupt the full-hash cache that drives dedup/deletes.
+            try:
+                self.tier_a_cache = TierAPrefixCache(cache_dir / "tier_a_cache.sqlite")
+                self.tier_a_cache.open()
+            except sqlite3.Error:
+                self.tier_a_cache = None
+
             if self.config.incremental:
                 self.dir_cache = DirectoryCache(cache_dir / "dir_cache.sqlite")
         
@@ -829,9 +839,12 @@ class TurboScanner:
             'directories_skipped': 0,
             'hash_cache_hits': 0,
             'hash_cache_misses': 0,
+            'tier_a_cache_hits': 0,
+            'tier_a_cache_misses': 0,
             'total_bytes': 0,
             'elapsed_time': 0,
         }
+        self._tier_a_groups_escalated = 0
 
     def _scan_scope_fingerprint(self) -> Dict[str, Any]:
         def _norm_paths(values: Set[str] | List[str]) -> List[str]:
@@ -888,6 +901,8 @@ class TurboScanner:
         • hash_workers < 2 (not worth the overhead).
         """
         from collections import defaultdict as _dd
+
+        self._tier_a_groups_escalated = 0
 
         candidates_in = sum(len(v) for v in size_groups.values())
         if not size_groups or candidates_in < 2:
@@ -962,6 +977,56 @@ class TurboScanner:
                 except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
                     pass
 
+        # Tier-A prefix cache: on a repeat scan, files unchanged since last time
+        # serve their prefix hash from disk instead of re-reading 4 KiB each — the
+        # dominant cost on seek-bound drives. Only the base-prefix read is cached;
+        # adaptive escalated reads (larger prefix) bypass it.
+        from collections import deque as _deque
+
+        _ta_cache = (
+            self.tier_a_cache
+            if (self.config.use_cache and self.tier_a_cache is not None)
+            else None
+        )
+        _ta_prefetch: Dict[str, str] = {}
+        if _ta_cache is not None:
+            _keys = [
+                (str(path), int(size_key), TierAPrefixCache.mtime_to_ns(mtime), TIER_A_SIZE, tier_algo)
+                for size_key, paths in size_groups.items()
+                for path, mtime in paths
+            ]
+            try:
+                _ta_prefetch = _ta_cache.get_many(_keys)
+            except sqlite3.Error:
+                _ta_prefetch = {}
+        _ta_writeback: "deque" = _deque()
+
+        def _ta_compute(path: Path, mtime: float, size_key: Any, nbytes: int) -> Optional[str]:
+            """Cache-aware Tier-A read (base prefix only; escalated reads bypass cache)."""
+            if _ta_cache is not None and nbytes == TIER_A_SIZE:
+                hit = _ta_prefetch.get(str(path))
+                if hit is not None:
+                    return hit
+                h = compute_partial_hash(path, tier_algo, nbytes)
+                if h is not None:
+                    _ta_writeback.append(
+                        (str(path), int(size_key), TierAPrefixCache.mtime_to_ns(mtime),
+                         nbytes, tier_algo, h)
+                    )
+                return h
+            return compute_partial_hash(path, tier_algo, nbytes)
+
+        def _ta_flush() -> None:
+            if _ta_cache is not None:
+                if _ta_writeback:
+                    try:
+                        _ta_cache.set_many(list(_ta_writeback))
+                    except sqlite3.Error:
+                        pass
+                self.stats['tier_a_cache_hits'] += len(_ta_prefetch)
+                self.stats['tier_a_cache_misses'] += max(0, candidates_in - len(_ta_prefetch))
+                _ta_writeback.clear()
+
         if not self.config.enable_tier_a_adaptive:
             # Chunked flat path — bounded queue depth at scale (1M+ candidates).
             all_jobs: List[Tuple[Any, Path, float]] = []
@@ -981,7 +1046,7 @@ class TurboScanner:
                     chunk = all_jobs[chunk_off : chunk_off + _submit_chunk]
                     futures_map: Dict = {}
                     for size_key, path, mtime in chunk:
-                        fut = pool.submit(compute_tier_a_hash, path, tier_algo)
+                        fut = pool.submit(_ta_compute, path, mtime, size_key, TIER_A_SIZE)
                         futures_map[fut] = (size_key, path, mtime)
                     for fut in as_completed(list(futures_map.keys())):
                         size_key, path, mtime = futures_map[fut]
@@ -1016,6 +1081,7 @@ class TurboScanner:
                     existing.extend(grp_paths)
 
                 candidates_out = sum(len(v) for v in survivors.values())
+                _ta_flush()
                 return survivors, candidates_in, candidates_out
             finally:
                 try:
@@ -1058,7 +1124,7 @@ class TurboScanner:
                         if cancel_event is not None and cancel_event.is_set():
                             abrupt_exit = True
                             return size_groups, candidates_in, candidates_in
-                        fut = pool.submit(compute_partial_hash, path, tier_algo, prefix_bytes)
+                        fut = pool.submit(_ta_compute, path, mtime, size_key, prefix_bytes)
                         grp_futures[fut] = (path, mtime)
 
                     # Collect results for this group.
@@ -1087,6 +1153,7 @@ class TurboScanner:
                         "[Turbo] Tier-A adaptive: %d groups escalated to stronger prefix",
                         self._tier_a_groups_escalated,
                     )
+                _ta_flush()
                 return survivors_adaptive, candidates_in, candidates_out
             finally:
                 try:
@@ -1113,6 +1180,8 @@ class TurboScanner:
                     self.hash_cache.clear_all()
                 if self.dir_cache:
                     self.dir_cache.clear_all()
+                if self.tier_a_cache:
+                    self.tier_a_cache.clear_all()
             except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError, sqlite3.Error):
                 logger.exception("[Turbo] Failed clearing cache on scope change")
         try:
@@ -1549,14 +1618,32 @@ class TurboScanner:
                 scope_total=_scope_total,
             )
             _tier_a_rejected = max(0, _tier_a_in - _tier_a_out)
+            _tier_a_elapsed = time.perf_counter() - _t_tier_a_start
+            _tier_a_workers_used = (
+                self.config.tier_a_workers
+                if (self.config.enable_phase_worker_policy and self.config.tier_a_workers > 0)
+                else max(2, min(self.config.hash_workers, 16))
+            )
             logger.info(
-                "[Turbo] Tier-A filter: candidates_in=%d survivors=%d rejected=%d (%.1f%%) in %.2fs",
+                "[Turbo] Tier-A filter: candidates_in=%d survivors=%d rejected=%d (%.1f%%) "
+                "in %.2fs (%.0f cand/s, workers=%d)",
                 _tier_a_in,
                 _tier_a_out,
                 _tier_a_rejected,
                 100.0 * _tier_a_rejected / max(1, _tier_a_in),
-                time.perf_counter() - _t_tier_a_start,
+                _tier_a_elapsed,
+                _tier_a_in / max(1e-6, _tier_a_elapsed),
+                _tier_a_workers_used,
             )
+            _ta_ch = self.stats.get('tier_a_cache_hits', 0)
+            _ta_cm = self.stats.get('tier_a_cache_misses', 0)
+            if _ta_ch or _ta_cm:
+                logger.info(
+                    "[Turbo] Tier-A prefix cache: hits=%d misses=%d (%.1f%% reads avoided)",
+                    _ta_ch,
+                    _ta_cm,
+                    100.0 * _ta_ch / max(1, _ta_ch + _ta_cm),
+                )
             # Persist Tier-A survivors for resume (Phase 4).
             if self.config.enable_resume_artifacts and ckpt and scan_id and size_groups:
                 try:
@@ -2546,6 +2633,11 @@ class TurboScanner:
         """Clean up resources."""
         if self.hash_cache:
             self.hash_cache.close()
+        if self.tier_a_cache:
+            try:
+                self.tier_a_cache.close()
+            except sqlite3.Error:
+                pass
     
     def __enter__(self):
         return self
