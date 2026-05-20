@@ -622,10 +622,7 @@ class ReviewFlowHost(ft.Column):
         self._apply_step = "summary"
         self._last_apply_outcome = None
         self._apply_undo_snapshot = None
-        self._apply_confirm_chk = ft.Checkbox(
-            label="I understand these files will be moved to app-managed storage (not the OS Recycle Bin).",
-            value=False,
-        )
+        self._apply_confirm_chk = ft.Checkbox(value=False, label="")
         self._apply_progress = ft.ProgressBar(value=0, width=400)
         self._apply_progress_label = ft.Text("Preparing…", size=self._t.typography.size_xs)
         self._apply_outer = ft.Container(padding=0, width=480)

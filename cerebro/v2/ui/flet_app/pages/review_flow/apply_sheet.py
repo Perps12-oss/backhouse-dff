@@ -12,6 +12,33 @@ from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 ApplyStep = Literal["summary", "confirm", "progress", "outcome"]
 
+# AlertDialog content is 480px; minus content_padding (16 each side).
+_APPLY_BODY_WIDTH = 448
+
+_CONFIRM_ACK_TEXT = (
+    "I understand these files will be moved to app-managed storage "
+    "(not the OS Recycle Bin)."
+)
+
+
+def build_confirm_ack_row(checkbox: ft.Checkbox, t: ThemeTokens) -> ft.Row:
+    """Checkbox + wrapped label (Checkbox.label alone does not wrap in Flet)."""
+    checkbox.label = ""
+    return ft.Row(
+        [
+            checkbox,
+            ft.Text(
+                _CONFIRM_ACK_TEXT,
+                size=t.typography.size_xs,
+                color=t.colors.fg,
+                expand=True,
+            ),
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.START,
+        spacing=8,
+        width=_APPLY_BODY_WIDTH,
+    )
+
 
 @dataclass
 class ApplyOutcomeModel:
@@ -59,8 +86,10 @@ def build_apply_sheet_column(
             ),
             ft.Container(height=4),
             ft.Text(
-                "Files are moved to app-managed storage (not the OS Recycle Bin). You can restore the last batch afterwards.",
+                "Files are moved to app-managed storage (not the OS Recycle Bin). "
+                "You can restore the last batch afterwards.",
                 size=t.typography.size_xs,
+                width=_APPLY_BODY_WIDTH,
             ),
         ]
         if protected_count:
@@ -98,8 +127,9 @@ def build_apply_sheet_column(
                 ft.Text(
                     f"Move {delete_count} file(s) — {fmt_size(freed_bytes)} — to managed storage.",
                     size=t.typography.size_xs,
+                    width=_APPLY_BODY_WIDTH,
                 ),
-                confirm_checkbox,
+                build_confirm_ack_row(confirm_checkbox, t),
                 ft.Container(height=8),
                 ft.Row(
                     [
@@ -112,12 +142,16 @@ def build_apply_sheet_column(
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
                 ),
             ],
             spacing=8,
             tight=True,
             scroll=ft.ScrollMode.AUTO,
             height=420,
+            width=_APPLY_BODY_WIDTH,
         )
 
     if step == "progress":
