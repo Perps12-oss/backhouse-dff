@@ -231,6 +231,80 @@ class ReviewFlowState:
         p = str(path).replace("\\", "/").lower()
         return any(p.startswith(prefix.replace("\\", "/").lower()) for prefix in self.protected_path_prefixes)
 
+    def selection_pool(self, group: DuplicateGroup) -> list[DuplicateFile]:
+        """In-scope, unprotected files that participate in mark-for-deletion."""
+        return [
+            f
+            for f in group.files
+            if self.file_in_selection_media_scope(f) and not self.is_path_protected(str(f.path))
+        ]
+
+    def path_marked_for_deletion(self, path: str, group_id: int) -> bool:
+        p = str(path)
+        if p in self.marked_paths:
+            return True
+        sel = self.set_selections.get(group_id)
+        return bool(sel and p in sel.deleted_paths)
+
+    def unmarked_survivor_count(self, group: DuplicateGroup) -> int:
+        gid = group.group_id
+        return sum(
+            1 for f in self.selection_pool(group) if not self.path_marked_for_deletion(str(f.path), gid)
+        )
+
+    def is_mandatory_survivor(self, path: str, group: DuplicateGroup) -> bool:
+        """True when this file must stay unmarked (only survivor left in the pool)."""
+        p = str(path)
+        pool = self.selection_pool(group)
+        if not any(str(f.path) == p for f in pool):
+            return False
+        if len(pool) <= 1:
+            return True
+        if self.path_marked_for_deletion(p, group.group_id):
+            return False
+        return self.unmarked_survivor_count(group) == 1
+
+    def can_mark_path_for_deletion(self, path: str, group: DuplicateGroup, *, mark: bool) -> bool:
+        p = str(path)
+        pool = self.selection_pool(group)
+        if not any(str(f.path) == p for f in pool):
+            return False
+        if not mark:
+            return True
+        if self.path_marked_for_deletion(p, group.group_id):
+            return True
+        return self.unmarked_survivor_count(group) > 1
+
+    def mark_checkbox_disabled(self, path: str, group: DuplicateGroup) -> bool:
+        f = next((x for x in group.files if str(x.path) == str(path)), None)
+        if f is None:
+            return True
+        if not self.file_in_selection_media_scope(f):
+            return True
+        if self.is_path_protected(str(path)):
+            return True
+        return self.is_mandatory_survivor(str(path), group)
+
+    def clamp_group_to_single_survivor(self, group: DuplicateGroup) -> None:
+        """Ensure at least one selection-pool file remains unmarked for deletion."""
+        pool = self.selection_pool(group)
+        if not pool:
+            return
+        gid = group.group_id
+        sel = self.set_selections.setdefault(gid, SetSelection())
+        if len(pool) == 1:
+            p = str(pool[0].path)
+            self.marked_paths.discard(p)
+            sel.deleted_paths.discard(p)
+            sel.kept_paths.add(p)
+            return
+        if self.unmarked_survivor_count(group) > 0:
+            return
+        keeper_path = str(pool[0].path)
+        self.marked_paths.discard(keeper_path)
+        sel.deleted_paths.discard(keeper_path)
+        sel.kept_paths.add(keeper_path)
+
     def push_undo_snapshot(self) -> None:
         self.undo_stack.append(
             {

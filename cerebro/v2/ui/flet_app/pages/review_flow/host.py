@@ -324,6 +324,14 @@ class ReviewFlowHost(ft.Column):
             self._on_start_review(None)
             return True
         if screen == "browse":
+            # When "Open set" detail is showing, allow stepping through groups via keyboard.
+            if self._state.browse_detail_group_id is not None:
+                if key in ("arrowleft", "left", "pageup", "bracketleft", "["):
+                    self._browse_detail_step(-1)
+                    return True
+                if key in ("arrowright", "right", "pagedown", "bracketright", "]"):
+                    self._browse_detail_step(1)
+                    return True
             if key in ("arrowup", "up"):
                 self._state.browse_focus_index = max(0, self._state.browse_focus_index - 1)
                 self._render_active_screen()
@@ -801,6 +809,25 @@ class ReviewFlowHost(ft.Column):
         if self._browse_view:
             self._browse_view.refresh()
 
+    def _browse_detail_step(self, delta: int) -> None:
+        """When a set is open (detail view), jump to previous/next group on the current page."""
+        if self._state.browse_detail_group_id is None:
+            return
+        groups = self._state.paged_visible_groups()
+        if not groups:
+            return
+        ids = [g.group_id for g in groups]
+        cur = int(self._state.browse_detail_group_id)
+        try:
+            idx = ids.index(cur)
+        except ValueError:
+            idx = 0
+        nxt = max(0, min(len(ids) - 1, idx + int(delta)))
+        self._state.browse_focus_index = nxt
+        self._state.browse_detail_group_id = int(ids[nxt])
+        if self._browse_view:
+            self._browse_view.refresh()
+
     def _browse_close_detail(self, _e=None) -> None:
         self._state.browse_detail_group_id = None
         if self._browse_view:
@@ -822,6 +849,11 @@ class ReviewFlowHost(ft.Column):
                 return
         sel = self._state.set_selections.setdefault(gid, SetSelection())
         if mark:
+            if group is not None and not self._state.can_mark_path_for_deletion(p, group, mark=True):
+                self._show_toast("At least one copy must be kept in each duplicate set.")
+                if self._browse_view:
+                    self._browse_view.sync_checkbox_marks()
+                return
             self._state.marked_paths.add(p)
             sel.deleted_paths.add(p)
             sel.kept_paths.discard(p)
@@ -830,6 +862,8 @@ class ReviewFlowHost(ft.Column):
             sel.deleted_paths.discard(p)
         # Manual toggle invalidates any smart rule reason label for this group.
         self._state.smart_rule_by_group.pop(gid, None)
+        if group is not None:
+            self._state.clamp_group_to_single_survivor(group)
         self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
         if self._browse_view:
@@ -866,6 +900,7 @@ class ReviewFlowHost(ft.Column):
                 self._state.marked_paths.discard(p)
                 sel.deleted_paths.discard(p)
                 sel.kept_paths.discard(p)
+        self._state.clamp_group_to_single_survivor(group)
         self._state._recompute_cart_counters()
         self._push_marked_paths_to_store()
         if self._browse_view:
@@ -1124,6 +1159,7 @@ class ReviewFlowHost(ft.Column):
             p = str(f.path)
             if self._state.file_in_selection_media_scope(f) and p not in scoped_deletes:
                 sel.kept_paths.add(p)
+        self._state.clamp_group_to_single_survivor(group)
         if _recompute:
             self._state._recompute_cart_counters()
         if notify:
@@ -1166,9 +1202,17 @@ class ReviewFlowHost(ft.Column):
         group = self._state.group_by_id(self._state.inspect_set_id or -1)
         if not group:
             return
+        pool = self._state.selection_pool(group)
+        if len(pool) <= 1:
+            self._show_toast("At least one copy must be kept in each duplicate set.")
+            return
         self._state.push_undo_snapshot()
+        ref_i = max(0, min(self._state.inspect_ref_index, len(group.files) - 1))
+        keeper_path = str(group.files[ref_i].path)
         delete_paths = {
-            str(f.path) for f in group.files if self._state.file_in_selection_media_scope(f)
+            str(f.path)
+            for f in pool
+            if str(f.path) != keeper_path
         }
         self._apply_paths_for_group(group, delete_paths)
 

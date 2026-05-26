@@ -33,7 +33,8 @@ from cerebro.v2.ui.flet_app.flet_compat import dropdown_handler_kwargs
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 _GRID_THUMB_EDGE = 140
-_FILE_THUMB_EDGE = 88
+# Detail view thumbnails are sized responsively at runtime (see _build_detail_panel).
+_FILE_THUMB_EDGE = 180
 _LIST_THUMB_EDGE = 44
 _THUMB_LOAD_CAP = 32
 
@@ -646,11 +647,7 @@ class BrowseScreenView:
         self.refresh()
 
     def _file_marked_for_delete(self, path: str, group_id: int) -> bool:
-        p = str(path)
-        if p in self._state.marked_paths:
-            return True
-        sel = self._state.set_selections.get(group_id)
-        return bool(sel and p in sel.deleted_paths)
+        return self._state.path_marked_for_deletion(path, group_id)
 
     def _media_icon_tile(
         self,
@@ -703,7 +700,9 @@ class BrowseScreenView:
             gid = self._mark_checkbox_groups.get(path)
             if gid is None:
                 continue
+            group = self._state.group_by_id(gid)
             cb.value = self._file_marked_for_delete(path, gid)
+            cb.disabled = group is None or self._state.mark_checkbox_disabled(path, group)
         for gid, cb in list(self._group_mark_checkboxes.items()):
             group = self._state.group_by_id(gid)
             if group is not None:
@@ -782,8 +781,6 @@ class BrowseScreenView:
         t = self._t
         gid = group.group_id
         p = str(f.path)
-        prot = self._state.is_path_protected(p)
-        in_media_scope = self._state.file_in_selection_media_scope(f)
         checked = self._file_marked_for_delete(p, gid)
         mark_border = ft.border.all(2, t.colors.danger) if checked else ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.border))
 
@@ -796,7 +793,13 @@ class BrowseScreenView:
         def _toggle(e: ft.ControlEvent, path_s: str = p, g: int = gid) -> None:
             self._on_toggle_file_mark(path_s, g, bool(getattr(e.control, "value", False)))
 
-        cb = ft.Checkbox(value=checked, disabled=prot or not in_media_scope, on_change=_toggle)
+        cb_disabled = self._state.mark_checkbox_disabled(p, group)
+        cb = ft.Checkbox(
+            value=checked,
+            disabled=cb_disabled,
+            tooltip="At least one copy must be kept" if cb_disabled and not checked else None,
+            on_change=_toggle,
+        )
         self._mark_checkboxes[p] = cb
         self._mark_checkbox_groups[p] = gid
 
@@ -912,6 +915,19 @@ class BrowseScreenView:
         if not group or not group.files:
             return ft.Text("This group is no longer available.", color=t.colors.fg_muted)
 
+        # Responsive sizing: when a set is opened, use large thumbnails that scale with window size
+        # so users can compare files without jumping into Inspect.
+        page_w = int(getattr(self._page, "width", 0) or 0)
+        if page_w <= 0:
+            edge = 320
+            runs = 2
+        else:
+            # Leave room for padding/scrollbars; clamp to sane bounds.
+            usable = max(520, page_w - 120)
+            # Prefer 2 columns on narrow windows, 3 columns on wide windows.
+            runs = 2 if usable < 900 else 3
+            edge = int(max(240, min(420, (usable // runs) - 56)))
+
         primary = group.files[0]
         title = ft.Text(
             f"Files in “{primary.path.name}” (×{len(group.files)})",
@@ -920,20 +936,20 @@ class BrowseScreenView:
             text_align=ft.TextAlign.CENTER,
         )
         hint = ft.Text(
-            "Check thumbnails to mark files for removal, then use Apply cleanup.",
+            "Tip: use ←/→ (or PageUp/PageDown) to jump to the previous/next set.",
             size=t.typography.size_xs,
             color=t.colors.fg_muted,
             text_align=ft.TextAlign.CENTER,
         )
         self._detail_grid = ft.GridView(
             expand=True,
-            runs_count=4,
-            max_extent=_FILE_THUMB_EDGE + 24,
-            child_aspect_ratio=0.78,
-            spacing=12,
-            run_spacing=12,
+            runs_count=runs,
+            max_extent=edge + 48,
+            child_aspect_ratio=0.86,
+            spacing=14,
+            run_spacing=14,
             padding=8,
-            controls=[self._build_file_thumb_tile(group, f) for f in group.files],
+            controls=[self._build_file_thumb_tile(group, f, edge=edge, show_name=True) for f in group.files],
         )
         return ft.Column(
             [
