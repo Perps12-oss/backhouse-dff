@@ -54,6 +54,8 @@ _log = logging.getLogger(__name__)
 
 
 _NAV_TRACK_BG = "#1e1e1e"
+_NAV_PILL_WIDTH = 112
+_NAV_PILL_GAP = 6
 
 
 
@@ -144,9 +146,9 @@ class AppLayout(ft.Column):
 
         self._nav_hover_key: str | None = None
 
-        self._nav_pill_stride = 106
+        self._nav_pill_stride = _NAV_PILL_WIDTH + _NAV_PILL_GAP
 
-        nav_button_row = ft.Row(spacing=6, tight=True)
+        nav_button_row = ft.Row(spacing=_NAV_PILL_GAP, tight=True)
 
         for idx, route in enumerate(self._nav_routes):
 
@@ -158,9 +160,13 @@ class AppLayout(ft.Column):
 
             pill = ft.Container(
 
+                width=_NAV_PILL_WIDTH,
+
+                alignment=ft.Alignment(0, 0),
+
                 border_radius=16,
 
-                padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+                padding=ft.Padding.symmetric(horizontal=8, vertical=7),
 
                 ink=True,
 
@@ -177,6 +183,8 @@ class AppLayout(ft.Column):
                     spacing=6,
 
                     tight=True,
+
+                    alignment=ft.MainAxisAlignment.CENTER,
 
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
 
@@ -208,7 +216,7 @@ class AppLayout(ft.Column):
 
             height=34,
 
-            width=self._nav_pill_stride,
+            width=_NAV_PILL_WIDTH,
 
             border_radius=16,
 
@@ -349,6 +357,8 @@ class AppLayout(ft.Column):
         sel_idx = self._selected_nav_index_for_key(selected_key or "dashboard")
 
         self._nav_indicator.left = sel_idx * self._nav_pill_stride
+
+        self._nav_indicator.width = _NAV_PILL_WIDTH
 
         accent = c.primary
         on_accent = text_on_fill(accent)
