@@ -72,6 +72,8 @@ def build_apply_sheet_column(
     on_restore_managed: Callable[[ft.ControlEvent | None], None],
     on_back_overview: Callable[[ft.ControlEvent | None], None],
     on_new_scan: Callable[[ft.ControlEvent | None], None],
+    outcome_return_label: str = "Back to browse",
+    outcome_show_return: bool = True,
 ) -> ft.Column:
     title = ft.Text("Remove files", weight=ft.FontWeight.W_700, size=t.typography.size_md)
     footer_close = ft.TextButton("Cancel", on_click=on_close)
@@ -207,12 +209,27 @@ def build_apply_sheet_column(
             ),
             ft.Row(
                 [
-                    ft.TextButton("Back to browse", on_click=on_back_overview),
+                    *(
+                        [
+                            ft.TextButton(
+                                outcome_return_label,
+                                on_click=on_back_overview,
+                            )
+                        ]
+                        if outcome_show_return
+                        else []
+                    ),
                     ft.OutlinedButton("New scan", on_click=on_new_scan),
                 ],
                 alignment=ft.MainAxisAlignment.START,
+                wrap=True,
+                spacing=8,
+                run_spacing=8,
             ),
-            ft.Row([ft.TextButton("Close", on_click=on_close)], alignment=ft.MainAxisAlignment.END),
+            ft.Row(
+                [ft.TextButton("Close", on_click=on_back_overview)],
+                alignment=ft.MainAxisAlignment.END,
+            ),
         ],
         spacing=8,
         tight=True,

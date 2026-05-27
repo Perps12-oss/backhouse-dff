@@ -96,6 +96,7 @@ class ReviewFlowHost(ft.Column):
         self._apply_progress_label: Optional[ft.Text] = None
         self._apply_undo_snapshot: Optional[dict] = None
         self._last_apply_outcome: Optional[ApplyOutcomeModel] = None
+        self._apply_opened_compact: bool = False
         self._inspect_stub = False
         self._inspect_preview_generation = 0
         self._reduce_motion = bool(bridge.is_reduce_motion_enabled())
@@ -609,6 +610,7 @@ class ReviewFlowHost(ft.Column):
         self._state.cancel_delete_preparation()
         self._apply_dialog = None
         self._apply_confirm_chk = None
+        self._apply_opened_compact = False
 
     def _apply_close_sheet(self, _e=None) -> None:
         try:
@@ -628,6 +630,14 @@ class ReviewFlowHost(ft.Column):
         step = self._apply_step
         chk = self._apply_confirm_chk if step == "confirm" else None
         assert self._apply_progress is not None and self._apply_progress_label is not None
+        simple = self._is_simple_review_mode()
+        n_groups = len(self._state.scan_results)
+        if simple:
+            outcome_return_label = "Back to summary" if n_groups > 0 else ""
+            outcome_show_return = n_groups > 0
+        else:
+            outcome_return_label = "Back to browse" if n_groups > 0 else "Back to review"
+            outcome_show_return = True
         col = build_apply_sheet_column(
             t,
             step=step,
@@ -646,6 +656,8 @@ class ReviewFlowHost(ft.Column):
             on_restore_managed=lambda _e: self._apply_restore_managed(),
             on_back_overview=lambda _e: self._apply_finish_overview(),
             on_new_scan=lambda _e: self._apply_finish_new_scan(),
+            outcome_return_label=outcome_return_label,
+            outcome_show_return=outcome_show_return,
         )
         self._apply_outer.content = col
         self._safe_update(self._apply_outer)
@@ -668,7 +680,9 @@ class ReviewFlowHost(ft.Column):
         if not self._state.begin_delete_preparation():
             return
         self._push_marked_paths_to_store()
-        self._apply_step = "summary"
+        compact = self._is_simple_review_mode() and self._router.active_screen() == "overview"
+        self._apply_opened_compact = compact
+        self._apply_step = "confirm" if compact else "summary"
         self._last_apply_outcome = None
         self._apply_undo_snapshot = None
         self._apply_confirm_chk = ft.Checkbox(value=False, label="")
@@ -693,6 +707,10 @@ class ReviewFlowHost(ft.Column):
         self._apply_refresh_body()
 
     def _apply_goto_summary(self, _e=None) -> None:
+        if self._apply_opened_compact:
+            self._apply_opened_compact = False
+            self._apply_close_sheet()
+            return
         self._apply_step = "summary"
         self._apply_refresh_body()
 
