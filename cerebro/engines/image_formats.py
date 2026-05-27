@@ -433,8 +433,18 @@ def get_image_metadata(path: Path) -> Dict:
                 metadata["exif_iso"] = exif["ISOSpeedRatings"]
             if "FocalLength" in exif:
                 focal = exif["FocalLength"]
-                if focal and focal > 0:
-                    metadata["exif_focal"] = f"{focal/10:.1f}mm"
+                if focal is not None:
+                    # I-4: use float() directly — works for IFDRational, int, float, and
+                    # tuple (numerator, denominator) representations from various Pillow versions.
+                    try:
+                        fval = float(focal)
+                    except (TypeError, ValueError):
+                        try:
+                            fval = focal[0] / focal[1] if focal[1] else 0.0
+                        except (TypeError, IndexError, ZeroDivisionError):
+                            fval = 0.0
+                    if fval > 0:
+                        metadata["exif_focal"] = f"{fval:.1f}mm"
     except (AttributeError, KeyError, Exception):
         pass
 

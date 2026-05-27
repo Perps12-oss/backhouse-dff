@@ -1,96 +1,34 @@
-from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Tuple
+"""
+cerebro/core/safety/trash_manager.py — RETIRED
 
-from cerebro.core.models import DuplicateGroup
+This module has been retired. The managed-trash logic with rollback now lives in:
+    cerebro.v2.ui.flet_app.services.delete_service.DeleteService._delete_to_managed_trash()
+
+Kept as a stub to avoid ImportError for any out-of-tree code that still imports it.
+"""
+from __future__ import annotations
+
+import warnings as _warnings
 
 
-
-
-@dataclass(frozen=True)
 class TrashAction:
-    moved: List[Tuple[str, str]]  # (src, dst)
+    """Retired stub — do not use."""
+    def __init__(self, moved=None):
+        self.moved = moved or []
 
 
 class TrashManager:
-    """
-    Core safety layer for duplicate cleanup.
-    Responsible ONLY for safe file relocation and undo.
-    """
+    """Retired stub — do not use. See DeleteService._delete_to_managed_trash."""
 
-    def __init__(self, trash_dir_name: str = ".cerebro_trash"):
-        self.trash_dir_name = trash_dir_name
+    def __init__(self, *args, **kwargs):
+        _warnings.warn(
+            "TrashManager is retired. Use DeleteService._delete_to_managed_trash instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
-    def move_duplicates(
-        self,
-        groups: List[DuplicateGroup],
-        scan_root: Path
-    ) -> TrashAction:
-        trash_root = scan_root / self.trash_dir_name
-        trash_root.mkdir(parents=True, exist_ok=True)
-
-        moved: List[Tuple[str, str]] = []
-
-        for group in groups:
-            group.ensure_one_survivor()
-
-            for item in group.items:
-                if item.keep:
-                    continue
-
-                src = Path(item.path)
-                if not src.exists():
-                    continue
-
-                rel = self._safe_relpath(src, scan_root)
-                dst = trash_root / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                dst = self._dedupe_path(dst)
-
-                src.replace(dst)
-                moved.append((str(src), str(dst)))
-
-        return TrashAction(moved=moved)
+    def move_duplicates(self, *args, **kwargs) -> TrashAction:
+        raise NotImplementedError("TrashManager is retired.")
 
     def undo(self, action: TrashAction) -> bool:
-        if not action.moved:
-            return False
-
-        ok = True
-        for src, dst in reversed(action.moved):
-            dst_p = Path(dst)
-            src_p = Path(src)
-            try:
-                if dst_p.exists():
-                    src_p.parent.mkdir(parents=True, exist_ok=True)
-                    dst_p.replace(src_p)
-            except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-                ok = False
-
-        return ok
-
-    # ------------------------------------------------------------------
-    # INTERNAL HELPERS
-    # ------------------------------------------------------------------
-
-    def _safe_relpath(self, path: Path, scan_root: Path) -> Path:
-        try:
-            return path.relative_to(scan_root)
-        except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
-            safe = str(path).replace(":", "").lstrip("\\/")
-            return Path("_external") / safe
-
-    def _dedupe_path(self, path: Path) -> Path:
-        if not path.exists():
-            return path
-
-        stem = path.stem
-        suffix = path.suffix
-        parent = path.parent
-
-        for i in range(1, 10_000):
-            candidate = parent / f"{stem}__{i}{suffix}"
-            if not candidate.exists():
-                return candidate
-
-        raise RuntimeError("Could not dedupe trash path")
+        raise NotImplementedError("TrashManager is retired.")

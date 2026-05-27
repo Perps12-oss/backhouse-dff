@@ -41,6 +41,19 @@ def _is_empty_tree(path: Path) -> bool:
         return False
 
 
+def _is_under(path: Path, parent: Path) -> bool:
+    """Return True if path equals parent or is a descendant. Uses is_relative_to (M-3)."""
+    try:
+        return path == parent or path.is_relative_to(parent)
+    except AttributeError:
+        # Python < 3.9 fallback
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+
 def _collect_empty_roots(base: Path, protected: Set[Path]) -> List[Path]:
     """
     Walk base bottom-up; collect dirs that are empty trees and are not
@@ -52,8 +65,9 @@ def _collect_empty_roots(base: Path, protected: Set[Path]) -> List[Path]:
     try:
         for root, dirs, files in os.walk(base, topdown=False):
             p = Path(root)
-            # Skip protected paths and children already covered
-            if any(p == pr or str(p).startswith(str(pr) + os.sep) for pr in protected):
+            # M-3: use is_relative_to instead of string prefix to avoid false-positives
+            # on Windows mixed separators (e.g. /Photos2 matching /Photos).
+            if any(_is_under(p, pr) for pr in protected):
                 continue
             if p in covered:
                 continue
@@ -91,6 +105,7 @@ class EmptyFolderEngine(BaseEngine):
         self._progress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
         self._pause_event = threading.Event()
+        self._scan_thread: threading.Thread | None = None
 
     def get_name(self) -> str:
         return "Empty Folder Finder"
@@ -118,12 +133,25 @@ class EmptyFolderEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
         self._run_scan(progress_callback)
 
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
+        try:
+            self._run_scan_inner(cb)
+        except (MemoryError, RecursionError) as exc:
+            # L-4: fatal scan errors must emit ERROR state rather than dying silently.
+            import logging as _logging
+            _logging.getLogger(__name__).error("EmptyFolderEngine scan failed: %s", exc)
+            self._state = ScanState.ERROR
+            try:
+                cb(ScanProgress(state=ScanState.ERROR))
+            except Exception:
+                pass
+
+    def _run_scan_inner(self, cb: Callable[[ScanProgress], None]) -> None:
         include_hidden = self._options.get("include_hidden", False)
         min_depth      = self._options.get("min_depth", 1)
         protected_set: Set[Path] = set(self._protected)
@@ -136,8 +164,8 @@ class EmptyFolderEngine(BaseEngine):
         for base in self._folders:
             if self._cancel_event.is_set():
                 break
-            while self._pause_event.is_set():
-                time.sleep(0.1)
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                break
 
             roots = _collect_empty_roots(Path(base), protected_set)
 
@@ -204,11 +232,11 @@ class EmptyFolderEngine(BaseEngine):
         ))
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:

@@ -22,8 +22,10 @@ from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
+from cerebro.v2.ui.flet_app.palette_themes import default_preset
 from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
 from cerebro.v2.ui.flet_app.utils.shortcuts import register_global_shortcuts
+from cerebro.v2.ui.flet_app.flet_compat import assert_supported_flet
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 _log = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ def _clamp_window_to_virtual_screen(page: ft.Page) -> None:
 
 def run_flet_app() -> None:
     """Launch the Cerebro Flet UI."""
+    assert_supported_flet()
     ft.app(target=_main, port=0)
 
 
@@ -88,7 +91,7 @@ def _main(page: ft.Page) -> None:
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
     # Filled from apply_preset_theme once settings are loaded.
-    page.bgcolor = "#060B14"
+    page.bgcolor = default_preset().bg
     page.padding = 0
     page.spacing = 0
 
@@ -98,7 +101,7 @@ def _main(page: ft.Page) -> None:
 
     store = StateStore(create_initial_state())
     coordinator = CerebroCoordinator(store)
-    backend = BackendService(page)
+    backend = BackendService(page, coordinator=coordinator)
     bridge = StateBridge(page, store, coordinator, backend)
     _log.info("init: services ready  +%.0fms", (_time.monotonic() - _t0) * 1000)
     settings = bridge.get_settings()
@@ -202,27 +205,13 @@ def _main(page: ft.Page) -> None:
     from cerebro.v2.ui.flet_app.pages.settings_page import SettingsPage
     from cerebro.v2.ui.flet_app.pages.exclude_list_page import ExcludeListPage
 
-    def _review_flow_v2_enabled() -> bool:
-        try:
-            general = (bridge.get_settings().get("general") or {})
-            return bool(general.get("review_flow_v2", True))
-        except Exception:
-            return True
-
-    if _review_flow_v2_enabled():
-        from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
-
-        _ReviewTabCls = ReviewFlowHost
-    else:
-        from cerebro.v2.ui.flet_app.pages.review_page import ReviewPage
-
-        _ReviewTabCls = ReviewPage
+    from cerebro.v2.ui.flet_app.pages.review_flow import ReviewFlowHost
 
     # FilePicker is a Service: attach via page.services (not overlay) for Flet 0.80+.
     folder_picker = ft.FilePicker()
     page.services.append(folder_picker)
 
-    from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px
+    from cerebro.v2.ui.flet_app.theme import set_tree_font_scale_applied, set_ui_font_size_px, get_ui_font_scale
 
     _appear0 = settings.get("appearance") if isinstance(settings, dict) else {}
     _fs0 = 13
@@ -230,12 +219,14 @@ def _main(page: ft.Page) -> None:
         _fs0 = int(_appear0.get("font_size", 13) or 13)
     set_ui_font_size_px(_fs0)
 
-    _preset_id = str((_appear0 or {}).get("ui_theme_preset", "count_byteula"))
+    from cerebro.v2.ui.flet_app.palette_themes import DEFAULT_PRESET_ID, resolve_preset_id
+
+    _preset_id = resolve_preset_id(str((_appear0 or {}).get("ui_theme_preset", DEFAULT_PRESET_ID)))
     bridge.apply_preset_theme(_preset_id)
 
     dashboard_page = DashboardPage(bridge, folder_picker)
     _log.info("init: dashboard built  +%.0fms", (_time.monotonic() - _t0) * 1000)
-    review_page = _ReviewTabCls(bridge)
+    review_host = ReviewFlowHost(bridge)
     _log.info("init: review built  +%.0fms", (_time.monotonic() - _t0) * 1000)
     history_page = HistoryPage(bridge)
     settings_page = SettingsPage(bridge)
@@ -247,18 +238,20 @@ def _main(page: ft.Page) -> None:
     except Exception:
         _log.debug("Could not register dashboard progress control", exc_info=True)
     try:
-        bridge.register_action_control("ResultsFilesRemoved", review_page._grid)  # type: ignore[attr-defined]
-        bridge.register_action_control("ScanCompleted", review_page._grid)  # type: ignore[attr-defined]
-        bridge.register_action_control("GroupsPruned", review_page._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ResultsFilesRemoved", review_host._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("ScanCompleted", review_host._grid)  # type: ignore[attr-defined]
+        bridge.register_action_control("GroupsPruned", review_host._grid)  # type: ignore[attr-defined]
+        # Do not register review list/grid for FileSelectionChanged — partial ListView.update()
+        # after bulk smart-select was blanking the browse pane on Flet 0.84.
         bridge.register_action_control("ScanCompleted", dashboard_page._stats_row)  # type: ignore[attr-defined]
         bridge.register_action_control("GroupsPruned", dashboard_page._stats_row)  # type: ignore[attr-defined]
 
         # Broaden F1 action->control coverage for targeted updates.
         for action_name, controls in {
-            "ReviewNavigate": [getattr(review_page, "_grid", None), getattr(review_page, "_content", None)],
+            "ReviewNavigate": [getattr(review_host, "_grid", None), getattr(review_host, "_content", None)],
             "ReviewViewFilterChanged": [
-                getattr(review_page, "_workstation_sidebar", None),
-                getattr(review_page, "_grid", None),
+                getattr(review_host, "_workstation_sidebar", None),
+                getattr(review_host, "_grid", None),
             ],
             "ScanStarted": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
             "ScanEnded": [getattr(dashboard_page, "_progress", None), getattr(dashboard_page, "_status", None)],
@@ -271,8 +264,8 @@ def _main(page: ft.Page) -> None:
 
     builders: Dict[str, Callable[[], ft.Control]] = {
         "dashboard": lambda: dashboard_page,
-        "duplicates": lambda: review_page,
-        "review": lambda: review_page,
+        "duplicates": lambda: review_host,
+        "review": lambda: review_host,
         "history": lambda: history_page,
         "exclude": lambda: exclude_page,
         "settings": lambda: settings_page,
@@ -302,7 +295,11 @@ def _main(page: ft.Page) -> None:
             padding=ft.Padding.symmetric(horizontal=8),
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
+                    ft.Icon(
+                        ft.icons.Icons.AUTO_AWESOME,
+                        size=16,
+                        color=theme_for_mode(bridge.app_theme).colors.accent,
+                    ),
                     ft.Text("Cerebro", size=12, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
                     ft.IconButton(ft.icons.Icons.REMOVE, icon_size=14, on_click=lambda _e: _min_btn(), tooltip="Minimise"),
@@ -426,7 +423,13 @@ def _main(page: ft.Page) -> None:
             ]
             list_view.controls = [_row(label, action) for label, action in filtered]
             if not list_view.controls:
-                list_view.controls = [ft.Text("No matching actions.", size=12, color="#94A3B8")]
+                list_view.controls = [
+                    ft.Text(
+                        "No matching actions.",
+                        size=12,
+                        color=theme_for_mode(bridge.app_theme).colors.fg_muted,
+                    )
+                ]
             try:
                 if list_view.page is not None:
                     list_view.update()
@@ -468,6 +471,13 @@ def _main(page: ft.Page) -> None:
         if (not force) and bool(onboarding_cfg.get("completed", False)):
             return
 
+        from cerebro.v2.ui.flet_app.pill_button_styles import text_on_fill
+        from cerebro.v2.ui.flet_app.theme import theme_for_mode
+
+        _onb_t = theme_for_mode(bridge.app_theme)
+        _onb_accent = _onb_t.colors.primary
+        _onb_on_accent = text_on_fill(_onb_accent)
+
         steps = [
             ("Select scan folders", "Start on Home using Browse Folders or Quick Add presets."),
             ("Run your first scan", "Use Start Scan to detect duplicate groups and recoverable space."),
@@ -475,9 +485,9 @@ def _main(page: ft.Page) -> None:
         ]
         step_idx = {"value": 0}
         step_badge = ft.Container(
-            content=ft.Text("Step 1 of 3", size=11, weight=ft.FontWeight.W_600, color="#22D3EE"),
-            bgcolor=ft.Colors.with_opacity(0.14, "#22D3EE"),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, "#22D3EE")),
+            content=ft.Text("Step 1 of 3", size=11, weight=ft.FontWeight.W_600, color=_onb_accent),
+            bgcolor=ft.Colors.with_opacity(0.14, _onb_accent),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, _onb_accent)),
             border_radius=999,
             padding=ft.Padding.symmetric(horizontal=10, vertical=4),
         )
@@ -485,24 +495,24 @@ def _main(page: ft.Page) -> None:
             steps[0][0],
             size=20,
             weight=ft.FontWeight.BOLD,
-            color="#E6EDF3",
+            color=_onb_t.colors.fg,
         )
         desc_text = ft.Text(
             steps[0][1],
             size=13,
-            color="#9FB0C2",
+            color=_onb_t.colors.fg_muted,
         )
         progress = ft.ProgressBar(
             value=1 / 3,
             bar_height=6,
-            color="#22D3EE",
-            bgcolor=ft.Colors.with_opacity(0.18, "#FFFFFF"),
+            color=_onb_accent,
+            bgcolor=ft.Colors.with_opacity(0.18, _onb_t.colors.fg),
             border_radius=999,
         )
         dont_show_again = ft.Checkbox(
             label="Don't show again",
             value=False,
-            label_style=ft.TextStyle(size=12, color="#9FB0C2"),
+            label_style=ft.TextStyle(size=12, color=_onb_t.colors.fg_muted),
         )
 
         def _render_step() -> None:
@@ -543,12 +553,12 @@ def _main(page: ft.Page) -> None:
             title=ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color="#22D3EE"),
+                        content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=18, color=_onb_accent),
                         width=32,
                         height=32,
                         alignment=ft.Alignment(0, 0),
-                        bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
-                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, "#22D3EE")),
+                        bgcolor=ft.Colors.with_opacity(0.12, _onb_accent),
+                        border=ft.border.all(1, ft.Colors.with_opacity(0.30, _onb_accent)),
                         border_radius=8,
                     ),
                     ft.Text("Welcome to Cerebro", size=18, weight=ft.FontWeight.W_700),
@@ -559,12 +569,8 @@ def _main(page: ft.Page) -> None:
                 width=560,
                 padding=16,
                 border_radius=14,
-                gradient=ft.LinearGradient(
-                    begin=ft.Alignment(-1, -1),
-                    end=ft.Alignment(1, 1),
-                    colors=["#111A24", "#0B121A"],
-                ),
-                border=ft.border.all(1, ft.Colors.with_opacity(0.16, "#FFFFFF")),
+                bgcolor=_onb_t.colors.bg2,
+                border=ft.border.all(1, ft.Colors.with_opacity(0.35, _onb_t.colors.border)),
                 content=ft.Column(
                     [step_badge, title_text, desc_text, progress, dont_show_again],
                     spacing=12,
@@ -575,19 +581,19 @@ def _main(page: ft.Page) -> None:
                 ft.TextButton(
                     "Skip",
                     on_click=lambda _e: _finish(),
-                    style=ft.ButtonStyle(color="#9FB0C2"),
+                    style=ft.ButtonStyle(color=_onb_t.colors.fg_muted),
                 ),
                 ft.FilledButton(
                     "Next",
                     on_click=_next,
                     style=ft.ButtonStyle(
-                        bgcolor="#22D3EE",
-                        color="#0A0E14",
+                        bgcolor=_onb_accent,
+                        color=_onb_on_accent,
                         shape=ft.RoundedRectangleBorder(radius=10),
                     ),
                 ),
             ],
-            bgcolor="#0B121A",
+            bgcolor=_onb_t.colors.bg,
             shape=ft.RoundedRectangleBorder(radius=18),
         )
         bridge.show_modal_dialog(dlg)
@@ -628,13 +634,13 @@ def _main(page: ft.Page) -> None:
             bridge.open_last_session()
             return
         if ctrl and key == "k":
-            if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
-                if review_page.handle_keyboard("k", ctrl=ctrl):
+            if layout.current_key == "review" and hasattr(review_host, "handle_keyboard"):
+                if review_host.handle_keyboard("k", ctrl=ctrl):
                     return
             _show_command_palette()
             return
-        if layout.current_key == "review" and hasattr(review_page, "handle_keyboard"):
-            if review_page.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
+        if layout.current_key == "review" and hasattr(review_host, "handle_keyboard"):
+            if review_host.handle_keyboard(key, ctrl=ctrl, shift=bool(getattr(e, "shift", False))):
                 return
         if key in ("arrowleft", "left"):
             _cycle_tab(-1)
@@ -644,18 +650,38 @@ def _main(page: ft.Page) -> None:
             return
         if key == "space" and layout.current_key == "review":
             try:
-                if review_page.get_groups():
+                if review_host.get_groups():
                     layout.navigate_to("review")
             except Exception:
                 _log.exception("Failed opening Review from Space shortcut")
 
     register_global_shortcuts(page, layout, bridge, on_unhandled=_on_other_keyboard)
 
+    def _shutdown_app_resources() -> None:
+        try:
+            bridge.unsubscribe()
+        except Exception:
+            _log.debug("bridge unsubscribe failed", exc_info=True)
+        try:
+            time_keeper.dispose()
+        except Exception:
+            _log.debug("time_keeper dispose failed", exc_info=True)
+        try:
+            from cerebro.v2.ui.flet_app.services.thumbnail_cache import shutdown_thumbnail_cache
+
+            shutdown_thumbnail_cache(wait=False)
+        except Exception:
+            _log.debug("thumbnail cache shutdown failed", exc_info=True)
+
     def _on_window_event(e: ft.WindowEvent) -> None:
+        if e.data == "close":
+            _shutdown_app_resources()
         if e.data in {"close", "resized", "moved", "maximize", "unmaximize"}:
             _persist_window_state()
 
     page.window.on_event = _on_window_event
+    if hasattr(page, "on_disconnect"):
+        page.on_disconnect = lambda _e: _shutdown_app_resources()
 
     def _on_route_change(e: ft.RouteChangeEvent) -> None:
         key = key_for_route(e.route)
@@ -678,23 +704,15 @@ def _main(page: ft.Page) -> None:
         mode = s.scan_mode or "files"
         active = layout.current_key
         if not groups:
-            review_page.load_results([], mode, defer_render=(active != "review"))
+            review_host.load_results([], mode, defer_render=(active != "review"))
             return
         if active == "review":
-            review_page.apply_pruned_groups(groups, mode)
+            review_host.apply_pruned_groups(groups, mode)
         else:
-            review_page.load_results(groups, mode, defer_render=True)
+            review_host.load_results(groups, mode, defer_render=True)
 
     def _on_state_change(new_state: AppState, _old: AppState, action: object) -> None:
         tab = new_state.active_tab
-        if isinstance(action, ScanCompleted):
-            try:
-                settings = bridge.get_settings()
-                skip_results = bool((settings.get("general") or {}).get("skip_results_after_scan", False))
-            except Exception:
-                skip_results = False
-            if skip_results and new_state.groups:
-                tab = "review"
         # Only tab-changing actions should drive the shell; other dispatches still
         # carry active_tab (e.g. duplicates) and would otherwise yank the user back
         # from Review/Settings while the rail already matched the new selection.
@@ -709,6 +727,10 @@ def _main(page: ft.Page) -> None:
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
             _sync_groups_from_state(new_state)
             bridge.invalidate_stats_cache()
+        if isinstance(action, ScanCompleted) and new_state.groups:
+            focus = getattr(review_host, "reset_to_overview_after_scan", None)
+            if callable(focus):
+                focus()
         if isinstance(action, ScanCompleted):
             history_page.load_history(bridge.get_scan_history_table_rows())
         if isinstance(action, (ScanCompleted, ResultsFilesRemoved, GroupsPruned)):
@@ -724,7 +746,7 @@ def _main(page: ft.Page) -> None:
             _log.exception("Layout theme update failed")
         page_map = {
             "dashboard": dashboard_page,
-            "review": review_page,
+            "review": review_host,
             "history": history_page,
             "exclude": exclude_page,
             "settings": settings_page,
@@ -739,12 +761,13 @@ def _main(page: ft.Page) -> None:
                 _log.exception("apply_theme failed on %s", type(p).__name__)
 
     bridge.set_on_theme_change(_on_theme_change)
+    bridge.set_on_stats_refresh_ui(dashboard_page._schedule_dashboard_data_fetch)
+    _on_theme_change(bridge.app_theme)
+    set_tree_font_scale_applied(get_ui_font_scale())
 
     history_page.load_history(bridge.get_scan_history_table_rows())
     history_page.load_deletion_history(bridge.get_deletion_history_table_rows())
 
-    appearance = bridge.get_settings().get("appearance") or {}
-    bridge.apply_preset_theme(str(appearance.get("ui_theme_preset", "count_byteula")))
     _show_onboarding_if_needed()
     try:
         dashboard_page.prompt_resume_incomplete_scan_if_needed()

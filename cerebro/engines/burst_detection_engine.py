@@ -146,16 +146,13 @@ class BurstDetectionEngine(BaseEngine):
         self._state = ScanState.SCANNING
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._callback = progress_callback
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="burst-scan"
-        )
-        self._thread.start()
+        self._run()
 
     def pause(self) -> None:
-        raise NotImplementedError("BurstDetectionEngine does not support pause.")
+        """Burst scan is fast; pause is a no-op for orchestrator compatibility."""
 
     def resume(self) -> None:
-        raise NotImplementedError("BurstDetectionEngine does not support pause.")
+        """Burst scan is fast; resume is a no-op for orchestrator compatibility."""
 
     def cancel(self) -> None:
         self._cancel_event.set()

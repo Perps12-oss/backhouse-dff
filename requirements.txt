@@ -4,6 +4,7 @@ Pillow>=9.0.0
 send2trash>=1.8.0
 imagehash>=4.3.1
 numpy>=1.24.0
-flet>=0.25.0
+# Pin matches pyproject.toml; CI matrix may install other versions to test flet_compat shims.
+flet>=0.84.0,<0.85.0
 structlog>=24.0.0
 xxhash>=3.5.0

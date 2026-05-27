@@ -8,10 +8,19 @@ from typing import TYPE_CHECKING, Any, Dict
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.pages.review.smart_rules import AUTO_MARK_RULE_OPTIONS
-from cerebro.v2.ui.flet_app.palette_themes import PRESET_THEMES
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import AUTO_MARK_RULE_OPTIONS, RULE_LABELS
+from cerebro.v2.ui.flet_app.pages.review_flow.review_preferences import (
+    REVIEW_MODE_DETAILED,
+    REVIEW_MODE_SIMPLE,
+    load_review_preferences,
+    save_review_preferences,
+    ReviewPreferences,
+)
+from cerebro.v2.ui.flet_app.multigradient_themes import gradient_by_id, gradient_themes_for_picker
+from cerebro.v2.ui.flet_app.palette_themes import DEFAULT_PRESET_ID, resolve_preset_id
+from cerebro.v2.ui.flet_app.design_system.cards import flat_card
 from cerebro.v2.ui.flet_app.design_system.page_chrome import PageHeaderBlock, build_page_header
+from cerebro.v2.ui.flet_app.flet_compat import dropdown_handler_kwargs
 from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px, theme_for_mode
 
 if TYPE_CHECKING:
@@ -26,7 +35,7 @@ _DELETE_METHODS = [
     ("move_to_folder", "Move to Folder"),
 ]
 
-# Auto‑mark rules (aligned with :mod:`review.smart_rules` + ``keep_first`` for deletion settings)
+# Auto‑mark rules (aligned with :mod:`review_flow.smart_rules` + ``keep_first`` for deletion settings)
 _AUTO_MARK_RULES = AUTO_MARK_RULE_OPTIONS
 
 # Scan mode options (matching old dialog)
@@ -95,7 +104,8 @@ class SettingsPage(ft.Column):
         self._deletion_similarity_label: ft.Text
         self._criteria_radio: ft.RadioGroup
 
-        self._theme_chips: Dict[str, ft.Container] = {}
+        self._theme_dropdown: ft.Dropdown
+        self._theme_preview: ft.Container
 
         self._build_ui()
 
@@ -136,13 +146,10 @@ class SettingsPage(ft.Column):
             on_change=self._on_tab_changed,
         )
 
-        # Tab content containers (glass)
+        # Tab content containers (flat flet-base cards)
         self._tab_contents = {
-            "general": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "appearance": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "performance": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "deletion": glass_container(content=None, padding=t.spacing.xl, t=t),
-            "about": glass_container(content=None, padding=t.spacing.xl, t=t),
+            key: flat_card(ft.Container(), t, padding=t.spacing.xl, expand=True)
+            for key in ("general", "appearance", "performance", "deletion", "about")
         }
 
         # Build each tab's inner content
@@ -211,7 +218,8 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("file_mode", {})
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
-        self._settings["appearance"].setdefault("ui_theme_preset", "count_byteula")
+        self._settings.setdefault("review", {})
+        self._settings["appearance"].setdefault("ui_theme_preset", DEFAULT_PRESET_ID)
         perf = self._settings.setdefault("performance", {})
         perf.setdefault("max_threads", 0)
         perf.setdefault("hash_cache_enabled", True)
@@ -238,6 +246,12 @@ class SettingsPage(ft.Column):
         self._general_partial_banner_timeout.value = str(timeout)
         self._general_partial_banner_timeout.disabled = not bool(self._general_partial_banner_autohide.value)
 
+        review_prefs = load_review_preferences(self._settings)
+        self._review_mode.value = review_prefs.review_mode
+        self._review_keeper_rule.value = review_prefs.default_keeper_rule
+        self._review_auto_apply.value = review_prefs.auto_apply_on_open
+        self._review_auto_apply.disabled = review_prefs.review_mode != REVIEW_MODE_SIMPLE
+
         # Appearance
         self._appearance_font_slider.value = self._settings["appearance"].get("font_size", 13)
         self._appearance_font_label.value = f"Font size: {int(self._appearance_font_slider.value)}"
@@ -260,8 +274,13 @@ class SettingsPage(ft.Column):
         self._deletion_dhash_label.value = f"dHash threshold: {int(self._deletion_dhash_slider.value)}"
         self._deletion_similarity_label.value = f"Matching level: {int(self._deletion_similarity_slider.value)}%"
 
-        preset_id = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
+        preset_id = resolve_preset_id(
+            str(self._settings["appearance"].get("ui_theme_preset", DEFAULT_PRESET_ID))
+        )
         self._bridge.apply_preset_theme(preset_id)
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = preset_id
+            self._update_theme_preview(preset_id)
 
     # ------------------------------------------------------------------
     # Tab builders
@@ -348,6 +367,44 @@ class SettingsPage(ft.Column):
             content.controls.append(cb)
         content.controls.append(self._general_partial_banner_timeout)
 
+        content.controls.append(ft.Divider(height=24, color=ft.Colors.with_opacity(0.12, t.colors.fg)))
+        content.controls.append(ft.Text("Review experience", weight=ft.FontWeight.W_600, color=t.colors.fg))
+        content.controls.append(
+            ft.Text(
+                "Simple mode shows a summary-first flow; Detailed keeps the full browse and apply ceremony.",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                italic=True,
+            )
+        )
+        review_prefs = load_review_preferences(self._settings)
+        self._review_mode = ft.Dropdown(
+            label="Review mode",
+            options=[
+                ft.dropdown.Option(key=REVIEW_MODE_SIMPLE, text="Simple — summary first"),
+                ft.dropdown.Option(key=REVIEW_MODE_DETAILED, text="Detailed — full browse"),
+            ],
+            value=review_prefs.review_mode,
+            width=280,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
+            **dropdown_handler_kwargs(self._on_review_mode_change),
+        )
+        self._review_keeper_rule = ft.Dropdown(
+            label="Default keeper rule",
+            options=[ft.dropdown.Option(key=k, text=lbl) for k, lbl in RULE_LABELS],
+            value=review_prefs.default_keeper_rule,
+            width=280,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
+        )
+        self._review_auto_apply = ft.Checkbox(
+            label="Auto-apply keeper rule when opening Review (Simple mode)",
+            value=review_prefs.auto_apply_on_open,
+            disabled=review_prefs.review_mode != REVIEW_MODE_SIMPLE,
+        )
+        content.controls.extend([self._review_mode, self._review_keeper_rule, self._review_auto_apply])
+
         self._tab_contents["general"].content = content
 
     def _build_appearance_tab(self) -> None:
@@ -374,39 +431,53 @@ class SettingsPage(ft.Column):
                 color=t.colors.fg,
             )
         )
-        self._theme_chips.clear()
-        selected_pid = str(self._settings["appearance"].get("ui_theme_preset", "count_byteula"))
-        chips_wrap = ft.Row(wrap=True, spacing=t.spacing.sm, run_spacing=t.spacing.sm)
-        for preset in PRESET_THEMES:
-            is_sel = preset.id == selected_pid
-            chip = ft.Container(
-                width=112,
-                padding=8,
-                border=ft.border.all(
-                    2 if is_sel else 1,
-                    t.colors.primary if is_sel else t.colors.border,
+        selected_pid = resolve_preset_id(
+            str(self._settings["appearance"].get("ui_theme_preset", DEFAULT_PRESET_ID))
+        )
+        self._theme_preview = ft.Row(
+            [
+                ft.Container(
+                    width=48,
+                    height=28,
+                    border_radius=6,
+                    border=ft.border.all(1, t.colors.border),
                 ),
-                border_radius=10,
-                ink=True,
-                on_click=lambda e, pid=preset.id: self._on_preset_selected(pid),
-                content=ft.Column(
-                    [
-                        ft.Container(height=28, border_radius=6, bgcolor=preset.seed),
-                        ft.Text(
-                            preset.name,
-                            size=10,
-                            color=t.colors.fg,
-                            text_align=ft.TextAlign.CENTER,
-                            max_lines=2,
-                        ),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=6,
+                ft.Container(
+                    width=14,
+                    height=14,
+                    border_radius=7,
+                    border=ft.border.all(1, t.colors.border),
+                    tooltip="Accent",
                 ),
+                ft.Container(
+                    width=14,
+                    height=14,
+                    border_radius=7,
+                    border=ft.border.all(1, t.colors.border),
+                    tooltip="Apply cleanup (critical)",
+                ),
+            ],
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self._update_theme_preview(selected_pid)
+        self._theme_dropdown = ft.Dropdown(
+            width=320,
+            value=selected_pid,
+            options=[
+                ft.dropdown.Option(key=g.id, text=g.name) for g in gradient_themes_for_picker()
+            ],
+            border_radius=8,
+            bgcolor=t.colors.bg3,
+            **dropdown_handler_kwargs(self._on_theme_dropdown_change),
+        )
+        content.controls.append(
+            ft.Row(
+                [self._theme_preview, self._theme_dropdown],
+                spacing=t.spacing.sm,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
-            self._theme_chips[preset.id] = chip
-            chips_wrap.controls.append(chip)
-        content.controls.append(chips_wrap)
+        )
 
         self._tab_contents["appearance"].content = content
 
@@ -440,11 +511,18 @@ class SettingsPage(ft.Column):
             self._appearance_font_label.update()
         # Live preview so slider has visible effect immediately.
         self._apply_font_size_to_page(value)
+        self._t = theme_for_mode(self._bridge.app_theme)
 
     def _on_partial_banner_autohide_change(self, enabled: bool) -> None:
         self._general_partial_banner_timeout.disabled = not bool(enabled)
         if self._is_mounted():
             self._general_partial_banner_timeout.update()
+
+    def _on_review_mode_change(self, e: ft.ControlEvent) -> None:
+        mode = str(e.control.value or REVIEW_MODE_DETAILED)
+        self._review_auto_apply.disabled = mode != REVIEW_MODE_SIMPLE
+        if self._is_mounted():
+            self._review_auto_apply.update()
 
     def _build_performance_tab(self) -> None:
         t = self._t
@@ -612,8 +690,8 @@ class SettingsPage(ft.Column):
         content = ft.Column(
             [
                 ft.Container(
-                    content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=36, color="#22D3EE"),
-                    bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                    content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=36, color=t.colors.accent),
+                    bgcolor=ft.Colors.with_opacity(0.08, t.colors.accent),
                     border_radius=14,
                     padding=16,
                 ),
@@ -621,14 +699,14 @@ class SettingsPage(ft.Column):
                 ft.Row(
                     [
                         ft.Container(
-                            content=ft.Text("v2.0.0", size=9, color="#22D3EE", weight=ft.FontWeight.W_600),
-                            bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
+                            content=ft.Text("v2.0.0", size=9, color=t.colors.accent, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, t.colors.accent),
                             border_radius=4,
                             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),
                         ft.Container(
-                            content=ft.Text("Flet + Flutter", size=9, color="#A78BFA", weight=ft.FontWeight.W_600),
-                            bgcolor=ft.Colors.with_opacity(0.12, "#A78BFA"),
+                            content=ft.Text("Flet + Flutter", size=9, color=t.colors.warning, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, t.colors.warning),
                             border_radius=4,
                             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),
@@ -644,6 +722,11 @@ class SettingsPage(ft.Column):
                     size=t.typography.size_base,
                 ),
                 ft.Divider(color=t.colors.border3, height=1),
+                ft.OutlinedButton(
+                    "Export diagnostic bundle",
+                    icon=ft.icons.Icons.BUG_REPORT_OUTLINED,
+                    on_click=self._export_diagnostics,
+                ),
                 ft.Text("Thanks for using Cerebro. ✨", color=t.colors.fg_muted, size=t.typography.size_sm, italic=True),
             ],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -655,22 +738,40 @@ class SettingsPage(ft.Column):
     # ------------------------------------------------------------------
     # Theme picker
     # ------------------------------------------------------------------
-    def _on_preset_selected(self, preset_id: str) -> None:
-        self._bridge.apply_preset_theme(preset_id)
-        self._settings.setdefault("appearance", {})["ui_theme_preset"] = preset_id
-        self._update_theme_chip_highlights(preset_id)
+    def _on_theme_dropdown_change(self, e: ft.ControlEvent) -> None:
+        preset_id = str(getattr(e.control, "value", "") or DEFAULT_PRESET_ID)
+        self._on_preset_selected(preset_id)
 
-    def _update_theme_chip_highlights(self, selected_id: str) -> None:
-        t = self._t
-        for pid, chip in self._theme_chips.items():
-            sel = pid == selected_id
-            chip.border = ft.border.all(
-                2 if sel else 1,
-                t.colors.primary if sel else t.colors.border,
-            )
+    def _on_preset_selected(self, preset_id: str) -> None:
+        pid = resolve_preset_id(preset_id)
+        self._bridge.apply_preset_theme(pid)
+        self._settings.setdefault("appearance", {})["ui_theme_preset"] = pid
+        self._update_theme_preview(pid)
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = pid
+
+    def _update_theme_preview(self, theme_id: str) -> None:
+        g = gradient_by_id(theme_id)
+        if g is None or not hasattr(self, "_theme_preview"):
+            return
+        row = self._theme_preview
+        if not isinstance(row, ft.Row) or len(row.controls) < 3:
+            return
+        shell_sw = row.controls[0]
+        accent_sw = row.controls[1]
+        critical_sw = row.controls[2]
+        shell_sw.gradient = ft.LinearGradient(
+            begin=ft.Alignment(0, -1),
+            end=ft.Alignment(0, 1),
+            colors=[g.gradient_top, g.gradient_bottom],
+        )
+        accent_sw.bgcolor = g.accent
+        critical_sw.bgcolor = self._t.colors.action_critical
         if self._is_mounted():
-            for chip in self._theme_chips.values():
-                chip.update()
+            try:
+                row.update()
+            except RuntimeError:
+                pass
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -740,8 +841,8 @@ class SettingsPage(ft.Column):
         self._settings["general"]["partial_results_banner_timeout_seconds"] = 30 if timeout_raw == "30" else 60
 
         self._settings["appearance"]["font_size"] = int(self._appearance_font_slider.value)
-        self._settings["appearance"]["ui_theme_preset"] = str(
-            self._settings["appearance"].get("ui_theme_preset", "count_byteula")
+        self._settings["appearance"]["ui_theme_preset"] = resolve_preset_id(
+            str(getattr(self._theme_dropdown, "value", None) or DEFAULT_PRESET_ID)
         )
 
         self._settings["performance"]["max_threads"] = int(self._perf_threads_slider.value)
@@ -754,6 +855,22 @@ class SettingsPage(ft.Column):
         self._settings["photo_mode"]["dhash_threshold"] = int(self._deletion_dhash_slider.value)
         self._settings["photo_mode"]["similarity_match_percent"] = int(self._deletion_similarity_slider.value)
         self._settings.setdefault("file_mode", {})["matching_criteria"] = self._criteria_radio.value or "content"
+
+        existing_review = load_review_preferences(self._settings)
+        review_mode = str(self._review_mode.value or REVIEW_MODE_DETAILED)
+        if review_mode not in (REVIEW_MODE_SIMPLE, REVIEW_MODE_DETAILED):
+            review_mode = REVIEW_MODE_DETAILED
+        auto_apply = bool(self._review_auto_apply.value) if review_mode == REVIEW_MODE_SIMPLE else False
+        self._settings = save_review_preferences(
+            self._settings,
+            ReviewPreferences(
+                review_mode=review_mode,
+                default_keeper_rule=str(self._review_keeper_rule.value or existing_review.default_keeper_rule),
+                auto_apply_on_open=auto_apply,
+                simple_helper_dismissed=existing_review.simple_helper_dismissed,
+                upgrade_banner_dismissed=existing_review.upgrade_banner_dismissed,
+            ),
+        )
 
         try:
             self._bridge.save_settings(self._settings)
@@ -780,6 +897,15 @@ class SettingsPage(ft.Column):
             self._select_settings_tab("general")
         else:
             self._bridge.show_snackbar("Settings saved successfully.", success=True)
+
+    def _export_diagnostics(self, _e: ft.ControlEvent) -> None:
+        try:
+            from cerebro.v2.diagnostics import export_diagnostic_bundle
+
+            path = export_diagnostic_bundle()
+            self._bridge.show_snackbar(f"Diagnostic bundle saved: {path}", success=True)
+        except Exception as exc:
+            self._bridge.show_snackbar(f"Export failed: {exc}", error=True)
 
     def _on_cancel(self, e):
         key = self._selected_settings_tab_key()
@@ -851,10 +977,10 @@ class SettingsPage(ft.Column):
         if self._page_header.subtitle is not None:
             self._page_header.subtitle.color = self._t.colors.fg_muted
 
-        # Update all Tab Containers (Glass styles)
+        from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+
         for container in self._tab_contents.values():
-            container.bgcolor = self._t.colors.glass_bg
-            container.border = ft.border.all(1, self._t.colors.glass_border)
+            apply_flat_style(container, self._t)
             
         # Helper to update text colors in specific controls
         # Note: This is a broad update. For perfection, we'd update every Text control individually.
@@ -876,8 +1002,12 @@ class SettingsPage(ft.Column):
         )
         self._cancel_btn.style = ft.ButtonStyle(color=self._t.colors.fg2)
 
-        pid = str(self._settings.get("appearance", {}).get("ui_theme_preset", "count_byteula"))
-        self._update_theme_chip_highlights(pid)
+        pid = resolve_preset_id(
+            str(self._settings.get("appearance", {}).get("ui_theme_preset", DEFAULT_PRESET_ID))
+        )
+        if hasattr(self, "_theme_dropdown"):
+            self._theme_dropdown.value = pid
+        self._update_theme_preview(pid)
 
         if self._is_mounted():
             self.update()

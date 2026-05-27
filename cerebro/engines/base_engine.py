@@ -8,10 +8,11 @@ This provides a unified interface for the orchestrator to interact with any scan
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, List, Optional
 from pathlib import Path
+from typing import Callable, List, Optional
 
 
 class ScanState(Enum):
@@ -69,12 +70,16 @@ class DuplicateGroup:
         """Calculate derived fields after initialization."""
         if self.files:
             self.total_size = sum(f.size for f in self.files)
-            keepers = [f for f in self.files if f.is_keeper]
-            if keepers:
-                keeper_size = sum(f.size for f in keepers)
-            else:
-                keeper_size = max(f.size for f in self.files)
-            self.reclaimable = self.total_size - keeper_size
+            # L-1: only auto-calculate reclaimable when it was not explicitly provided
+            # (default is 0). This preserves values set by callers like LargeFileEngine
+            # across snapshot round-trips where __post_init__ would otherwise override them.
+            if self.reclaimable == 0:
+                keepers = [f for f in self.files if f.is_keeper]
+                if keepers:
+                    keeper_size = sum(f.size for f in keepers)
+                else:
+                    keeper_size = max(f.size for f in self.files)
+                self.reclaimable = self.total_size - keeper_size
 
     @property
     def file_count(self) -> int:
@@ -155,12 +160,42 @@ class BaseEngine(ABC):
     @abstractmethod
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         """
-        Begin scanning in a background thread. Non-blocking.
+        Run the scan on the orchestrator's scan thread.
+
+        Must block until the scan finishes (or is cancelled). Do not spawn a
+        nested scan thread unless ``wait_until_done()`` joins it.
+
+        Pause convention: ``pause_event.set()`` = running, ``clear()`` = paused.
 
         Args:
             progress_callback: Function called with ScanProgress updates.
         """
         pass
+
+    def wait_until_done(self, timeout: Optional[float] = None) -> bool:
+        """Wait for nested engine work (legacy inner threads). Returns True if idle."""
+        thread = getattr(self, "_scan_thread", None) or getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+            return not thread.is_alive()
+        return True
+
+    def shutdown_workers(self) -> None:
+        """Release thread/process pools after cancel (override in engines that use pools)."""
+
+    @staticmethod
+    def cooperative_pause_point(
+        cancel_event: threading.Event,
+        pause_event: threading.Event,
+    ) -> bool:
+        """Block while paused; return False if cancelled."""
+        if cancel_event.is_set():
+            return False
+        while not pause_event.is_set():
+            if cancel_event.is_set():
+                return False
+            pause_event.wait(timeout=0.1)
+        return True
 
     @abstractmethod
     def pause(self) -> None:

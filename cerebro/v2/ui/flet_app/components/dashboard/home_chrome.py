@@ -9,13 +9,12 @@ from typing import TYPE_CHECKING, Callable
 import flet as ft
 
 from cerebro.v2.ui.flet_app.components.dashboard.hero_button import HeroScanButton
-from cerebro.v2.ui.flet_app.design_system.glass import adaptive_glass
-from cerebro.v2.ui.flet_app.design_system.tokens import NEON_DARK
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
 from cerebro.v2.ui.flet_app.pill_button_styles import (
     pill_outlined_button_style,
     pill_text_button_style,
 )
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
+from cerebro.v2.ui.flet_app.theme import ThemeTokens
 from cerebro.v2.ui.flet_app.utils.motion import should_animate
 
 if TYPE_CHECKING:
@@ -54,14 +53,14 @@ class DashboardHomeChrome:
         set_container_glow: Callable[..., None],
     ) -> "DashboardHomeChrome":
         s = t.spacing
-        amber = str(NEON_DARK.get("accent_secondary", t.colors.warning))
+        accent_icon = t.colors.primary
         last_session_btn = ft.TextButton(
             "Open Last Session",
             icon=ft.icons.Icons.HISTORY,
             on_click=on_open_last_session,
             style=pill_text_button_style(t, variant="muted"),
         )
-        hero_tagline_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color=amber)
+        hero_tagline_icon = ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color=accent_icon)
         tagline = ft.Text(
             _TAGLINE if not should_animate(bridge) else "",
             size=t.typography.size_base,
@@ -74,10 +73,10 @@ class DashboardHomeChrome:
             "|",
             size=t.typography.size_base,
             weight=ft.FontWeight.W_300,
-            color=amber,
+            color=accent_icon,
             visible=should_animate(bridge),
         )
-        hero = adaptive_glass(
+        hero = minimal_surface(
             content=ft.Row(
                 [
                     hero_tagline_icon,
@@ -87,9 +86,8 @@ class DashboardHomeChrome:
                 ],
                 spacing=s.sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
             ),
-            t=t,
-            page=page,
             padding=ft.Padding.symmetric(horizontal=t.spacing.lg, vertical=t.spacing.sm),
             width=860,
         )
@@ -110,7 +108,7 @@ class DashboardHomeChrome:
         )
         actions = ft.Column(
             [start_btn, scan_safety_note, pause_scan_btn],
-            horizontal_alignment=ft.CrossAxisAlignment.START,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=s.xs,
         )
         status = ft.Text(
@@ -129,22 +127,19 @@ class DashboardHomeChrome:
         cancelled_results_banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color=amber, size=18),
+                    ft.Icon(ft.icons.Icons.INFO_OUTLINE, color=accent_icon, size=18),
                     cancelled_results_text,
-                    ft.Container(expand=True),
                     cancelled_results_btn,
                 ],
                 spacing=8,
+                alignment=ft.MainAxisAlignment.CENTER,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.35, amber)),
-            border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.08, amber),
             visible=False,
         )
         paused_scans_col = ft.Column([], spacing=s.xs, visible=False)
-        paused_scans_section = adaptive_glass(
+        paused_scans_section = minimal_surface(
             content=ft.Column(
                 [
                     ft.Row(
@@ -164,13 +159,13 @@ class DashboardHomeChrome:
                             ),
                         ],
                         spacing=s.xs,
+                        alignment=ft.MainAxisAlignment.CENTER,
                     ),
                     paused_scans_col,
                 ],
                 spacing=s.sm,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            t=t,
-            page=page,
             width=620,
             padding=ft.Padding.symmetric(horizontal=s.md, vertical=s.sm),
             visible=False,
@@ -193,12 +188,10 @@ class DashboardHomeChrome:
         built._tagline = tagline
         built._tagline_cursor = tagline_cursor
         built._bridge = bridge
+        built._accent_color = accent_icon
         if should_animate(bridge) and page is not None:
             page.run_task(built._tagline_typewriter_loop)
         return built
-
-    def _amber(self) -> str:
-        return str(NEON_DARK.get("accent_secondary", self._bridge and "#F59E0B"))
 
     async def _tagline_typewriter_loop(self) -> None:
         cursor_on = True
@@ -221,19 +214,21 @@ class DashboardHomeChrome:
             await asyncio.sleep(0.045)
 
     def sync_theme(self, t: ThemeTokens) -> None:
-        apply_glass_style(self.hero, t)
-        apply_glass_style(self.paused_scans_section, t)
-        amber = self._amber()
-        self.hero_tagline_icon.color = amber
-        self._tagline_cursor.color = amber
+        apply_minimal_style(self.hero)
+        apply_minimal_style(self.paused_scans_section)
+        accent = t.colors.primary
+        self._accent_color = accent
+        self.hero_tagline_icon.color = accent
+        self._tagline_cursor.color = accent
+        self.start_btn.sync_theme(t)
         self.last_session_btn.style = pill_text_button_style(t, variant="muted")
         self.pause_scan_btn.style = pill_outlined_button_style(t)
         self.cancelled_results_btn.style = pill_text_button_style(t, variant="primary")
 
     def set_reduce_motion(self, enabled: bool) -> None:
         self.start_btn.set_reduce_motion(enabled)
-        amber = self._amber()
-        self.hero_tagline_icon.color = amber
+        accent = getattr(self, "_accent_color", self.start_btn._accent)
+        self.hero_tagline_icon.color = accent
         if enabled:
             self._tagline.value = _TAGLINE
             self._tagline_cursor.visible = False

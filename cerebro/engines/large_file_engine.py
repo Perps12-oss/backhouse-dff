@@ -44,6 +44,7 @@ class LargeFileEngine(BaseEngine):
         self._progress = ScanProgress(state=ScanState.IDLE)
         self._cancel_event = threading.Event()
         self._pause_event = threading.Event()
+        self._scan_thread: threading.Thread | None = None
 
     def get_name(self) -> str:
         return "Large File Finder"
@@ -77,7 +78,7 @@ class LargeFileEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
         self._run_scan(progress_callback)
@@ -102,8 +103,8 @@ class LargeFileEngine(BaseEngine):
             for root, _, files in os.walk(folder):
                 if self._cancel_event.is_set():
                     break
-                while self._pause_event.is_set():
-                    time.sleep(0.1)
+                if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                    break
 
                 for fname in files:
                     p = Path(root) / fname
@@ -144,8 +145,10 @@ class LargeFileEngine(BaseEngine):
 
         # Wrap each file in its own group (informational — not actually duplicates)
         for gid, df in enumerate(top_files):
-            dg = DuplicateGroup(group_id=gid, files=[df])
-            dg.reclaimable = df.size  # user can reclaim by moving/deleting
+            # L-1: pass reclaimable to the constructor so it survives snapshot
+            # round-trips (__post_init__ would otherwise recalculate it to 0
+            # since single-file groups have no keeper subtraction).
+            dg = DuplicateGroup(group_id=gid, files=[df], reclaimable=df.size)
             self._results.append(dg)
 
         self._state = ScanState.COMPLETED
@@ -162,11 +165,11 @@ class LargeFileEngine(BaseEngine):
         )
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:

@@ -1,0 +1,14 @@
+﻿
+flet==0.84.0
+flet-desktop==0.84.0
+ImageHash==4.3.2
+numpy==2.4.4
+pillow==12.2.0
+psutil==7.2.2
+pytest==9.0.3
+PyYAML==6.0.3
+Send2Trash==2.1.0
+structlog==25.5.0
+xxhash==3.7.0
+
+

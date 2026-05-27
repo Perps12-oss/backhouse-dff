@@ -52,13 +52,13 @@ from cerebro.engines.image_formats import (
 logger = logging.getLogger(__name__)
 
 
-# Supported image extensions
-IMAGE_EXTENSIONS = {
+# Supported image extensions — I-3: frozenset so tests cannot mutate the module-level object.
+IMAGE_EXTENSIONS: frozenset[str] = frozenset({
     '.jpg', '.jpeg', '.jpe',
     '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
     '.heic', '.heif', '.cr2', '.cr3', '.nef',
     '.arw', '.dng', '.orf', '.rw2', '.pef', '.raf', '.sr2'
-}
+})
 
 # Hash sizes for perceptual hashing
 PHASH_SIZE = 8  # 8x8 grid for pHash
@@ -66,18 +66,21 @@ DHASH_SIZE = 8  # 8x8 grid for dHash
 
 
 def _normalize_pillow_image(img: Image.Image) -> Image.Image:
-    """Normalize tricky Pillow modes before hashing/conversion.
+    """Normalize image to RGB before hashing.
 
-    Palette images can embed transparency as bytes; converting those directly to RGB
-    triggers a noisy Pillow warning. Promote to RGBA first when needed.
+    Handles all tricky modes:
+    - Palette with bytes transparency → RGBA first to avoid Pillow warnings.
+    - Animated GIFs, CMYK, 16-bit PNGs → final convert("RGB") ensures stable hashes.
     """
     try:
         transparency = img.info.get("transparency")
     except Exception:
         transparency = None
     if img.mode == "P" and isinstance(transparency, (bytes, bytearray)):
-        return img.convert("RGBA")
-    return img
+        img = img.convert("RGBA")
+    # M-6: unconditional RGB conversion ensures stable perceptual hashes for
+    # CMYK, animated GIFs (first frame), 16-bit PNGs, and all other modes.
+    return img.convert("RGB")
 
 
 @dataclasses.dataclass
@@ -297,7 +300,7 @@ class ImageDedupEngine(BaseEngine):
             return
 
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._progress = ScanProgress(state=ScanState.SCANNING)
         self._results = []
         self._start_time = time.time()
@@ -310,14 +313,10 @@ class ImageDedupEngine(BaseEngine):
 
         self._callback = progress_callback
 
-        # Start scan thread
-        self._scan_thread = threading.Thread(
-            target=self._run_scan,
-            args=(progress_callback,),
-            daemon=True,
-            name=f"ScanThread-photos"
-        )
-        self._scan_thread.start()
+        try:
+            self._run_scan(progress_callback)
+        finally:
+            self.shutdown_workers()
 
     def _run_scan(self, cb: Callable[[ScanProgress], None]) -> None:
         """Run scan in a background thread."""
@@ -344,14 +343,17 @@ class ImageDedupEngine(BaseEngine):
                 len(image_files),
                 len(self._results),
             )
-            cb(ScanProgress(
+            completed_progress = ScanProgress(
                 state=ScanState.COMPLETED,
                 files_scanned=len(image_files),
                 files_total=len(image_files),
                 groups_found=len(self._results),
                 duplicates_found=sum(len(g.files) - 1 for g in self._results),
                 bytes_reclaimable=sum(g.reclaimable for g in self._results),
-            ))
+            )
+            # H-1: sync self._progress so get_progress() returns final state.
+            self._progress = completed_progress
+            cb(completed_progress)
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             cb(ScanProgress(
                 state=ScanState.ERROR,
@@ -513,14 +515,20 @@ class ImageDedupEngine(BaseEngine):
                     "width": 0, "height": 0,
                 }
                 processed += 1
-                self._progress.files_scanned = processed
-                self._progress.current_file = str(image_path)
+                # H-1: atomic _progress replacement (never mutate in-place).
+                self._progress = dataclasses.replace(
+                    self._progress,
+                    files_scanned=processed,
+                    current_file=str(image_path),
+                )
                 if processed % 25 == 0 and self._callback:
                     self._callback(dataclasses.replace(self._progress))
                 continue
             if self._worker_pool is None:
+                # L-7: cap at 16 — image I/O is already saturated; more threads
+                # only exhaust file descriptors on high-core machines.
                 self._worker_pool = ThreadPoolExecutor(
-                    max_workers=min(32, (os.cpu_count() or 4) * 2)
+                    max_workers=min(16, (os.cpu_count() or 4) * 2)
                 )
             fut = self._worker_pool.submit(self._compute_hashes, image_path)
             future_to_job[fut] = (idx, image_path, mtime, size, sig)
@@ -529,6 +537,10 @@ class ImageDedupEngine(BaseEngine):
             if self._cancel_event.is_set():
                 for pending in future_to_job:
                     pending.cancel()
+                return []
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                return []
+            if self._cancel_event.is_set():
                 return []
             idx, image_path, mtime, size, sig = future_to_job[fut]
             hashes = fut.result()
@@ -543,15 +555,29 @@ class ImageDedupEngine(BaseEngine):
                     "width": width, "height": height,
                 }
             processed += 1
-            self._progress.files_scanned = processed
-            self._progress.current_file = str(image_path)
+            # H-1: atomic _progress replacement.
+            self._progress = dataclasses.replace(
+                self._progress,
+                files_scanned=processed,
+                current_file=str(image_path),
+            )
             if (processed % 25 == 0 or processed == total_files) and self._callback:
                 self._callback(dataclasses.replace(self._progress))
 
         if self._cache is not None and cache_entries:
-            for path_str, sig, phash_hex, dhash_hex in cache_entries:
-                self._cache.set_quick(path_str, sig, phash_hex, algo="phash")
-                self._cache.set_full(path_str, sig, dhash_hex, algo="dhash")
+            # P-2: batch write instead of per-file writes.
+            # cache_entries contains (path_str, sig, phash_hex, dhash_hex).
+            # set_many_full expects (path, sig, full_hash, algo) so we write two batches.
+            try:
+                phash_batch = [(p, s, ph, "phash") for p, s, ph, _ in cache_entries]
+                dhash_batch = [(p, s, dh, "dhash") for p, s, _, dh in cache_entries]
+                self._cache.set_many_full(phash_batch)
+                self._cache.set_many_full(dhash_batch)
+            except AttributeError:
+                # Fallback if set_many_full not available on older cache version.
+                for path_str, sig, phash_hex, dhash_hex in cache_entries:
+                    self._cache.set_quick(path_str, sig, phash_hex, algo="phash")
+                    self._cache.set_full(path_str, sig, dhash_hex, algo="dhash")
 
         if self._hash_fail_count > 0:
             sample_preview = ", ".join(self._hash_fail_samples[:3])
@@ -580,7 +606,9 @@ class ImageDedupEngine(BaseEngine):
             for j in phash_tree.query(a["phash_int"], phash_threshold):
                 if j <= i:
                     continue
-                dh_dist = (a["dhash_int"] ^ records[j]["dhash_int"]).bit_count()
+                # M-7: .bit_count() is Python 3.10+; use bin().count() for portability.
+                xor_dh = a["dhash_int"] ^ records[j]["dhash_int"]
+                dh_dist = bin(xor_dh).count("1")
                 if dh_dist <= dhash_threshold:
                     uf.union(i, j)
         return uf
@@ -703,22 +731,28 @@ class ImageDedupEngine(BaseEngine):
 
     def pause(self) -> None:
         """Pause the current scan."""
-        if self._scan_thread and self._scan_thread.is_alive():
-            self._pause_event.set()
-            self._state = ScanState.PAUSED
+        self._pause_event.clear()
+        self._state = ScanState.PAUSED
 
     def resume(self) -> None:
         """Resume a paused scan."""
-        if self._scan_thread and self._scan_thread.is_alive():
-            self._pause_event.clear()
-            self._state = ScanState.SCANNING
+        self._pause_event.set()
+        self._state = ScanState.SCANNING
 
     def cancel(self) -> None:
         """Cancel the current scan."""
         self._cancel_event.set()
-        self._pause_event.clear()
-        if self._worker_pool:
-            self._worker_pool.shutdown(wait=False, cancel_futures=True)
+        self._pause_event.set()
+        self.shutdown_workers()
+
+    def shutdown_workers(self) -> None:
+        pool = getattr(self, "_worker_pool", None)
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            self._worker_pool = None
 
     def get_results(self) -> List[DuplicateGroup]:
         """

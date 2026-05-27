@@ -36,8 +36,9 @@ class ReviewFlowRouter:
         return _BACK_TARGETS.get(self._state.active_screen)
 
     def navigate(self, screen: ReviewScreen, *, push: bool = True) -> None:
+        # Re-rendering the same screen (e.g. "Go to Browse" while already on Browse) used to
+        # rebuild the list host and leave the main pane blank on Flet 0.84.
         if screen == self._state.active_screen:
-            self._on_screen_changed()
             return
         if push:
             self._state.screen_stack.append(screen)

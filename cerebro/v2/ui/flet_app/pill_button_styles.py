@@ -27,8 +27,16 @@ def _luminance(hex_color: str) -> float:
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
 
 
+def text_on_fill(fill_hex: str) -> str:
+    """Foreground readable on a solid accent/primary fill."""
+    return "#121212" if _luminance(fill_hex) > 0.55 else "#FFFFFF"
+
+
 def on_accent_contrast_text(colors: object) -> str:
     """Readable label on ``colors.accent`` fill: dark ink on bright accent, else theme fg."""
+    accent = str(getattr(colors, "accent", "") or getattr(colors, "primary", ""))
+    if accent.startswith("#") and len(accent.lstrip("#")) >= 6:
+        return text_on_fill(accent)
     bg = str(getattr(colors, "bg", "#0B1220"))
     fg = str(getattr(colors, "fg", "#0B1220"))
     lum = _luminance(bg)
@@ -150,12 +158,35 @@ def pill_filled_accent(
 
 def pill_filled_danger(t: ThemeTokens) -> ft.ButtonStyle:
     c = t.colors
+    label = text_on_fill(c.danger)
     return ft.ButtonStyle(
         bgcolor=c.danger,
-        color="#FFFFFF",
-        icon_color="#FFFFFF",
+        color=label,
+        icon_color=label,
         overlay_color=ft.Colors.with_opacity(0.20, c.danger_hover),
         padding=_PILL_PAD,
         shape=_PILL_SHAPE,
         text_style=ft.TextStyle(size=11, weight=ft.FontWeight.W_700),
+    )
+
+
+def pill_filled_critical(
+    t: ThemeTokens,
+    *,
+    padding: ft.Padding | None = None,
+    text_size: int = 12,
+    weight: str = ft.FontWeight.W_700,
+) -> ft.ButtonStyle:
+    """Irreversible actions only (Apply cleanup, confirmed delete). Routine CTAs use ``pill_filled_accent``."""
+    c = t.colors
+    fill = c.action_critical
+    label = text_on_fill(fill)
+    return ft.ButtonStyle(
+        bgcolor=fill,
+        color=label,
+        icon_color=label,
+        overlay_color=ft.Colors.with_opacity(0.18, c.action_critical_hover),
+        padding=padding or ft.Padding.symmetric(horizontal=16, vertical=10),
+        shape=_PILL_SHAPE,
+        text_style=ft.TextStyle(size=text_size, weight=weight),
     )

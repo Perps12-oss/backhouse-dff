@@ -22,7 +22,7 @@ def dedupe_roots(roots: list[Path]) -> list[Path]:
     Regression indicators: missing ``[ROOT_DEDUP]`` lines when the user passes
     overlapping roots; discovery / candidate counts that jump non-monotonically
     vs. a build without ``dedupe_roots``. Investigation:
-    ``docs/bug-investigations/bug1-canonical-path-dedup.md``.
+    ``dev/docs/bug-investigations/bug1-canonical-path-dedup.md``.
     """
     resolved = sorted(
         {Path(r).resolve() for r in roots},

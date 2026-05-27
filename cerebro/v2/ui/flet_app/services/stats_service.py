@@ -27,9 +27,14 @@ class StatsService:
         self._on_refresh = cb
 
     def invalidate(self) -> None:
-        """Mark cache dirty. Next get_stats() will start a background refresh."""
+        """Mark cache dirty and start a background refresh immediately."""
         with self._lock:
             self._dirty = True
+            should_refresh = not self._refreshing
+            if should_refresh:
+                self._refreshing = True
+        if should_refresh:
+            threading.Thread(target=self._refresh_worker, daemon=True).start()
 
     def get_stats(self) -> Dict[str, Any]:
         """Return cached stats immediately; kick off a background refresh if stale."""
@@ -52,16 +57,11 @@ class StatsService:
             from cerebro.v2.core.deletion_history_db import get_default_history_manager
             from cerebro.v2.core.scan_history_db import get_scan_history_db
 
-            entries = get_scan_history_db().get_recent(100_000)
-            scans = len(entries)
-            dupes = sum(max(0, e.files_found - e.groups_found) for e in entries)
-            bytes_reclaimed = 0
-            for row in get_default_history_manager().get_recent_history(100_000):
-                try:
-                    bytes_reclaimed += int(row[3])
-                except (IndexError, TypeError, ValueError):
-                    continue
-            result = {"scans": scans, "dupes": dupes, "bytes_reclaimed": bytes_reclaimed}
+            # Single SQL aggregate — O(1), no row fetching
+            scan_count, sum_groups, sum_files, _ = get_scan_history_db().aggregate_since(0.0)
+            dupes = max(0, sum_files - sum_groups)
+            bytes_reclaimed = get_default_history_manager().get_total_bytes_reclaimed()
+            result = {"scans": scan_count, "dupes": dupes, "bytes_reclaimed": bytes_reclaimed}
         except Exception:
             _log.exception("StatsService background refresh failed")
         finally:

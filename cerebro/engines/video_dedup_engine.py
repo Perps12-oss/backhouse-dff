@@ -232,7 +232,7 @@ class VideoDedupEngine(BaseEngine):
 
     def start(self, progress_callback: Callable[[ScanProgress], None]) -> None:
         self._cancel_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         self._results = []
         self._state = ScanState.SCANNING
         self._run_scan(progress_callback)
@@ -270,8 +270,8 @@ class VideoDedupEngine(BaseEngine):
         for i, vf in enumerate(video_files):
             if self._cancel_event.is_set():
                 break
-            while self._pause_event.is_set():
-                time.sleep(0.1)
+            if not BaseEngine.cooperative_pause_point(self._cancel_event, self._pause_event):
+                break
             sig = _video_signature(vf, self._ffmpeg)
             if sig:
                 signatures[vf] = sig
@@ -346,11 +346,11 @@ class VideoDedupEngine(BaseEngine):
         )
 
     def pause(self) -> None:
-        self._pause_event.set()
+        self._pause_event.clear()
         self._state = ScanState.PAUSED
 
     def resume(self) -> None:
-        self._pause_event.clear()
+        self._pause_event.set()
         self._state = ScanState.SCANNING
 
     def cancel(self) -> None:

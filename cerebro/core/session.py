@@ -392,8 +392,17 @@ class SessionManager:
         scan_id: str,
         token: Optional[str] = None,
         policy: str = "dry_run",
+        pipeline: Optional[object] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Build effective delete plan from UI intents."""
+        """Build effective delete plan from UI intents.
+
+        H-4: For permanent deletions, supply a CerebroPipeline via the ``pipeline``
+        parameter. A token will be issued on ``pipeline.gate`` and embedded in the
+        returned plan dict. Self-generated tokens (not registered with any gate) are
+        no longer used — they would always fail gate validation.
+
+        If ``policy`` is not 'permanent', a token is not required.
+        """
         with self._lock:
             if scan_id not in self._scans:
                 return None
@@ -402,8 +411,18 @@ class SessionManager:
             if not record.groups:
                 return None
             
-            # Use provided token or generate one
-            plan_token = token or f"ui_{secrets.token_urlsafe(16)}"
+            # H-4: obtain token from the correct gate, never self-generate one.
+            plan_token: Optional[str] = token
+            if plan_token is None and policy == "permanent":
+                if pipeline is not None:
+                    try:
+                        plan_token = pipeline.gate.issue_token(  # type: ignore[union-attr]
+                            reason="session_build_effective_plan"
+                        )
+                    except Exception:
+                        plan_token = None
+                # If no pipeline provided for a permanent plan, leave token=None so
+                # gate.assert_allowed() rejects it — safer than silently escalating.
             
             # Build items from intents
             items = []
@@ -439,16 +458,28 @@ class SessionManager:
     # =================================================================
     
     def _persist_record(self, record: ScanRecord) -> None:
-        """Persist scan record to disk."""
+        """Persist scan record to disk using atomic write (L-3: crash-safe)."""
+        import tempfile
+        import os
         try:
             self._persist_path.mkdir(parents=True, exist_ok=True)
             file_path = self._persist_path / f"{record.scan_id}.json"
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(record.to_dict(), f, indent=2, default=str)
+            data = json.dumps(record.to_dict(), indent=2, default=str)
+            fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", dir=str(self._persist_path))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, file_path)
+            except OSError:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
-            # Log but don't fail
-            logger.info(f"Failed to persist session: {e}")
+            logger.warning("Failed to persist session: %s", e)
     
     def _load_persisted(self) -> None:
         """Load persisted sessions from disk."""

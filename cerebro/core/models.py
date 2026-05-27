@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
+import dataclasses
 from enum import Enum
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -15,6 +16,11 @@ class PipelineMode(str, Enum):
     FUZZY = "fuzzy"
 
 class DeletionPolicy(str, Enum):
+    """
+    H-2/B-3: This is a legacy alias kept for old imports.
+    Canonical: cerebro.core.deletion.DeletionPolicy
+    Values are identical strings so comparisons still work.
+    """
     MOVE_TO_TRASH = "trash"
     DELETE_PERMANENTLY = "permanent"
 
@@ -78,13 +84,16 @@ class PipelineRequest:
             settings_snapshot=self.config.to_dict(),
         )
 
-# -- Deletion Request for cleanup step --
+# H-2/B-3: models.DeletionRequest is retired.
+# Canonical: cerebro.core.deletion.DeletionRequest
+# Kept as stub to avoid ImportError on stale imports.
 
 @dataclass
 class DeletionRequest:
-    scan_id: str
-    deletion_policy: DeletionPolicy
-    files_to_delete: List[Path]
+    """Retired stub. Canonical: cerebro.core.deletion.DeletionRequest"""
+    scan_id: str = ""
+    deletion_policy: object = None
+    files_to_delete: List[Path] = None  # type: ignore[assignment]
 
 # -- Match Grouping / Rendering --
 
@@ -182,38 +191,11 @@ class FileMetadata:
             )
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError):
             return None
-@dataclass
-class DuplicateGroup:
-    group_id: str
-    files: List[FileMetadata]
-    group_hash: Optional[str] = None
-    visual_score: Optional[float] = None
-    cluster_distance: Optional[float] = None
-    tags: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "group_id": self.group_id,
-            "files": [f.to_dict() for f in self.files],
-            "group_hash": self.group_hash,
-            "visual_score": self.visual_score,
-            "cluster_distance": self.cluster_distance,
-            "tags": self.tags,
-            "metadata": self.metadata,
-        }
-
-    @staticmethod
-    def from_dict(d: Dict[str, Any]) -> "DuplicateGroup":
-        return DuplicateGroup(
-            group_id=d.get("group_id", ""),
-            files=[FileMetadata.from_dict(f) for f in d.get("files", [])],
-            group_hash=d.get("group_hash"),
-            visual_score=d.get("visual_score"),
-            cluster_distance=d.get("cluster_distance"),
-            tags=d.get("tags", []),
-            metadata=d.get("metadata", {}),
-        )
+# H-2: DuplicateGroup is removed from models.py.
+# Canonical definition: cerebro.engines.base_engine.DuplicateGroup
+# The old models.DuplicateGroup (group_id: str, files: List[FileMetadata]) is now retired.
+# trash_manager.py (which imported it) has been retired too.
 
 @dataclass
 class DuplicateItem:
@@ -269,91 +251,39 @@ class FileType(str, Enum):
             return FileType.ARCHIVE
         return FileType.OTHER
 
+# H-2/IS-1: models.ScanProgress is retired — zero import sites confirmed.
+# Canonical: cerebro.engines.base_engine.ScanProgress
+# Stub retained only to prevent ImportError on stale imports.
 @dataclass
 class ScanProgress:
-    """
-    Single snapshot of scan progress.
-    
-    All progress data in one atomic snapshot.
-    Optional fields for backward compatibility.
-    No UI formatting or calculations.
-    Pure data container.
-    """
-    
-    # Core progress tracking
+    """Retired stub. Canonical: cerebro.engines.base_engine.ScanProgress"""
     phase: str = ""
     message: str = ""
     percent: float = 0.0
-    
-    # File/basic stats
     scanned_files: int = 0
     scanned_bytes: int = 0
     elapsed_seconds: float = 0.0
-    
-    # Optional estimates (may be None until known)
     estimated_total_files: Optional[int] = None
     estimated_total_bytes: Optional[int] = None
-    
-    # --- NEW FIELDS (added at the end for backward compatibility) ---
     speed_files_per_sec: Optional[float] = None
-    """Smoothed speed in files per second (computed by controller)"""
-    
     throughput_mb_per_sec: Optional[float] = None
-    """Smoothed throughput in MB per second (computed by controller)"""
-    
     eta_seconds: Optional[float] = None
-    """Estimated time remaining in seconds (computed by controller)"""
-    
     warnings_count: Optional[int] = None
-    """Total warnings count (controller tracks)"""
-    
     groups_found: Optional[int] = None
-    """Total groups found (controller tracks)"""
-    
     current_path: Optional[str] = None
-    """Current file/folder being processed"""
-    
-    # Additional metadata
     scan_id: Optional[str] = None
     timestamp: Optional[float] = None
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self):
-        """Post-initialization validation."""
-        # Clamp percent between 0-100
-        self.percent = max(0.0, min(100.0, self.percent))
-        
-        # Ensure non-negative values
-        self.scanned_files = max(0, self.scanned_files)
-        self.scanned_bytes = max(0, self.scanned_bytes)
-        self.elapsed_seconds = max(0.0, self.elapsed_seconds)
-        
-        # Set timestamp if not provided
-        if self.timestamp is None:
-            self.timestamp = time.time()
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary (for JSON serialization)."""
-        result = {}
-        for field_name in self.__dataclass_fields__:
-            value = getattr(self, field_name)
-            if value is not None:
-                result[field_name] = value
-        return result
-    
+        return {k: v for k, v in self.__dict__.items() if v is not None}
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> ScanProgress:
-        """Create from dictionary (with validation)."""
-        # Filter out None values and unknown fields
-        valid_fields = {}
-        for field_name in cls.__dataclass_fields__:
-            if field_name in data and data[field_name] is not None:
-                valid_fields[field_name] = data[field_name]
-        
-        return cls(**valid_fields)
-    
-    def copy_with(self, **kwargs) -> ScanProgress:
-        """Create a copy with updated fields."""
+    def from_dict(cls, data: Dict[str, Any]) -> "ScanProgress":
+        valid = {k: v for k, v in data.items() if k in {f.name for f in dataclasses.fields(cls)}}
+        return cls(**valid)
+
+    def copy_with(self, **kwargs) -> "ScanProgress":
         from dataclasses import replace
         return replace(self, **kwargs)
 

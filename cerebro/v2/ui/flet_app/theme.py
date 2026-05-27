@@ -43,6 +43,7 @@ def get_active_preset() -> Optional["PalettePreset"]:
 
 _UI_FONT_BASE_PX: int = 13
 _ui_font_scale: float = 1.0
+_tree_font_scale_applied: float = 1.0
 
 
 def set_ui_font_size_px(size: int) -> None:
@@ -54,6 +55,15 @@ def set_ui_font_size_px(size: int) -> None:
 
 def get_ui_font_scale() -> float:
     return _ui_font_scale
+
+
+def get_tree_font_scale_applied() -> float:
+    return _tree_font_scale_applied
+
+
+def set_tree_font_scale_applied(scale: float) -> None:
+    global _tree_font_scale_applied
+    _tree_font_scale_applied = max(0.001, float(scale))
 
 
 def _scaled_typography(base: Typography) -> Typography:
@@ -121,6 +131,9 @@ class ColorTokens:
     glass_border: str = "#E2E8F0"
 
     accent: str = "#3B82F6"
+    action_critical: str = "#FF6F61"
+    action_critical_hover: str = "#E85A4D"
+    fg_soft: str = "#374151"
 
 
 @dataclass(frozen=True)
@@ -156,6 +169,9 @@ class DarkColorTokens:
     glass_border: str = "#324765"
 
     accent: str = "#35E7FF"
+    action_critical: str = "#FF6F61"
+    action_critical_hover: str = "#E85A4D"
+    fg_soft: str = "#E0E0E0"
 
 
 @dataclass(frozen=True)
@@ -249,6 +265,10 @@ def _tokens_from_preset(preset: "PalettePreset") -> ColorTokens:
     bgr, bgg, bgb = int(bgh[0:2], 16), int(bgh[2:4], 16), int(bgh[4:6], 16)
     row_sel = f"#{(bgr+pr)//2:02X}{(bgg+pg)//2:02X}{(bgb+pb)//2:02X}"
 
+    crit = getattr(preset, "action_critical", "#FF6F61") or "#FF6F61"
+    crit_hover = _darken(crit) if preset.is_dark else _lighten(crit)
+    fg_soft = getattr(preset, "fg_soft", preset.fg2) or preset.fg2
+
     return ColorTokens(
         primary=preset.primary,
         primary_hover=hover,
@@ -256,6 +276,9 @@ def _tokens_from_preset(preset: "PalettePreset") -> ColorTokens:
         danger_hover=danger_hover,
         success=preset.success,
         warning=preset.warning,
+        action_critical=crit,
+        action_critical_hover=crit_hover,
+        fg_soft=fg_soft,
         bg=preset.bg,
         bg2=preset.bg2,
         bg3=preset.bg3,
@@ -423,7 +446,23 @@ def build_flet_theme(mode: str, seed: str | None = None) -> ft.Theme:
         color_scheme=scheme,
         font_family=Typography().family,
         visual_density=ft.VisualDensity.COMFORTABLE,
+        text_theme=_build_flet_text_theme(mode),
     )
+
+
+def _build_flet_text_theme(mode: str) -> ft.TextTheme | None:
+    """Material text roles scaled to match Settings → Appearance font size."""
+    try:
+        ty = theme_for_mode(mode).typography
+        return ft.TextTheme(
+            body_medium=ft.TextStyle(size=ty.size_base, font_family=ty.family),
+            body_small=ft.TextStyle(size=ty.size_sm, font_family=ty.family),
+            title_medium=ft.TextStyle(size=ty.size_md, font_family=ty.family),
+            title_large=ft.TextStyle(size=ty.size_lg, font_family=ty.family),
+            label_large=ft.TextStyle(size=ty.size_sm, font_family=ty.family),
+        )
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -456,9 +495,10 @@ def glass_surface_bg(t: ThemeTokens) -> str:
 
 
 def apply_glass_style(container: ft.Container, t: ThemeTokens) -> None:
-    """Repaint an existing glass container after theme / preset change."""
-    container.bgcolor = glass_surface_bg(t)
-    container.border = ft.border.all(1, t.colors.glass_border)
+    """Repaint container as flat flet-base surface (legacy name)."""
+    from cerebro.v2.ui.flet_app.design_system.cards import apply_flat_style
+
+    apply_flat_style(container, t)
 
 
 # ---------------------------------------------------------------------------
@@ -475,31 +515,18 @@ def glass_container(
     blur: int = 0,
     **kwargs
 ) -> ft.Container:
-    """Create a glassmorphism-styled container."""
-    br = border_radius or t.border_radius
-    shadow = kwargs.pop(
-        "shadow",
-        ft.BoxShadow(
-            spread_radius=0,
-            blur_radius=t.shadow_blur,
-            offset=ft.Offset(0, t.shadow_offset_y),
-            color=ft.Colors.with_opacity(0.12, "#000000" if is_dark_theme(t) else "#94A3B8"),
-        ),
-    )
-    container_kwargs: dict = dict(
-        content=content,
+    """Flat flet-base card (legacy name)."""
+    from cerebro.v2.ui.flet_app.design_system.cards import flat_card
+
+    _ = blur
+    return flat_card(
+        content,
+        t,
         padding=padding,
-        border_radius=br,
-        bgcolor=glass_surface_bg(t),
-        border=ft.border.all(1, t.colors.glass_border),
-        shadow=shadow,
+        border_radius=border_radius or 12,
         expand=expand,
         **kwargs,
     )
-    if blur > 0:
-        container_kwargs["blur"] = ft.Blur(blur, blur)
-    return ft.Container(**container_kwargs)
-
 
 # ---------------------------------------------------------------------------
 # Static data unchanged from original

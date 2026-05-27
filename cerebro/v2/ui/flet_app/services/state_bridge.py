@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+LAST_SESSION_UNAVAILABLE_MSG = (
+    "Last session has expired and cannot be reopened right now. "
+    "Run a new scan from Home."
+)
+
 _SETTINGS_PATH = Path.home() / ".cerebro" / "flet_ui_settings.json"
 
 
@@ -55,6 +60,7 @@ class StateBridge:
         self._on_state_change: Optional[Callable[[AppState, AppState, object], None]] = None
         self._on_theme_change: Optional[Callable[[str], None]] = None
         self._visual_theme: str = "dark"
+        self._active_gradient_id: str = "material_purple"
         self._scan_session: Dict[str, Any] = {}
         self._suppress_page_update: bool = False
         self._last_page_update_ts: float = 0.0  # B3: throttle progress-tick updates
@@ -63,11 +69,16 @@ class StateBridge:
         self._structural_actions: set[str] = {"SetActiveTab", "ScanCompleted"}
         self._stats_service = get_stats_service()
         self._stats_service.set_on_refresh(self._on_stats_refreshed)
+        self._on_stats_refresh_ui: Optional[Callable[[], None]] = None
 
     @property
     def app_theme(self) -> str:
-        """Effective light/dark label for glass morphism overlays (always ``light`` or ``dark``)."""
+        """Effective light/dark label for overlays (always ``light`` or ``dark``)."""
         return self._visual_theme
+
+    @property
+    def active_gradient_id(self) -> str:
+        return self._active_gradient_id
 
     @property
     def flet_page(self) -> ft.Page:
@@ -77,10 +88,18 @@ class StateBridge:
     def show_modal_dialog(self, dialog: ft.Control) -> None:
         """Open a modal dialog (Flet 0.25+ uses ``Page.show_dialog``, not ``Page.open``)."""
         self._page.show_dialog(dialog)
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     def dismiss_top_dialog(self) -> None:
         """Close the top dialog opened with :meth:`show_modal_dialog`."""
         self._page.pop_dialog()
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     @property
     def store(self) -> StateStore:
@@ -116,12 +135,23 @@ class StateBridge:
         self._on_theme_change = cb
 
     def refresh_app_typography(self) -> None:
-        """Re-run the theme callback so pages pick up ``theme.set_ui_font_size_px``."""
-        if self._on_theme_change:
-            try:
-                self._on_theme_change(self._visual_theme)
-            except Exception:
-                _log.exception("refresh_app_typography failed")
+        """Rescale built UI text after Settings → Appearance font size changes."""
+        from cerebro.v2.ui.flet_app.theme import build_flet_theme, get_active_preset
+        from cerebro.v2.ui.flet_app.utils.typography_refresh import sync_page_font_scale
+
+        preset = get_active_preset()
+        mode_str = self._visual_theme
+        seed = getattr(preset, "seed", None) if preset is not None else None
+        try:
+            self._page.theme = build_flet_theme(mode_str, seed=seed)
+        except Exception:
+            _log.debug("Could not refresh page.theme for typography", exc_info=True)
+
+        sync_page_font_scale(self._page)
+        try:
+            self._page.update()
+        except Exception:
+            _log.debug("page.update after typography refresh failed", exc_info=True)
 
     def register_progress_control(self, ctrl: ft.Control) -> None:
         """Register a control to update on scan-progress actions."""
@@ -182,6 +212,9 @@ class StateBridge:
         if dirty_updated and action_name not in self._structural_actions:
             return
 
+        from cerebro.v2.ui.flet_app.flet_thread import assert_flet_thread
+
+        assert_flet_thread(msg="StateBridge._on_store_change page.update")
         try:
             self._page.update()
         except Exception:
@@ -189,13 +222,10 @@ class StateBridge:
 
     def _on_stats_refreshed(self, _stats: Dict[str, Any]) -> None:
         """Refresh UI when background stats cache finishes recomputing."""
-        try:
-            if hasattr(self._page, "run_thread"):
-                self._page.run_thread(self._safe_page_update)
-            else:
-                self._safe_page_update()
-        except Exception:
-            pass
+        from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
+
+        cb = self._on_stats_refresh_ui or self._safe_page_update
+        run_on_ui_thread(self._page, cb)
 
     def _safe_page_update(self) -> None:
         try:
@@ -229,11 +259,30 @@ class StateBridge:
                 _log.exception("Theme change callback failed")
 
     def apply_preset_theme(self, preset_id: str) -> bool:
-        """Apply a named palette (VS Code-accurate colors + light/dark shell) and sync app state."""
-        from cerebro.v2.ui.flet_app.palette_themes import default_preset, preset_by_id
+        """Apply a gradient theme (flet-base surfaces + accent) and sync app state."""
+        from cerebro.v2.ui.flet_app.multigradient_themes import (
+            default_gradient,
+            gradient_by_id,
+        )
+        from cerebro.v2.ui.flet_app.palette_themes import (
+            default_preset,
+            derive_preset_from_base,
+            resolve_preset_id,
+        )
         from cerebro.v2.ui.flet_app.theme import build_flet_theme, set_active_preset
 
-        preset = preset_by_id(preset_id) or default_preset()
+        resolved = resolve_preset_id(preset_id)
+        gradient = gradient_by_id(resolved) or default_gradient()
+        self._active_gradient_id = gradient.id
+
+        base = default_preset()
+        preset = derive_preset_from_base(
+            base,
+            preset_id=gradient.id,
+            name=gradient.name,
+            primary=gradient.accent,
+            seed=gradient.accent,
+        )
         mode_str = "dark" if preset.is_dark else "light"
 
         set_active_preset(preset)
@@ -272,22 +321,38 @@ class StateBridge:
         self, groups: List[DuplicateGroup], mode: str
     ) -> None:
         self._coordinator.scan_completed(groups, mode)
-        self._persist_scan_history(groups, mode or "files")
-        try:
-            import time as _t
-
-            from cerebro.v2.persistence.scan_snapshot import save_scan_results_snapshot
-
-            save_scan_results_snapshot(list(groups), mode or "files", _t.time())
-        except Exception:
-            _log.exception("Persist scan snapshot failed")
+        self._persist_scan_history_async(groups, mode or "files")
+        self._save_scan_snapshot_async(list(groups), mode or "files")
         self._scan_session = {}
 
-    def _persist_scan_history(self, groups: List[DuplicateGroup], mode: str) -> None:
+    def _save_scan_snapshot_async(self, groups: List[DuplicateGroup], mode: str) -> None:
+        import threading as _threading
+        import time as _t
+        ts = _t.time()
+
+        def _worker() -> None:
+            try:
+                from cerebro.v2.persistence.scan_snapshot import save_scan_results_snapshot
+                save_scan_results_snapshot(groups, mode, ts)
+            except Exception:
+                _log.exception("Persist scan snapshot failed")
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _persist_scan_history_async(self, groups: List[DuplicateGroup], mode: str) -> None:
+        import threading as _threading
+        session_snapshot = dict(self._scan_session)
+
+        def _worker() -> None:
+            self._persist_scan_history(groups, mode, _session=session_snapshot)
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _persist_scan_history(self, groups: List[DuplicateGroup], mode: str, *, _session: dict | None = None) -> None:
         try:
             from cerebro.v2.core.scan_history_db import get_scan_history_db
 
-            ses = self._scan_session or {}
+            ses = _session if _session is not None else (self._scan_session or {})
             folders = [str(x) for x in ses.get("folders", [])]
             t0 = ses.get("t0")
             duration = max(0.0, time.monotonic() - float(t0)) if t0 is not None else 0.0
@@ -307,6 +372,10 @@ class StateBridge:
     def get_stats(self) -> Dict[str, Any]:
         """Aggregate stats for the dashboard cards (cached + background refresh)."""
         return self._stats_service.get_stats()
+
+    def set_on_stats_refresh_ui(self, cb: Callable[[], None]) -> None:
+        """Register a UI callback invoked (on the Flet thread) when the background stats refresh completes."""
+        self._on_stats_refresh_ui = cb
 
     def invalidate_stats_cache(self) -> None:
         self._stats_service.invalidate()
@@ -366,30 +435,46 @@ class StateBridge:
 
             get_default_history_manager().clear_history()
 
-    def open_last_session(self) -> None:
-        """Restore the last scan: in-memory backend results, else ``last.json`` on disk."""
+    def open_last_session(self) -> bool:
+        """Restore the last scan: in-memory backend results, else ``last.json`` on disk.
+
+        Returns True when review was opened with results; False when nothing could be restored
+        (a user-facing snackbar is shown).
+        """
+        def _restore(groups: List[DuplicateGroup], mode: str, *, success_detail: str) -> bool:
+            try:
+                self._coordinator.scan_completed(list(groups), mode or "files")
+                self._coordinator.set_active_tab("review")
+            except Exception:
+                _log.exception("open_last_session restore failed")
+                self.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
+                return False
+            self.show_snackbar(success_detail, success=True)
+            return True
+
         cached = self._backend.get_results()
         if cached:
             mode = self.state.scan_mode or "files"
-            self._coordinator.scan_completed(list(cached), mode)
-            self._coordinator.set_active_tab("review")
-            self.show_snackbar("Restored the last scan from memory.", success=True)
-            return
+            return _restore(list(cached), mode, success_detail="Restored the last scan from memory.")
+
+        snap = None
         try:
             from cerebro.v2.persistence.scan_snapshot import load_last_scan_snapshot
 
             snap = load_last_scan_snapshot()
         except Exception:
             _log.exception("load_last_scan_snapshot failed")
-            snap = None
         if snap:
             groups, mode, _ts = snap
             if groups:
-                self._coordinator.scan_completed(list(groups), mode or "files")
-                self._coordinator.set_active_tab("review")
-                self.show_snackbar("Restored last saved session from disk (last.json).", success=True)
-                return
-        self.show_snackbar("No scan results in memory or on disk. Run a new scan from Home.", info=True)
+                return _restore(
+                    list(groups),
+                    mode or "files",
+                    success_detail="Restored last saved session from disk (last.json).",
+                )
+
+        self.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
+        return False
 
     def get_settings(self) -> Dict[str, Any]:
         if not _SETTINGS_PATH.exists():
@@ -469,14 +554,17 @@ class StateBridge:
         action_label: str | None = None,
         on_action: Callable[[ft.ControlEvent], None] | None = None,
     ) -> None:
+        from cerebro.v2.ui.flet_app.theme import theme_for_mode
+
+        colors = theme_for_mode(self._visual_theme).colors
         if error:
-            bg = "#B91C1C"
+            bg = colors.danger
         elif success:
-            bg = "#166534"
+            bg = colors.success
         elif info:
-            bg = "#334155"
+            bg = ft.Colors.with_opacity(0.92, colors.bg3)
         else:
-            bg = "#1E293B"
+            bg = ft.Colors.with_opacity(0.92, colors.bg2)
         self._page.snack_bar = ft.SnackBar(
             content=ft.Text(str(message)),
             bgcolor=bg,

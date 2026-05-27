@@ -34,6 +34,7 @@ from typing import Optional, Generator
 
 DEBUG = os.environ.get("CEREBRO_DEBUG", "").strip().lower() in ("1", "true", "yes")
 LOG_JSON = os.environ.get("CEREBRO_LOG_JSON", "").strip().lower() in ("1", "true", "yes")
+REDACT_PATHS = os.environ.get("CEREBRO_REDACT_PATHS", "").strip().lower() in ("1", "true", "yes")
 
 # Root name for the entire cerebro logging hierarchy.
 # All module loggers (getLogger(__name__)) propagate here automatically.
@@ -69,6 +70,26 @@ def scan_context(scan_id: str) -> Generator[None, None, None]:
 class _ScanIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.scan_id = get_scan_id()  # type: ignore[attr-defined]
+        return True
+
+
+class _PathRedactionFilter(logging.Filter):
+    """Replace user home prefix in log messages when CEREBRO_REDACT_PATHS=1."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._home = str(Path.home())
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not REDACT_PATHS:
+            return True
+        try:
+            msg = record.getMessage()
+            if self._home and self._home in msg:
+                record.msg = msg.replace(self._home, "~")
+                record.args = ()
+        except Exception:
+            pass
         return True
 
 
@@ -236,10 +257,20 @@ def _configure_root(
 
         formatter = _make_formatter()
 
+        # Windows consoles default to a legacy code page (cp1252), which mojibakes
+        # non-ASCII paths in console output (e.g. "¼áÞ¿¡á…"). Force UTF-8 so paths
+        # render correctly; backslashreplace guarantees we never crash on odd bytes.
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")  # type: ignore[union-attr]
+        except (ValueError, OSError):
+            pass
+
         sh = logging.StreamHandler(sys.stdout)
         sh.setLevel(level)
         sh.setFormatter(formatter)
         sh.addFilter(_ScanIdFilter())
+        sh.addFilter(_PathRedactionFilter())
         base.addHandler(sh)
 
         if log_to_file:
@@ -258,6 +289,7 @@ def _configure_root(
                 fh.setLevel(level)
                 fh.setFormatter(formatter)
                 fh.addFilter(_ScanIdFilter())
+                fh.addFilter(_PathRedactionFilter())
                 base.addHandler(fh)
 
                 _prune_old_session_logs(logs_dir)
@@ -268,6 +300,7 @@ def _configure_root(
                 session_fh.setLevel(level)
                 session_fh.setFormatter(formatter)
                 session_fh.addFilter(_ScanIdFilter())
+                session_fh.addFilter(_PathRedactionFilter())
                 base.addHandler(session_fh)
             except OSError:
                 pass

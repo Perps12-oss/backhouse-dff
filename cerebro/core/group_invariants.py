@@ -32,7 +32,7 @@ def _strict_enabled() -> bool:
 # groups that slip past ``dedupe_roots()`` (hardlinks, junctions, symlinks).
 # Regression indicators: with DEBUG on ``turbo_scanner``, ``[DIAG:GUARD]``
 # shows regressions > 0; with ``CEREBRO_STRICT=1``, scan raises during emit.
-# Investigation: ``docs/bug-investigations/bug1-canonical-path-dedup.md``.
+# Investigation: ``dev/docs/bug-investigations/bug1-canonical-path-dedup.md``.
 
 
 def _assert_no_self_duplicates(group: list, group_key: str = "?") -> Tuple[list, int]:

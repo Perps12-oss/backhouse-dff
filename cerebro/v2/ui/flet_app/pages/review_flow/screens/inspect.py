@@ -12,7 +12,9 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
     inspect_left_right_indices,
     normalize_inspect_ref_cmp,
 )
-from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_image_path
+from cerebro.v2.ui.flet_app.media_preview import build_media_placeholder, preview_kind_for_path
+from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_previewable_path
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_critical
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 _INSPECT_PREVIEW_H = 400
@@ -20,17 +22,6 @@ _INSPECT_PANEL_W = 340
 _META_MAX_H = 120
 _META_CELL_SIZE = 10
 _META_HEADER_SIZE = 11
-
-
-def _file_icon(ext: str) -> str:
-    ext = (ext or "").lower()
-    if ext in {"jpg", "jpeg", "png", "gif", "webp"}:
-        return ft.icons.Icons.IMAGE_OUTLINED
-    if ext in {"mp4", "mov", "mkv"}:
-        return ft.icons.Icons.MOVIE_OUTLINED
-    if ext in {"mp3", "wav", "flac"}:
-        return ft.icons.Icons.AUDIOTRACK
-    return ft.icons.Icons.INSERT_DRIVE_FILE_OUTLINED
 
 
 def _preview_panel(
@@ -67,7 +58,7 @@ def _preview_panel(
             ],
         ),
     ]
-    if is_image_path(path):
+    if is_previewable_path(path):
         preview_slot = ft.Container(
             width=_INSPECT_PANEL_W,
             height=_INSPECT_PREVIEW_H,
@@ -79,7 +70,14 @@ def _preview_panel(
         )
         body.append(preview_slot)
     else:
-        body.append(ft.Icon(_file_icon(ext), size=48, color=t.colors.primary))
+        body.append(
+            ft.Container(
+                width=_INSPECT_PANEL_W,
+                height=min(120, _INSPECT_PREVIEW_H),
+                alignment=ft.Alignment.CENTER,
+                content=build_media_placeholder(path, 64, color=t.colors.primary),
+            )
+        )
     body.extend(
         [
             ft.Text(
@@ -99,12 +97,19 @@ def _preview_panel(
             ),
         ]
     )
-    if ext in {"txt", "md", "json", "py"}:
-        body.append(ft.Text("Text preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
-    elif ext in {"mp4", "mov"}:
-        body.append(ft.Text("Video preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
-    elif ext in {"mp3", "wav", "flac"}:
-        body.append(ft.Text("Audio preview not available", size=t.typography.size_xs, color=t.colors.fg_muted))
+    kind = preview_kind_for_path(path)
+    if kind == "text":
+        body.append(ft.Text("Text snippet preview", size=t.typography.size_xs, color=t.colors.fg_muted))
+    elif kind == "video":
+        body.append(
+            ft.Text(
+                "Video frame preview (requires ffmpeg on PATH)",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+            )
+        )
+    elif kind == "icon" and ext in {"mp3", "wav", "flac", "aac", "ogg", "m4a"}:
+        body.append(ft.Text("Audio — no waveform preview", size=t.typography.size_xs, color=t.colors.fg_muted))
     panel = ft.Container(
         content=ft.Column(body, spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         width=_INSPECT_PANEL_W,
@@ -305,6 +310,7 @@ def build_inspect_screen(
     on_toggle_diff=None,
     on_toggle_blink=None,
     stub_only: bool = False,
+    back_label: str = "← Duplicates",
 ) -> tuple[ft.Column, Optional[ft.Container], Optional[ft.Container]]:
     group = state.group_by_id(state.inspect_set_id or -1)
     files = list(group.files) if group else []
@@ -320,20 +326,28 @@ def build_inspect_screen(
     if stub_only:
         return ft.Column(
             [
-                ft.TextButton("← Duplicates", on_click=on_back),
+                ft.TextButton(back_label, on_click=on_back),
                 ft.Container(
                     expand=True,
                     alignment=ft.Alignment.CENTER,
                     content=ft.Text("Inspect screen stub — comparison arrives in Slice 2"),
                 ),
-                ft.Row([ft.FilledButton("Back to Browse", on_click=on_back)], spacing=8),
+                ft.Row(
+                    [
+                        ft.FilledButton(
+                            "Back to list" if "list" in back_label else "Back to Browse",
+                            on_click=on_back,
+                        )
+                    ],
+                    spacing=8,
+                ),
             ],
             expand=True,
         ), None, None
 
     header = ft.Row(
         [
-            ft.TextButton("← Duplicates", on_click=on_back),
+            ft.TextButton(back_label, on_click=on_back),
             ft.Text(f"Set {state.inspect_set_id} of {len(state.scan_results)}", weight=ft.FontWeight.W_600),
             ft.Text(
                 "[ / ] · PgUp / PgDn — prev / next set",
@@ -414,7 +428,11 @@ def build_inspect_screen(
                     ft.OutlinedButton("Keep left file", on_click=on_keep_left),
                     ft.OutlinedButton("Keep right file", on_click=on_keep_right),
                     ft.OutlinedButton("Keep both", on_click=on_keep_both),
-                    ft.FilledButton("Delete all in set", on_click=on_delete_all),
+                    ft.FilledButton(
+                        "Delete all in set",
+                        on_click=on_delete_all,
+                        style=pill_filled_critical(t, text_size=t.typography.size_sm),
+                    ),
                     ft.FilledButton("Mark & next set", on_click=on_mark_next),
                 ],
                 wrap=True,

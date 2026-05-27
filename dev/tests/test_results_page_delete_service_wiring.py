@@ -1,0 +1,37 @@
+"""Static wiring checks for ReviewFlowHost ``DeleteService`` (no Flet page required)."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+
+def _review_host_ast() -> ast.Module:
+    root = Path(__file__).resolve().parent.parent.parent
+    path = root / "cerebro" / "v2" / "ui" / "flet_app" / "pages" / "review_flow" / "host.py"
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _class_method(tree: ast.Module, class_name: str, method_name: str) -> ast.FunctionDef | None:
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == method_name:
+                    return item
+    return None
+
+
+def test_review_flow_host_init_assigns_delete_service() -> None:
+    tree = _review_host_ast()
+    init = _class_method(tree, "ReviewFlowHost", "__init__")
+    assert init is not None
+    found = False
+    for st in init.body:
+        if not isinstance(st, ast.Assign):
+            continue
+        for t in st.targets:
+            if isinstance(t, ast.Attribute) and t.attr == "_delete_service":
+                if isinstance(st.value, ast.Call) and isinstance(st.value.func, ast.Name):
+                    assert st.value.func.id == "DeleteService"
+                    found = True
+    assert found, "ReviewFlowHost.__init__ should assign self._delete_service = DeleteService()"

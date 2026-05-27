@@ -6,12 +6,19 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import ThemeTokens, apply_glass_style
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style, minimal_surface
+from cerebro.v2.ui.flet_app.theme import ThemeTokens
 from cerebro.v2.ui.flet_app.utils.motion import animation_or_none, should_animate
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
+
+# Flet 0.84.x exposes FADE / ROTATION / SCALE only — not SIZE (added in later releases).
+_SWITCHER_TRANSITION = getattr(
+    ft.AnimatedSwitcherTransition,
+    "SIZE",
+    ft.AnimatedSwitcherTransition.FADE,
+)
 
 
 class CollapsibleSection(ft.Container):
@@ -44,10 +51,17 @@ class CollapsibleSection(ft.Container):
         )
         header = ft.Row(
             [
-                ft.Text(title, size=t.typography.size_base, weight=ft.FontWeight.W_700, color=t.colors.fg),
-                ft.Container(expand=True),
+                ft.Text(
+                    title,
+                    size=t.typography.size_base,
+                    weight=ft.FontWeight.W_700,
+                    color=t.colors.fg,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Container(width=6),
                 self._chevron,
             ],
+            alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         if self._use_motion:
@@ -56,7 +70,7 @@ class CollapsibleSection(ft.Container):
             switch_duration = 250
             self._body_host = ft.AnimatedSwitcher(
                 content=self._expanded_slot if expanded else self._collapsed_slot,
-                transition=ft.AnimatedSwitcherTransition.SIZE,
+                transition=_SWITCHER_TRANSITION,
                 duration=switch_duration,
                 reverse_duration=switch_duration,
                 switch_in_curve=ft.AnimationCurve.EASE_OUT,
@@ -64,26 +78,30 @@ class CollapsibleSection(ft.Container):
             )
         else:
             self._body_host = ft.Container(content=body, visible=expanded)
-        self._glass = glass_container(
-            t=t,
-            padding=ft.Padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.sm),
+        self._shell = minimal_surface(
+            padding=ft.Padding.symmetric(horizontal=t.spacing.md, vertical=t.spacing.xs),
+            width=860,
             content=ft.Column(
                 [
                     ft.Container(
                         content=header,
                         on_click=self._toggle,
-                        ink=True,
+                        ink=False,
                     ),
-                    self._body_host,
+                    ft.Container(
+                        content=self._body_host,
+                        alignment=ft.Alignment(0, 0),
+                    ),
                 ],
                 spacing=t.spacing.sm,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
         self._title_text = header.controls[0]
-        super().__init__(content=self._glass)
+        super().__init__(content=self._shell, alignment=ft.Alignment(0, 0))
 
     def sync_theme(self, t: ThemeTokens) -> None:
-        apply_glass_style(self._glass, t)
+        apply_minimal_style(self._shell)
         if isinstance(self._title_text, ft.Text):
             self._title_text.color = t.colors.fg
         self._chevron.color = t.colors.fg_muted

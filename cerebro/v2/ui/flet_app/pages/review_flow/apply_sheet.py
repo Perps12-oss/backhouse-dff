@@ -1,4 +1,4 @@
-"""Bottom-sheet UI for Apply cleanup: summary → confirm → progress → outcome."""
+"""Delete ceremony UI (summary → confirm → progress → outcome) shown in a modal dialog."""
 
 from __future__ import annotations
 
@@ -7,9 +7,37 @@ from typing import Callable, List, Literal, Optional, Tuple
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent, pill_filled_critical
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 ApplyStep = Literal["summary", "confirm", "progress", "outcome"]
+
+# AlertDialog content is 480px; minus content_padding (16 each side).
+_APPLY_BODY_WIDTH = 448
+
+_CONFIRM_ACK_TEXT = (
+    "I understand these files will be moved to app-managed storage "
+    "(not the OS Recycle Bin)."
+)
+
+
+def build_confirm_ack_row(checkbox: ft.Checkbox, t: ThemeTokens) -> ft.Row:
+    """Checkbox + wrapped label (Checkbox.label alone does not wrap in Flet)."""
+    checkbox.label = ""
+    return ft.Row(
+        [
+            checkbox,
+            ft.Text(
+                _CONFIRM_ACK_TEXT,
+                size=t.typography.size_xs,
+                color=t.colors.fg,
+                expand=True,
+            ),
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.START,
+        spacing=8,
+        width=_APPLY_BODY_WIDTH,
+    )
 
 
 @dataclass
@@ -44,6 +72,9 @@ def build_apply_sheet_column(
     on_restore_managed: Callable[[ft.ControlEvent | None], None],
     on_back_overview: Callable[[ft.ControlEvent | None], None],
     on_new_scan: Callable[[ft.ControlEvent | None], None],
+    outcome_return_label: str = "Back to browse",
+    outcome_show_return: bool = True,
+    simple_empty_outcome: bool = False,
 ) -> ft.Column:
     title = ft.Text("Remove files", weight=ft.FontWeight.W_700, size=t.typography.size_md)
     footer_close = ft.TextButton("Cancel", on_click=on_close)
@@ -58,8 +89,10 @@ def build_apply_sheet_column(
             ),
             ft.Container(height=4),
             ft.Text(
-                "Files are moved to app-managed storage (not the OS Recycle Bin). You can restore the last batch afterwards.",
+                "Files are moved to app-managed storage (not the OS Recycle Bin). "
+                "You can restore the last batch afterwards.",
                 size=t.typography.size_xs,
+                width=_APPLY_BODY_WIDTH,
             ),
         ]
         if protected_count:
@@ -76,7 +109,11 @@ def build_apply_sheet_column(
                 ft.Row(
                     [
                         footer_close,
-                        ft.FilledButton("Continue", on_click=on_continue_summary),
+                        ft.FilledButton(
+                            "Continue",
+                            on_click=on_continue_summary,
+                            style=pill_filled_accent(t, text_size=t.typography.size_sm),
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
                 ),
@@ -93,22 +130,31 @@ def build_apply_sheet_column(
                 ft.Text(
                     f"Move {delete_count} file(s) — {fmt_size(freed_bytes)} — to managed storage.",
                     size=t.typography.size_xs,
+                    width=_APPLY_BODY_WIDTH,
                 ),
-                confirm_checkbox,
+                build_confirm_ack_row(confirm_checkbox, t),
                 ft.Container(height=8),
                 ft.Row(
                     [
                         ft.TextButton("Back", on_click=on_back_confirm),
                         footer_close,
-                        ft.FilledButton("Move files", on_click=on_apply),
+                        ft.FilledButton(
+                            "Move files",
+                            on_click=on_apply,
+                            style=pill_filled_critical(t, text_size=t.typography.size_sm),
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
                 ),
             ],
             spacing=8,
             tight=True,
             scroll=ft.ScrollMode.AUTO,
             height=420,
+            width=_APPLY_BODY_WIDTH,
         )
 
     if step == "progress":
@@ -147,9 +193,54 @@ def build_apply_sheet_column(
         )
 
     success_icon = ft.Icon(ft.icons.Icons.CHECK_CIRCLE, color=t.colors.success, size=36)
-    header = ft.Row([success_icon, ft.Text("Done", weight=ft.FontWeight.W_700)], spacing=8)
+    done_label = "All cleaned up" if simple_empty_outcome else "Done"
+    header = ft.Row([success_icon, ft.Text(done_label, weight=ft.FontWeight.W_700)], spacing=8)
 
     restore_visible = outcome.deleted_count > 0
+    if simple_empty_outcome:
+        return ft.Column(
+            [
+                title,
+                header,
+                ft.Text(
+                    "No duplicate sets are left in this review.",
+                    size=t.typography.size_sm,
+                    color=t.colors.fg_muted,
+                    width=_APPLY_BODY_WIDTH,
+                ),
+                ft.Text(
+                    _fmt_stats_line(outcome.deleted_count, outcome.freed_bytes, outcome.error_count),
+                    size=t.typography.size_sm,
+                ),
+                *err_controls,
+                ft.Container(height=8),
+                ft.OutlinedButton(
+                    "Restore from managed storage",
+                    visible=restore_visible,
+                    on_click=on_restore_managed,
+                ),
+                ft.Row(
+                    [
+                        ft.TextButton("Stay here", on_click=on_back_overview),
+                        ft.Container(expand=True),
+                        ft.FilledButton(
+                            "Start new scan",
+                            on_click=on_new_scan,
+                            style=pill_filled_accent(t, text_size=t.typography.size_sm),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
+                ),
+            ],
+            spacing=8,
+            tight=True,
+            scroll=ft.ScrollMode.AUTO,
+            height=420,
+        )
+
     return ft.Column(
         [
             title,
@@ -164,12 +255,27 @@ def build_apply_sheet_column(
             ),
             ft.Row(
                 [
-                    ft.TextButton("Back to review", on_click=on_back_overview),
+                    *(
+                        [
+                            ft.TextButton(
+                                outcome_return_label,
+                                on_click=on_back_overview,
+                            )
+                        ]
+                        if outcome_show_return
+                        else []
+                    ),
                     ft.OutlinedButton("New scan", on_click=on_new_scan),
                 ],
                 alignment=ft.MainAxisAlignment.START,
+                wrap=True,
+                spacing=8,
+                run_spacing=8,
             ),
-            ft.Row([ft.TextButton("Close", on_click=on_close)], alignment=ft.MainAxisAlignment.END),
+            ft.Row(
+                [ft.TextButton("Close", on_click=on_back_overview)],
+                alignment=ft.MainAxisAlignment.END,
+            ),
         ],
         spacing=8,
         tight=True,

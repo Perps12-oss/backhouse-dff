@@ -195,9 +195,15 @@ def _reduce_results(state: AppState, action: Action) -> AppState | None:
     if isinstance(action, ResultsFilesRemoved):
         if not action.paths:
             return state
+        # LT-2: reject delete-related actions while a scan is in progress.
+        if state.mode == AppMode.SCANNING:
+            return state
         return replace(state, groups=prune_paths_from_groups(state.groups, action.paths), selected_files=set())
 
     if isinstance(action, GroupsPruned):
+        # LT-2: reject delete-related actions while a scan is in progress.
+        if state.mode == AppMode.SCANNING:
+            return state
         return replace(state, groups=list(action.groups), selected_files=set())
 
     if isinstance(action, ReviewViewFilterChanged):

@@ -31,7 +31,8 @@ from cerebro.v2.ui.flet_app.components.dashboard.scan_complete_banner import Sca
 from cerebro.v2.ui.flet_app.components.dashboard.scan_options_panel import DashboardScanOptionsPanel
 from cerebro.v2.ui.flet_app.components.dashboard.stats_presence import DashboardStatsPresence
 from cerebro.v2.ui.flet_app.design_system.glass import glass_container
-from cerebro.v2.ui.flet_app.theme import apply_glass_style, theme_for_mode, fmt_size, SCAN_MODES
+from cerebro.v2.ui.flet_app.design_system.cards import apply_minimal_style
+from cerebro.v2.ui.flet_app.theme import theme_for_mode, fmt_size, SCAN_MODES
 from cerebro.v2.ui.flet_app.utils.time_keeper import TimeKeeper
 
 if TYPE_CHECKING:
@@ -215,13 +216,10 @@ class DashboardPage(ft.Column):
             return True
 
     def _hover_glow_color(self, variant: str = "primary") -> str:
-        if self._is_dark_theme():
-            if variant == "secondary":
-                return "#A78BFA"
-            return str(self._t.colors.accent)
+        c = self._t.colors
         if variant == "secondary":
-            return "#4F46E5"
-        return str(self._t.colors.accent)
+            return str(c.accent)
+        return str(c.primary)
 
     def _hover_shadow(self, color: str, strong: bool = False) -> ft.BoxShadow:
         return ft.BoxShadow(
@@ -232,7 +230,12 @@ class DashboardPage(ft.Column):
         )
 
     def _set_container_glow(self, container: ft.Container, hovering: bool, *, variant: str = "primary", strong: bool = False) -> None:
-        container.shadow = self._hover_shadow(self._hover_glow_color(variant), strong=strong) if hovering else None
+        _ = variant, strong
+        if hovering:
+            container.border = ft.border.all(1, self._t.colors.primary)
+        else:
+            container.border = ft.border.all(1, self._t.colors.border)
+        container.shadow = None
         DashboardPage._safe_update(container)
 
     # ------------------------------------------------------------------
@@ -354,10 +357,21 @@ class DashboardPage(ft.Column):
             ft.Column(
                 [
                     self._paused_scans_section,
-                    ft.Container(content=self._status, width=520, padding=ft.padding.only(top=s.xs)),
-                    ft.Container(content=self._cancelled_results_banner, width=460, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(
+                        content=self._status,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
+                    ft.Container(
+                        content=self._cancelled_results_banner,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
                 ],
                 spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             expanded=True,
         )
@@ -367,17 +381,27 @@ class DashboardPage(ft.Column):
             "Summary",
             ft.Column(
                 [
-                    ft.Container(content=self._stats_row, width=360),
-                    ft.Container(content=self._presence_row, width=620, padding=ft.padding.only(top=s.xs)),
+                    ft.Container(
+                        content=self._stats_row,
+                        width=620,
+                        alignment=ft.Alignment(0, 0),
+                    ),
+                    ft.Container(
+                        content=self._presence_row,
+                        width=620,
+                        padding=ft.padding.only(top=s.xs),
+                        alignment=ft.Alignment(0, 0),
+                    ),
                 ],
                 spacing=s.xs,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             expanded=False,
             on_toggle=self._on_summary_section_toggle,
         )
 
         home_content = ft.Container(
-            alignment=ft.Alignment(0, -1),
+            alignment=ft.Alignment(0, 0),
             padding=ft.padding.only(top=4),
             content=ft.Column(
                 [
@@ -516,7 +540,7 @@ class DashboardPage(ft.Column):
             cb = ft.Checkbox(
                 label=label,
                 value=(key in self._selected_modes),
-                active_color="#22D3EE",
+                active_color=t.colors.primary,
                 label_style=ft.TextStyle(color=t.colors.fg2, size=t.typography.size_sm),
                 on_change=lambda e, k=key: self._on_scan_type_selected(k, e),
                 disabled=(key == "files" and has_specific),
@@ -584,16 +608,22 @@ class DashboardPage(ft.Column):
         return "Running: " + " + ".join(names)
 
     def _open_last_session(self, e=None):
+        from cerebro.v2.ui.flet_app.services.state_bridge import LAST_SESSION_UNAVAILABLE_MSG
+
         try:
             self._bridge.open_last_session()
-        except Exception as err:
-            _log.error(f"Failed to open last session: {err}")
+        except Exception:
+            _log.exception("Failed to open last session")
+            self._bridge.show_snackbar(LAST_SESSION_UNAVAILABLE_MSG, info=True)
 
     # ------------------------------------------------------------------
     # User Interactions
     # ------------------------------------------------------------------
     def _on_archives_cb_change(self, e: ft.ControlEvent) -> None:
-        enabled = bool(e.control.value)
+        # Archive extraction not implemented — keep disabled in UI.
+        enabled = False
+        if e.control is not None:
+            e.control.value = False
         self._scan_options["scan_archives"] = enabled
         self._archives_warning.visible = enabled
         DashboardPage._safe_update(self._archives_warning)
@@ -699,7 +729,7 @@ class DashboardPage(ft.Column):
         self._scan_options["min_size_bytes"] = int(conf.get("min_size_bytes", 0) or 0)
         ex = conf.get("exclude_paths", [])
         self._scan_options["exclude_paths"] = [str(x) for x in ex] if isinstance(ex, list) else []
-        self._scan_options["scan_archives"] = bool(conf.get("scan_archives", False))
+        self._scan_options["scan_archives"] = False
         self._scan_options["include_subfolders"] = bool(conf.get("include_subfolders", True))
         self._scan_options["index_only"] = bool(conf.get("index_only", False))
         self._scan_options["verify_duplicates"] = bool(conf.get("verify_duplicates", False))
@@ -844,8 +874,9 @@ class DashboardPage(ft.Column):
         inner = self._folder_panel._inner_container
         original = inner.border
         original_bg = inner.bgcolor
-        inner.border = ft.border.all(2, "#EF4444")
-        inner.bgcolor = ft.Colors.with_opacity(0.12, "#EF4444")
+        danger = self._t.colors.danger
+        inner.border = ft.border.all(2, danger)
+        inner.bgcolor = ft.Colors.with_opacity(0.12, danger)
         DashboardPage._safe_update(inner)
         await asyncio.sleep(0.35)
         inner.border = original
@@ -1203,7 +1234,7 @@ class DashboardPage(ft.Column):
         merged_options = dict(self._scan_options)
         if isinstance(options, dict):
             merged_options.update(options)
-        merged_options["scan_archives"] = bool(merged_options.get("scan_archives", False))
+        merged_options["scan_archives"] = False
         merged_options["min_size_bytes"] = int(merged_options.get("min_size_bytes", 0) or 0)
         raw_ex = merged_options.get("exclude_paths", [])
         merged_options["exclude_paths"] = [str(x) for x in raw_ex] if isinstance(raw_ex, list) else []
@@ -1256,18 +1287,27 @@ class DashboardPage(ft.Column):
         self._scan_hud.complete_success(results, frozen_scan_elapsed)
 
         self._bridge.dispatch_scan_complete(results, mode)
+        if results:
+            self._scan_hud.dismiss_to_home()
+            try:
+                self._scan_complete_banner.hide()
+            except Exception:
+                pass
+            self._status.value = "Scan complete — opening review summary…"
+            DashboardPage._safe_update(self._status)
         try:
             reclaimed = int(sum(getattr(g, "reclaimable", 0) for g in results))
         except Exception:
             reclaimed = 0
-        try:
-            self._scan_complete_banner.show(
-                group_count=len(results),
-                reclaimable=reclaimed,
-                elapsed_label=frozen_scan_elapsed,
-            )
-        except Exception:
-            pass
+        if not results:
+            try:
+                self._scan_complete_banner.show(
+                    group_count=0,
+                    reclaimable=reclaimed,
+                    elapsed_label=frozen_scan_elapsed,
+                )
+            except Exception:
+                pass
         if reclaimed >= 1_073_741_824:
             self._bridge.show_snackbar(
                 f"Great cleanup! Reclaimable space exceeds 1 GB ({fmt_size(reclaimed)}).",
@@ -1343,11 +1383,24 @@ class DashboardPage(ft.Column):
             btn.text = "Pause scan"
             btn.icon = ft.icons.Icons.PAUSE
             btn.style = pill_outlined_button_style(self._t)
+        mp_mode = len(self._folders) > 1
         btn.visible = True
-        btn.disabled = False
+        if mp_mode and not paused:
+            btn.disabled = True
+            btn.tooltip = (
+                "Pause is unavailable during multi-folder scans "
+                "(parallel hashing). Cancel and scan one folder at a time to pause."
+            )
+        else:
+            btn.disabled = False
+            btn.tooltip = None
         DashboardPage._safe_update(btn)
         try:
-            self._scan_hud.sync_pause_button(is_paused=paused, is_scanning=show)
+            self._scan_hud.sync_pause_button(
+                is_paused=paused,
+                is_scanning=show,
+                pause_disabled=mp_mode and not paused,
+            )
         except Exception:
             pass
 
@@ -1743,7 +1796,7 @@ class DashboardPage(ft.Column):
         self._refresh_reduce_motion()
 
         self._home_chrome.sync_theme(self._t)
-        apply_glass_style(self._workflow_stack, self._t)
+        apply_minimal_style(self._workflow_stack)
         self._scan_section.sync_theme(self._t)
         self._recent_section.sync_theme(self._t)
         self._summary_section.sync_theme(self._t)
