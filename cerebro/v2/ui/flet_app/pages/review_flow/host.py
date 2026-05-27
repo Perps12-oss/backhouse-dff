@@ -97,6 +97,7 @@ class ReviewFlowHost(ft.Column):
         self._apply_undo_snapshot: Optional[dict] = None
         self._last_apply_outcome: Optional[ApplyOutcomeModel] = None
         self._apply_opened_compact: bool = False
+        self._browse_sidebar_session_built: Optional[bool] = None
         self._inspect_stub = False
         self._inspect_preview_generation = 0
         self._reduce_motion = bool(bridge.is_reduce_motion_enabled())
@@ -137,21 +138,46 @@ class ReviewFlowHost(ft.Column):
             self._workstation_sidebar = ft.Container(width=0)
             self._sidebar_refs = None
         elif screen == "browse":
+            if not self._is_simple_review_mode():
+                self._state.simple_browse_session = False
+            shell_mismatch = (
+                self._browse_sidebar_shell is not None
+                and self._browse_sidebar_session_built is not None
+                and self._browse_sidebar_session_built != self._state.simple_browse_session
+            )
+            if shell_mismatch:
+                self._browse_sidebar_shell = None
+                self._browse_workbench_slot = None
+                self._sidebar_refs = None
             if self._browse_sidebar_shell is None:
                 self._browse_sidebar_shell, self._sidebar_refs, self._browse_workbench_slot = (
-                    build_browse_workstation_sidebar(t, self._state, self._on_progress_jump)
+                    build_browse_workstation_sidebar(
+                        t,
+                        self._state,
+                        self._on_progress_jump,
+                        simple_details=self._state.simple_browse_session,
+                    )
                 )
+                self._browse_sidebar_session_built = self._state.simple_browse_session
             else:
                 refresh_browse_workstation_sidebar(
-                    self._sidebar_refs, self._browse_sidebar_shell, self._state
+                    self._sidebar_refs,
+                    self._browse_sidebar_shell,
+                    self._state,
+                    simple_details=self._state.simple_browse_session,
                 )
             self._workstation_sidebar = self._browse_sidebar_shell
         else:
             self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
-                t, screen, self._state, self._on_progress_jump
+                t,
+                screen,
+                self._state,
+                self._on_progress_jump,
+                simple_details=self._state.simple_browse_session,
             )
         self.controls[0].controls[0] = self._workstation_sidebar
         if screen == "overview":
+            self._state.simple_browse_session = False
             elapsed: Optional[float] = None
             sp = getattr(self._bridge.state, "scan_progress", None) or {}
             if isinstance(sp, dict):
@@ -242,6 +268,7 @@ class ReviewFlowHost(ft.Column):
             self._update_sidebar_counts_only()
         elif screen == "inspect":
             self._repair_inspect_indices_for_selection()
+            inspect_back = "← Back to list" if self._state.simple_browse_session else "← Duplicates"
             inspect_col, slot_a, slot_b = build_inspect_screen(
                 t,
                 self._state,
@@ -261,6 +288,7 @@ class ReviewFlowHost(ft.Column):
                 on_toggle_diff=self._toggle_inspect_diff,
                 on_toggle_blink=self._toggle_inspect_blink,
                 stub_only=self._inspect_stub,
+                back_label=inspect_back,
             )
             self._content.content = inspect_col
             self._schedule_inspect_previews(slot_a, slot_b)
@@ -449,6 +477,10 @@ class ReviewFlowHost(ft.Column):
         return False
 
     def _on_start_review(self, _e) -> None:
+        if self._is_simple_review_mode() and self._router.active_screen() == "overview":
+            self._state.simple_browse_session = True
+        else:
+            self._state.simple_browse_session = False
         self._router.navigate("browse")
 
     def _on_back(self, _e) -> bool:
@@ -1185,7 +1217,10 @@ class ReviewFlowHost(ft.Column):
             return
         if screen == "browse" and self._browse_sidebar_shell is not None and self._sidebar_refs is not None:
             refresh_browse_workstation_sidebar(
-                self._sidebar_refs, self._browse_sidebar_shell, self._state
+                self._sidebar_refs,
+                self._browse_sidebar_shell,
+                self._state,
+                simple_details=self._state.simple_browse_session,
             )
             if self._browse_view is not None:
                 self._browse_view.refresh_workbench_chrome(
@@ -1194,12 +1229,20 @@ class ReviewFlowHost(ft.Column):
             return
         if self._sidebar_refs is None:
             self._workstation_sidebar, self._sidebar_refs = build_progress_sidebar(
-                self._t, screen, self._state, self._on_progress_jump
+                self._t,
+                screen,
+                self._state,
+                self._on_progress_jump,
+                simple_details=self._state.simple_browse_session,
             )
             self.controls[0].controls[0] = self._workstation_sidebar
         else:
             refresh_progress_sidebar(
-                self._sidebar_refs, self._workstation_sidebar, screen, self._state
+                self._sidebar_refs,
+                self._workstation_sidebar,
+                screen,
+                self._state,
+                simple_details=self._state.simple_browse_session,
             )
 
     def _repair_review_surface(self, screen: str) -> None:

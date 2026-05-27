@@ -23,6 +23,8 @@ def build_progress_sidebar(
     active: ReviewScreen,
     state: ReviewFlowState,
     on_jump,
+    *,
+    simple_details: bool = False,
 ) -> tuple[ft.Container, ProgressSidebarRefs]:
     """Operational status strip (replaces linear wizard steps)."""
     refs = ProgressSidebarRefs(
@@ -30,10 +32,21 @@ def build_progress_sidebar(
         groups_text=ft.Text("", size=t.typography.size_xs, color=t.colors.fg_muted),
         marked_text=ft.Text("", size=t.typography.size_xs, color=t.colors.primary),
     )
-    update_progress_sidebar_refs(refs, active, state)
+    update_progress_sidebar_refs(refs, active, state, simple_details=simple_details)
     mode = (state.scan_mode or "files").replace("_", " ").title()
+    width = 200 if simple_details else 220
+    overview_btn = (
+        ft.TextButton("← Summary", on_click=lambda e: on_jump("overview"))
+        if simple_details
+        else ft.TextButton("Go to Overview", on_click=lambda e: on_jump("overview"))
+    )
+    browse_btn = (
+        ft.TextButton("← List", on_click=lambda e: on_jump("browse"))
+        if simple_details
+        else ft.TextButton("Go to Browse", on_click=lambda e: on_jump("browse"))
+    )
     container = ft.Container(
-        width=220,
+        width=width,
         padding=12,
         border=ft.border.only(right=ft.BorderSide(1, t.colors.border)),
         content=ft.Column(
@@ -45,8 +58,8 @@ def build_progress_sidebar(
                 refs.groups_text,
                 refs.marked_text,
                 ft.Container(height=8),
-                ft.TextButton("Go to Overview", on_click=lambda e: on_jump("overview")),
-                ft.TextButton("Go to Browse", on_click=lambda e: on_jump("browse")),
+                overview_btn,
+                browse_btn,
             ],
             spacing=4,
             tight=True,
@@ -55,8 +68,17 @@ def build_progress_sidebar(
     return container, refs
 
 
-def update_progress_sidebar_refs(refs: ProgressSidebarRefs, active: ReviewScreen, state: ReviewFlowState) -> None:
-    screen_label = {"overview": "Overview", "browse": "Browse", "inspect": "Compare"}.get(active, active)
+def update_progress_sidebar_refs(
+    refs: ProgressSidebarRefs,
+    active: ReviewScreen,
+    state: ReviewFlowState,
+    *,
+    simple_details: bool = False,
+) -> None:
+    if simple_details and active == "browse":
+        screen_label = "Details"
+    else:
+        screen_label = {"overview": "Overview", "browse": "Browse", "inspect": "Compare"}.get(active, active)
     n_groups = len(state.visible_groups())
     marked = state.cart_delete_count
     reclaim = state.cart_delete_bytes
@@ -70,6 +92,8 @@ def refresh_progress_sidebar(
     container: ft.Container,
     active: ReviewScreen,
     state: ReviewFlowState,
+    *,
+    simple_details: bool = False,
 ) -> None:
-    update_progress_sidebar_refs(refs, active, state)
+    update_progress_sidebar_refs(refs, active, state, simple_details=simple_details)
     safe_update(container)

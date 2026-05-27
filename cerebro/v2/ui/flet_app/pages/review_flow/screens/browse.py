@@ -105,6 +105,7 @@ class BrowseScreenView:
         self._scope_text: Optional[ft.Text] = None
         self._sort_text: Optional[ft.Text] = None
         self._workbench_column: Optional[ft.Column] = None
+        self._workbench_up_nav_btn: Optional[ft.TextButton] = None
         self._narrow_tools_host: ft.Container = ft.Container(visible=False)
         self._sidebar_workbench_slot: Optional[ft.Container] = None
         self._narrow_mode = False
@@ -127,6 +128,11 @@ class BrowseScreenView:
 
     def apply_theme(self, t: ThemeTokens) -> None:
         self._t = t
+        if self._workbench_up_nav_btn is not None:
+            self._workbench_up_nav_btn.text = self._browse_up_nav_label()
+
+    def _browse_up_nav_label(self) -> str:
+        return "← Summary" if self._state.simple_browse_session else "← Overview"
 
     @property
     def root(self) -> ft.Column:
@@ -201,7 +207,11 @@ class BrowseScreenView:
                 self._smart_summary_text.value = ""
         if self._overflow_banner.visible and self._overflow_banner.content is not None:
             pass  # content set in refresh()
+        if self._workbench_up_nav_btn is not None:
+            self._workbench_up_nav_btn.text = self._browse_up_nav_label()
         to_update: list[ft.Control] = [self._narrow_tools_host, self._overflow_banner]
+        if self._workbench_up_nav_btn is not None:
+            to_update.append(self._workbench_up_nav_btn)
         for ctrl in (
             self._scope_text,
             self._sort_text,
@@ -331,7 +341,7 @@ class BrowseScreenView:
                         [
                             ft.Text(empty_msg, size=t.typography.size_md, weight=ft.FontWeight.W_600),
                             ft.Text(empty_hint, size=t.typography.size_sm, color=t.colors.fg_muted),
-                            ft.TextButton("← Overview", on_click=self._on_back),
+                            ft.TextButton(self._browse_up_nav_label(), on_click=self._on_back),
                         ],
                         spacing=8,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -544,9 +554,10 @@ class BrowseScreenView:
             border_radius=8,
         )
 
+        self._workbench_up_nav_btn = ft.TextButton(self._browse_up_nav_label(), on_click=self._on_back)
         return ft.Column(
             [
-                ft.TextButton("← Overview", on_click=self._on_back),
+                self._workbench_up_nav_btn,
                 self._scope_text,
                 ft.OutlinedButton(
                     "Remove selected…",

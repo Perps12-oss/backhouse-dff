@@ -309,6 +309,7 @@ def build_inspect_screen(
     on_toggle_diff=None,
     on_toggle_blink=None,
     stub_only: bool = False,
+    back_label: str = "← Duplicates",
 ) -> tuple[ft.Column, Optional[ft.Container], Optional[ft.Container]]:
     group = state.group_by_id(state.inspect_set_id or -1)
     files = list(group.files) if group else []
@@ -324,20 +325,28 @@ def build_inspect_screen(
     if stub_only:
         return ft.Column(
             [
-                ft.TextButton("← Duplicates", on_click=on_back),
+                ft.TextButton(back_label, on_click=on_back),
                 ft.Container(
                     expand=True,
                     alignment=ft.Alignment.CENTER,
                     content=ft.Text("Inspect screen stub — comparison arrives in Slice 2"),
                 ),
-                ft.Row([ft.FilledButton("Back to Browse", on_click=on_back)], spacing=8),
+                ft.Row(
+                    [
+                        ft.FilledButton(
+                            "Back to list" if "list" in back_label else "Back to Browse",
+                            on_click=on_back,
+                        )
+                    ],
+                    spacing=8,
+                ),
             ],
             expand=True,
         ), None, None
 
     header = ft.Row(
         [
-            ft.TextButton("← Duplicates", on_click=on_back),
+            ft.TextButton(back_label, on_click=on_back),
             ft.Text(f"Set {state.inspect_set_id} of {len(state.scan_results)}", weight=ft.FontWeight.W_600),
             ft.Text(
                 "[ / ] · PgUp / PgDn — prev / next set",

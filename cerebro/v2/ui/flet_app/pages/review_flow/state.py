@@ -104,6 +104,8 @@ class ReviewFlowState:
     scope_invalidation_hint: str = ""
     displayed_cart_delete_count: int = 0
     displayed_cart_delete_bytes: int = 0
+    # Phase 3 — entered Browse from Simple summary ("Review details"); lighter chrome + Summary labels.
+    simple_browse_session: bool = False
     # 1.1 — visible_groups() memoization cache (hidden from repr/eq)
     _visible_cache_key: object = field(default=None, repr=False, compare=False)
     _visible_cache_val: list = field(default_factory=list, repr=False, compare=False)
