@@ -690,8 +690,8 @@ class SettingsPage(ft.Column):
         content = ft.Column(
             [
                 ft.Container(
-                    content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=36, color="#22D3EE"),
-                    bgcolor=ft.Colors.with_opacity(0.08, "#22D3EE"),
+                    content=ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=36, color=t.colors.accent),
+                    bgcolor=ft.Colors.with_opacity(0.08, t.colors.accent),
                     border_radius=14,
                     padding=16,
                 ),
@@ -699,14 +699,14 @@ class SettingsPage(ft.Column):
                 ft.Row(
                     [
                         ft.Container(
-                            content=ft.Text("v2.0.0", size=9, color="#22D3EE", weight=ft.FontWeight.W_600),
-                            bgcolor=ft.Colors.with_opacity(0.12, "#22D3EE"),
+                            content=ft.Text("v2.0.0", size=9, color=t.colors.accent, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, t.colors.accent),
                             border_radius=4,
                             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),
                         ft.Container(
-                            content=ft.Text("Flet + Flutter", size=9, color="#A78BFA", weight=ft.FontWeight.W_600),
-                            bgcolor=ft.Colors.with_opacity(0.12, "#A78BFA"),
+                            content=ft.Text("Flet + Flutter", size=9, color=t.colors.warning, weight=ft.FontWeight.W_600),
+                            bgcolor=ft.Colors.with_opacity(0.12, t.colors.warning),
                             border_radius=4,
                             padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                         ),

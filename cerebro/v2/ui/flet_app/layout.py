@@ -53,7 +53,6 @@ _log = logging.getLogger(__name__)
 
 
 
-_NAV_TRACK_BG = "#1e1e1e"
 _NAV_PILL_WIDTH = 112
 _NAV_PILL_GAP = 6
 
@@ -338,7 +337,7 @@ class AppLayout(ft.Column):
 
         self._top_nav.border = ft.border.only(bottom=ft.BorderSide(1, c.border))
 
-        self._nav_track.bgcolor = _NAV_TRACK_BG
+        self._nav_track.bgcolor = c.nav_bar
 
         self._brand_icon.color = c.primary
 
