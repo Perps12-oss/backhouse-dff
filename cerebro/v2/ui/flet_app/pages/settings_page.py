@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING, Any, Dict
 
 import flet as ft
 
-from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import AUTO_MARK_RULE_OPTIONS
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import AUTO_MARK_RULE_OPTIONS, RULE_LABELS
+from cerebro.v2.ui.flet_app.pages.review_flow.review_preferences import (
+    REVIEW_MODE_DETAILED,
+    REVIEW_MODE_SIMPLE,
+    load_review_preferences,
+    save_review_preferences,
+    ReviewPreferences,
+)
 from cerebro.v2.ui.flet_app.multigradient_themes import gradient_by_id, gradient_themes_for_picker
 from cerebro.v2.ui.flet_app.palette_themes import DEFAULT_PRESET_ID, resolve_preset_id
 from cerebro.v2.ui.flet_app.design_system.cards import flat_card
@@ -211,6 +218,7 @@ class SettingsPage(ft.Column):
         self._settings.setdefault("file_mode", {})
         self._settings.setdefault("accessibility", {})
         self._settings.setdefault("notifications", {})
+        self._settings.setdefault("review", {})
         self._settings["appearance"].setdefault("ui_theme_preset", DEFAULT_PRESET_ID)
         perf = self._settings.setdefault("performance", {})
         perf.setdefault("max_threads", 0)
@@ -237,6 +245,12 @@ class SettingsPage(ft.Column):
             timeout = 60
         self._general_partial_banner_timeout.value = str(timeout)
         self._general_partial_banner_timeout.disabled = not bool(self._general_partial_banner_autohide.value)
+
+        review_prefs = load_review_preferences(self._settings)
+        self._review_mode.value = review_prefs.review_mode
+        self._review_keeper_rule.value = review_prefs.default_keeper_rule
+        self._review_auto_apply.value = review_prefs.auto_apply_on_open
+        self._review_auto_apply.disabled = review_prefs.review_mode != REVIEW_MODE_SIMPLE
 
         # Appearance
         self._appearance_font_slider.value = self._settings["appearance"].get("font_size", 13)
@@ -353,6 +367,44 @@ class SettingsPage(ft.Column):
             content.controls.append(cb)
         content.controls.append(self._general_partial_banner_timeout)
 
+        content.controls.append(ft.Divider(height=24, color=ft.Colors.with_opacity(0.12, t.colors.fg)))
+        content.controls.append(ft.Text("Review experience", weight=ft.FontWeight.W_600, color=t.colors.fg))
+        content.controls.append(
+            ft.Text(
+                "Simple mode shows a summary-first flow; Detailed keeps the full browse and apply ceremony.",
+                size=t.typography.size_xs,
+                color=t.colors.fg_muted,
+                italic=True,
+            )
+        )
+        review_prefs = load_review_preferences(self._settings)
+        self._review_mode = ft.Dropdown(
+            label="Review mode",
+            options=[
+                ft.dropdown.Option(key=REVIEW_MODE_SIMPLE, text="Simple — summary first"),
+                ft.dropdown.Option(key=REVIEW_MODE_DETAILED, text="Detailed — full browse"),
+            ],
+            value=review_prefs.review_mode,
+            width=280,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
+            **dropdown_handler_kwargs(self._on_review_mode_change),
+        )
+        self._review_keeper_rule = ft.Dropdown(
+            label="Default keeper rule",
+            options=[ft.dropdown.Option(key=k, text=lbl) for k, lbl in RULE_LABELS],
+            value=review_prefs.default_keeper_rule,
+            width=280,
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.08, t.colors.primary),
+        )
+        self._review_auto_apply = ft.Checkbox(
+            label="Auto-apply keeper rule when opening Review (Simple mode)",
+            value=review_prefs.auto_apply_on_open,
+            disabled=review_prefs.review_mode != REVIEW_MODE_SIMPLE,
+        )
+        content.controls.extend([self._review_mode, self._review_keeper_rule, self._review_auto_apply])
+
         self._tab_contents["general"].content = content
 
     def _build_appearance_tab(self) -> None:
@@ -464,6 +516,12 @@ class SettingsPage(ft.Column):
         self._general_partial_banner_timeout.disabled = not bool(enabled)
         if self._is_mounted():
             self._general_partial_banner_timeout.update()
+
+    def _on_review_mode_change(self, e: ft.ControlEvent) -> None:
+        mode = str(e.control.value or REVIEW_MODE_DETAILED)
+        self._review_auto_apply.disabled = mode != REVIEW_MODE_SIMPLE
+        if self._is_mounted():
+            self._review_auto_apply.update()
 
     def _build_performance_tab(self) -> None:
         t = self._t
@@ -796,6 +854,22 @@ class SettingsPage(ft.Column):
         self._settings["photo_mode"]["dhash_threshold"] = int(self._deletion_dhash_slider.value)
         self._settings["photo_mode"]["similarity_match_percent"] = int(self._deletion_similarity_slider.value)
         self._settings.setdefault("file_mode", {})["matching_criteria"] = self._criteria_radio.value or "content"
+
+        existing_review = load_review_preferences(self._settings)
+        review_mode = str(self._review_mode.value or REVIEW_MODE_DETAILED)
+        if review_mode not in (REVIEW_MODE_SIMPLE, REVIEW_MODE_DETAILED):
+            review_mode = REVIEW_MODE_DETAILED
+        auto_apply = bool(self._review_auto_apply.value) if review_mode == REVIEW_MODE_SIMPLE else False
+        self._settings = save_review_preferences(
+            self._settings,
+            ReviewPreferences(
+                review_mode=review_mode,
+                default_keeper_rule=str(self._review_keeper_rule.value or existing_review.default_keeper_rule),
+                auto_apply_on_open=auto_apply,
+                simple_helper_dismissed=existing_review.simple_helper_dismissed,
+                upgrade_banner_dismissed=existing_review.upgrade_banner_dismissed,
+            ),
+        )
 
         try:
             self._bridge.save_settings(self._settings)

@@ -27,6 +27,14 @@ from cerebro.v2.ui.flet_app.pages.review_flow.router import ReviewFlowRouter
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.browse import BrowseScreenView
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.inspect import build_inspect_screen
 from cerebro.v2.ui.flet_app.pages.review_flow.screens.overview import build_overview_screen
+from cerebro.v2.ui.flet_app.pages.review_flow.screens.simple_summary import SimpleSummaryView
+from cerebro.v2.ui.flet_app.pages.review_flow.review_preferences import (
+    REVIEW_MODE_SIMPLE,
+    ReviewPreferences,
+    load_review_preferences,
+    save_review_preferences,
+    is_simple_review_mode,
+)
 from cerebro.v2.ui.flet_app.pages.review_flow.media_filter import (
     filter_paths_for_media_scope,
     normalized_media_type,
@@ -49,6 +57,7 @@ from cerebro.v2.ui.flet_app.components.common.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review_flow import skeletons
 from cerebro.v2.session_schema import validate_review_session_payload
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -69,6 +78,7 @@ class ReviewFlowHost(ft.Column):
         self._router = ReviewFlowRouter(self._state, self._render_active_screen)
         self._delete_service = DeleteService()
         self._browse_view: Optional[BrowseScreenView] = None
+        self._simple_summary_view: Optional[SimpleSummaryView] = None
         self._content = ft.Container(expand=True)
         self._grid = ft.ListView(expand=True)
         self._workstation_sidebar = ft.Container(width=0)
@@ -146,22 +156,32 @@ class ReviewFlowHost(ft.Column):
                 raw = sp.get("elapsed_seconds")
                 if isinstance(raw, (int, float)) and float(raw) > 0:
                     elapsed = float(raw)
-            overview_body = build_overview_screen(
-                t,
-                self._state.scan_results,
-                on_start_review=self._on_start_review,
-                recent_lines=self._recent_review_lines(),
-                scan_elapsed_seconds=elapsed,
-            )
-            if len(self._state.scan_results) == 0:
+            if self._is_simple_review_mode():
+                self._ensure_simple_summary_view(elapsed)
                 self._content.content = ft.Container(
                     expand=True,
                     alignment=ft.Alignment(0, 0),
-                    content=overview_body,
+                    content=self._simple_summary_view.root,
                 )
+                self._maybe_auto_apply_on_open()
+                self._simple_summary_view.refresh()
             else:
-                # Plain Column(expand=True) as the only child of Container(expand=True) can get
-                # zero height on some Flet builds (blank after Apply → "Back to review").
+                overview_body = build_overview_screen(
+                    t,
+                    self._state.scan_results,
+                    on_start_review=self._on_start_review,
+                    recent_lines=self._recent_review_lines(),
+                    scan_elapsed_seconds=elapsed,
+                )
+                banner = self._build_try_simple_banner()
+                if banner is not None:
+                    overview_body = ft.Column(
+                        [banner, overview_body],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=t.spacing.md,
+                        scroll=ft.ScrollMode.AUTO,
+                        expand=True,
+                    )
                 self._content.content = ft.Container(
                     expand=True,
                     alignment=ft.Alignment(0, 0),
@@ -270,10 +290,12 @@ class ReviewFlowHost(ft.Column):
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
             self._state.rebuild_group_index()
             self._state.invalidate_visible_cache()
+            self._state.on_scan_results_replaced()
         self._try_resume_session()
         if self._state.scan_results:
             self._state._recompute_cart_counters()
             self._repair_review_surface(self._state.active_screen)
+            self._maybe_auto_apply_on_open()
         else:
             self._render_active_screen()
 
@@ -285,6 +307,7 @@ class ReviewFlowHost(ft.Column):
             self._state.scan_mode = getattr(self._bridge.state, "scan_mode", None) or "files"
             self._state.rebuild_group_index()
             self._state.invalidate_visible_cache()
+            self._state.on_scan_results_replaced()
         self._router.reset_to_overview()
         if self._page_is_set(self):
             self._render_active_screen()
@@ -308,6 +331,10 @@ class ReviewFlowHost(ft.Column):
         self._state.scan_mode = mode
         self._state.rebuild_group_index()
         self._state.invalidate_visible_cache()
+        if groups:
+            self._state.on_scan_results_replaced()
+        else:
+            self._state.clear_selection_contract_for_empty_scan()
         if not defer_render and self._page_is_set(self):
             self._render_active_screen()
 
@@ -578,6 +605,7 @@ class ReviewFlowHost(ft.Column):
             _log.debug("GroupsPruned dispatch failed", exc_info=True)
 
     def _apply_dialog_closed(self, _e=None) -> None:
+        self._state.cancel_delete_preparation()
         self._apply_dialog = None
         self._apply_confirm_chk = None
 
@@ -626,6 +654,18 @@ class ReviewFlowHost(ft.Column):
         if not buckets:
             self._show_toast("No files marked for removal. Use checkboxes on groups, then try again.")
             return
+        if not self._state.delete_preparation_allowed():
+            if self._state.selection_validity == "invalidated_scope":
+                self._show_toast("Selection needs updating for current filters.")
+            elif not self._state.validate_survivor_invariant().ok:
+                self._show_toast("Selection invalid — at least one copy must be kept per set.")
+            elif self._state.selection_frozen():
+                self._show_toast("Please wait for the selection update to finish.")
+            else:
+                self._show_toast("No files marked for removal. Use checkboxes on groups, then try again.")
+            return
+        if not self._state.begin_delete_preparation():
+            return
         self._push_marked_paths_to_store()
         self._apply_step = "summary"
         self._last_apply_outcome = None
@@ -659,6 +699,9 @@ class ReviewFlowHost(ft.Column):
         if self._apply_confirm_chk is None or not self._apply_confirm_chk.value:
             self._show_toast("Confirm the checkbox before applying.")
             return
+        if not self._state.begin_delete_execution():
+            self._show_toast("Selection invalid — at least one copy must be kept per set.")
+            return
         self._apply_step = "progress"
         self._apply_progress.value = 0
         self._apply_progress_label.value = "Applying…"
@@ -688,6 +731,7 @@ class ReviewFlowHost(ft.Column):
             )
             self._apply_step = "outcome"
             self._apply_refresh_body()
+            self._state.finish_delete_transaction()
             self._show_apply_undo_toast(simulated=True)
             return
 
@@ -716,6 +760,7 @@ class ReviewFlowHost(ft.Column):
                     self._state.execute_errors = [str(exc)]
                     self._apply_step = "outcome"
                     self._apply_refresh_body()
+                    self._state.finish_delete_transaction()
                     return
                 self._state.execute_failures_detail = []
                 self._state.execute_errors = (
@@ -734,6 +779,7 @@ class ReviewFlowHost(ft.Column):
                 )
                 self._apply_step = "outcome"
                 self._apply_refresh_body()
+                self._state.finish_delete_transaction()
                 self._update_sidebar_counts_only()
                 self._show_apply_undo_toast(simulated=False)
 
@@ -778,13 +824,18 @@ class ReviewFlowHost(ft.Column):
         self._apply_close_sheet()
 
     def _apply_finish_overview(self, _e=None) -> None:
-        """Return to browse (or overview if nothing left) after delete outcome."""
+        """Return to browse (detailed) or summary (simple) after delete outcome."""
         self._apply_close_sheet()
         self._state.browse_detail_group_id = None
         self._state.page_index = 0
+        simple = self._is_simple_review_mode()
         if len(self._state.scan_results) > 0:
-            self._state.screen_stack = ["overview", "browse"]
-            self._state.active_screen = "browse"
+            if simple:
+                self._state.screen_stack = ["overview"]
+                self._state.active_screen = "overview"
+            else:
+                self._state.screen_stack = ["overview", "browse"]
+                self._state.active_screen = "browse"
         else:
             self._state.screen_stack = ["overview"]
             self._state.active_screen = "overview"
@@ -793,8 +844,9 @@ class ReviewFlowHost(ft.Column):
             self._ensure_content_visible()
             self._render_active_screen()
             if self._state.active_screen == "browse" and self._browse_view is not None:
-                # Stale list_host controls after delete skip refresh() and leave a blank pane.
                 self._browse_view.refresh(rebuild=True)
+            elif self._state.active_screen == "overview" and self._simple_summary_view is not None:
+                self._simple_summary_view.refresh()
             self._ensure_content_visible()
             self._safe_update(self._content)
 
@@ -862,6 +914,7 @@ class ReviewFlowHost(ft.Column):
             sel.deleted_paths.discard(p)
         # Manual toggle invalidates any smart rule reason label for this group.
         self._state.smart_rule_by_group.pop(gid, None)
+        self._state.note_manual_selection_edit()
         if group is not None:
             self._state.clamp_group_to_single_survivor(group)
         self._state._recompute_cart_counters()
@@ -883,6 +936,7 @@ class ReviewFlowHost(ft.Column):
         keeper_path = str(scoped[0].path)
         sel = self._state.set_selections.setdefault(gid, SetSelection())
         self._state.smart_rule_by_group.pop(gid, None)
+        self._state.note_manual_selection_edit()
         for f in scoped:
             p = str(f.path)
             if self._state.is_path_protected(p):
@@ -913,6 +967,7 @@ class ReviewFlowHost(ft.Column):
         from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
 
         self._state.push_undo_snapshot()
+        self._state.begin_selection_recompute()
         groups = self._state.visible_groups()
         for group in groups:
             scoped = (
@@ -943,23 +998,153 @@ class ReviewFlowHost(ft.Column):
                     self._state.marked_paths.add(p)
             self._state.smart_rule_by_group[gid] = rule
         self._state._recompute_cart_counters()
+        self._state.finalize_rule_recompute(rule)
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.refresh()
+        if self._simple_summary_view:
+            self._simple_summary_view.refresh()
         self._update_sidebar_counts_only()
 
     def _on_media_filter_changed(self, enabled: bool, media_type: str) -> None:
+        prev_fp = self._state.universe_fingerprint()
         self._state.selection_media_filter_enabled = bool(enabled)
         self._state.selection_media_type = normalized_media_type(media_type)
         self._state.prune_marks_outside_media_scope()
         self._state.invalidate_visible_cache()
         self._state.page_index = 0
         self._state._recompute_cart_counters()
+        self._state.on_scope_fingerprint_changed(prev_fp)
         self._push_marked_paths_to_store()
         if self._browse_view:
             self._browse_view.refresh_media_filter_chrome()
             self._browse_view.refresh(rebuild=True)
+        if self._simple_summary_view:
+            self._simple_summary_view.refresh()
         self._update_sidebar_counts_only()
+
+    def _review_prefs(self) -> ReviewPreferences:
+        return load_review_preferences(self._bridge.get_settings())
+
+    def _is_simple_review_mode(self) -> bool:
+        return is_simple_review_mode(self._bridge.get_settings())
+
+    def _persist_review_prefs(self, prefs: ReviewPreferences) -> None:
+        self._bridge.save_settings(save_review_preferences(self._bridge.get_settings(), prefs))
+
+    def _ensure_simple_summary_view(self, scan_elapsed_seconds: Optional[float] = None) -> None:
+        prefs = self._review_prefs()
+        if self._simple_summary_view is None:
+            self._simple_summary_view = SimpleSummaryView(
+                self._t,
+                self._state,
+                default_rule=prefs.default_keeper_rule,
+                on_delete=self._open_apply_sheet,
+                on_review_details=self._on_start_review,
+                on_apply_rule=self._apply_smart_rule_to_all,
+                on_rule_changed=self._on_simple_rule_changed,
+                on_dismiss_helper=self._dismiss_simple_helper,
+                show_helper=not prefs.simple_helper_dismissed,
+                scan_elapsed_seconds=scan_elapsed_seconds,
+            )
+        else:
+            self._simple_summary_view.apply_theme(self._t)
+            self._simple_summary_view.set_scan_elapsed(scan_elapsed_seconds)
+            self._simple_summary_view.set_helper_visible(not prefs.simple_helper_dismissed)
+
+    def _build_try_simple_banner(self) -> Optional[ft.Container]:
+        prefs = self._review_prefs()
+        if self._is_simple_review_mode() or prefs.upgrade_banner_dismissed:
+            return None
+        t = self._t
+        return ft.Container(
+            bgcolor=ft.Colors.with_opacity(0.12, t.colors.accent),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.35, t.colors.accent)),
+            border_radius=12,
+            padding=16,
+            content=ft.Column(
+                [
+                    ft.Text("Try Simple Review", weight=ft.FontWeight.W_600, color=t.colors.fg),
+                    ft.Text(
+                        "Summary-first review: apply a keeper rule, delete marked files, "
+                        "and open details only when you need them.",
+                        size=t.typography.size_sm,
+                        color=t.colors.fg_muted,
+                    ),
+                    ft.Row(
+                        [
+                            ft.FilledButton(
+                                "Switch to Simple",
+                                style=pill_filled_accent(t),
+                                on_click=lambda _e: self._switch_to_simple_review(),
+                            ),
+                            ft.TextButton("Not now", on_click=lambda _e: self._dismiss_upgrade_banner()),
+                        ],
+                        spacing=8,
+                    ),
+                ],
+                spacing=8,
+                tight=True,
+            ),
+        )
+
+    def _switch_to_simple_review(self) -> None:
+        prefs = self._review_prefs()
+        self._persist_review_prefs(
+            ReviewPreferences(
+                review_mode=REVIEW_MODE_SIMPLE,
+                default_keeper_rule=prefs.default_keeper_rule,
+                auto_apply_on_open=True,
+                simple_helper_dismissed=False,
+                upgrade_banner_dismissed=True,
+            )
+        )
+        self._bridge.show_snackbar("Switched to Simple Review.", success=True)
+        self._render_active_screen()
+        self._maybe_auto_apply_on_open()
+
+    def _dismiss_upgrade_banner(self) -> None:
+        prefs = self._review_prefs()
+        self._persist_review_prefs(
+            ReviewPreferences(
+                review_mode=prefs.review_mode,
+                default_keeper_rule=prefs.default_keeper_rule,
+                auto_apply_on_open=prefs.auto_apply_on_open,
+                simple_helper_dismissed=prefs.simple_helper_dismissed,
+                upgrade_banner_dismissed=True,
+            )
+        )
+        self._render_active_screen()
+
+    def _dismiss_simple_helper(self) -> None:
+        prefs = self._review_prefs()
+        self._persist_review_prefs(
+            ReviewPreferences(
+                review_mode=prefs.review_mode,
+                default_keeper_rule=prefs.default_keeper_rule,
+                auto_apply_on_open=prefs.auto_apply_on_open,
+                simple_helper_dismissed=True,
+                upgrade_banner_dismissed=prefs.upgrade_banner_dismissed,
+            )
+        )
+        if self._simple_summary_view:
+            self._simple_summary_view.set_helper_visible(False)
+
+    def _on_simple_rule_changed(self, rule: str) -> None:
+        if self._state.selection_rule != rule:
+            self._state.selection_rule = rule
+
+    def _maybe_auto_apply_on_open(self) -> None:
+        if not self._is_simple_review_mode():
+            return
+        prefs = self._review_prefs()
+        if not prefs.auto_apply_on_open:
+            return
+        if not self._state.marks_need_auto_apply_on_open():
+            return
+        if not self._state.scan_results:
+            return
+        self._apply_smart_rule_to_all(prefs.default_keeper_rule)
 
     def _ensure_content_visible(self) -> None:
         try:
@@ -1416,6 +1601,7 @@ class ReviewFlowHost(ft.Column):
         query = ft.TextField(label="Search", value=self._state.text_filter)
 
         def apply_filters(_ev=None) -> None:
+            prev_fp = self._state.universe_fingerprint()
             try:
                 self._state.min_size_bytes = int(min_size.value or "0")
             except ValueError:
@@ -1423,6 +1609,8 @@ class ReviewFlowHost(ft.Column):
             self._state.text_filter = query.value or ""
             # Phase 3.2 — reset page on filter change
             self._state.page_index = 0
+            self._state.invalidate_visible_cache()
+            self._state.on_scope_fingerprint_changed(prev_fp)
             self._close_filter_sheet()
             if self._router.active_screen() == "overview":
                 self._navigate_browse_after_modal_from_overview()

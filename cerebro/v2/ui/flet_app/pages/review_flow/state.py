@@ -8,6 +8,24 @@ from cerebro.v2.ui.flet_app.pages.review_flow.media_filter import (
     file_media_bucket,
     normalized_media_type,
 )
+from cerebro.v2.ui.flet_app.pages.review_flow.selection_contract import (
+    MarkSnapshot,
+    SelectionOrigin,
+    SelectionTransactionState,
+    SelectionValidity,
+    SnapshotCheckResult,
+    SurvivorValidationResult,
+    capture_mark_snapshot,
+    check_mark_snapshot,
+    compute_scan_id,
+    compute_universe_fingerprint,
+    delete_preparation_allowed,
+    format_scope_change_hint,
+    marks_need_auto_apply_on_open,
+    provenance_label,
+    selection_controls_frozen,
+    validate_survivor_invariant,
+)
 
 ReviewScreen = Literal["overview", "browse", "inspect"]
 BrowseViewMode = Literal["list", "grid", "tree", "folder_diff"]
@@ -76,6 +94,16 @@ class ReviewFlowState:
     cart_keep_count: int = 0
     cart_protected_count: int = 0
     cart_delete_bytes: int = 0
+    # Simple review — selection contract (Phase 0)
+    scan_id: str = ""
+    mark_snapshot: Optional[MarkSnapshot] = None
+    selection_origin: SelectionOrigin = "auto_rule"
+    selection_rule: Optional[str] = None
+    selection_validity: SelectionValidity = "valid"
+    selection_transaction_state: SelectionTransactionState = "idle"
+    scope_invalidation_hint: str = ""
+    displayed_cart_delete_count: int = 0
+    displayed_cart_delete_bytes: int = 0
     # 1.1 — visible_groups() memoization cache (hidden from repr/eq)
     _visible_cache_key: object = field(default=None, repr=False, compare=False)
     _visible_cache_val: list = field(default_factory=list, repr=False, compare=False)
@@ -206,6 +234,137 @@ class ReviewFlowState:
         self.cart_keep_count = kc
         self.cart_protected_count = pc
         self.cart_delete_bytes = db
+        if self.selection_validity == "valid":
+            self.displayed_cart_delete_count = dc
+            self.displayed_cart_delete_bytes = db
+
+    def sync_scan_id(self) -> None:
+        """Refresh scan_id from current scan_results."""
+        self.scan_id = compute_scan_id(self.scan_results)
+
+    def universe_fingerprint(self) -> str:
+        if not self.scan_id:
+            self.sync_scan_id()
+        return compute_universe_fingerprint(self)
+
+    def check_mark_snapshot(self) -> SnapshotCheckResult:
+        return check_mark_snapshot(self)
+
+    def marks_need_auto_apply_on_open(self) -> bool:
+        return marks_need_auto_apply_on_open(self)
+
+    def selection_frozen(self) -> bool:
+        return selection_controls_frozen(self)
+
+    def delete_preparation_allowed(self) -> bool:
+        return delete_preparation_allowed(self)
+
+    def validate_survivor_invariant(self) -> SurvivorValidationResult:
+        return validate_survivor_invariant(self)
+
+    def provenance_label(self) -> str:
+        return provenance_label(self)
+
+    def finalize_rule_recompute(self, rule: str) -> None:
+        """Complete rule Apply: update provenance and capture snapshot."""
+        if self.selection_origin == "manual_review":
+            origin: SelectionOrigin = "mixed"
+        elif self.selection_origin == "mixed":
+            origin = "mixed"
+        else:
+            origin = "auto_rule"
+        self.end_selection_recompute(rule=rule, origin=origin)
+
+    def begin_selection_recompute(self) -> None:
+        self.selection_transaction_state = "recomputing"
+
+    def end_selection_recompute(self, *, rule: Optional[str], origin: SelectionOrigin) -> None:
+        self.selection_rule = rule
+        self.selection_origin = origin
+        self.selection_validity = "valid"
+        self.scope_invalidation_hint = ""
+        self.mark_snapshot = capture_mark_snapshot(self, rule=rule)
+        self.selection_transaction_state = "idle"
+        for g in self.scan_results:
+            self.clamp_group_to_single_survivor(g)
+        self._recompute_cart_counters()
+
+    def begin_delete_preparation(self) -> bool:
+        """Transition to preparing_delete if delete is allowed."""
+        if not self.delete_preparation_allowed():
+            return False
+        self.selection_transaction_state = "preparing_delete"
+        return True
+
+    def begin_delete_execution(self) -> bool:
+        """Transition to deleting after confirm if survivor invariant holds."""
+        if self.selection_transaction_state != "preparing_delete":
+            return False
+        if not validate_survivor_invariant(self).ok:
+            return False
+        self.selection_transaction_state = "deleting"
+        return True
+
+    def finish_delete_transaction(self) -> None:
+        self.selection_transaction_state = "idle"
+
+    def cancel_delete_preparation(self) -> None:
+        if self.selection_transaction_state == "preparing_delete":
+            self.selection_transaction_state = "idle"
+
+    def note_manual_selection_edit(self) -> None:
+        if self.selection_origin == "auto_rule":
+            self.selection_origin = "manual_review"
+        elif self.selection_origin == "manual_review":
+            pass
+        else:
+            self.selection_origin = "mixed"
+
+    def invalidate_selection_for_scope_change(self, *, hint: str = "") -> None:
+        """Universe changed — marks need explicit re-apply; keep displayed totals."""
+        if self.mark_snapshot is not None:
+            self.displayed_cart_delete_count = self.mark_snapshot.cart_delete_count
+            self.displayed_cart_delete_bytes = self.mark_snapshot.cart_delete_bytes
+            if not hint:
+                hint = format_scope_change_hint(self.mark_snapshot, self)
+        else:
+            self.displayed_cart_delete_count = self.cart_delete_count
+            self.displayed_cart_delete_bytes = self.cart_delete_bytes
+        self.selection_validity = "invalidated_scope"
+        self.scope_invalidation_hint = hint
+
+    def on_scan_results_replaced(self) -> None:
+        """Call when scan_results identity changes (new scan or full reload)."""
+        prev = self.mark_snapshot
+        self.sync_scan_id()
+        if prev is None:
+            self.selection_validity = "valid"
+            self.scope_invalidation_hint = ""
+            return
+        if prev.scan_id != self.scan_id:
+            self.mark_snapshot = None
+            self.selection_validity = "valid"
+            self.scope_invalidation_hint = ""
+            self.displayed_cart_delete_count = 0
+            self.displayed_cart_delete_bytes = 0
+            return
+        self.invalidate_selection_for_scope_change(hint="Scan results updated")
+
+    def on_scope_fingerprint_changed(self, previous_fp: str) -> None:
+        """Call after filter/media/exclude mutation when fingerprint differs."""
+        new_fp = self.universe_fingerprint()
+        if previous_fp == new_fp:
+            return
+        self.invalidate_selection_for_scope_change()
+
+    def clear_selection_contract_for_empty_scan(self) -> None:
+        self.mark_snapshot = None
+        self.selection_validity = "valid"
+        self.scope_invalidation_hint = ""
+        self.selection_transaction_state = "idle"
+        self.displayed_cart_delete_count = 0
+        self.displayed_cart_delete_bytes = 0
+        self.scan_id = ""
 
     # Phase 3.2 — pagination helpers
     def visible_group_count(self) -> int:
@@ -319,6 +478,10 @@ class ReviewFlowState:
                     )
                     for gid, sel in self.set_selections.items()
                 },
+                "selection_origin": self.selection_origin,
+                "selection_rule": self.selection_rule,
+                "selection_validity": self.selection_validity,
+                "mark_snapshot": self.mark_snapshot,
             }
         )
         self.redo_stack.clear()
@@ -332,6 +495,17 @@ class ReviewFlowState:
         restored = snap.get("set_selections", {})
         if isinstance(restored, dict):
             self.set_selections = dict(restored)
+        origin = snap.get("selection_origin")
+        if origin in ("auto_rule", "manual_review", "mixed"):
+            self.selection_origin = origin  # type: ignore[assignment]
+        rule = snap.get("selection_rule")
+        self.selection_rule = str(rule) if rule else None
+        validity = snap.get("selection_validity")
+        if validity in ("valid", "invalidated_scope"):
+            self.selection_validity = validity  # type: ignore[assignment]
+        ms = snap.get("mark_snapshot")
+        self.mark_snapshot = ms if isinstance(ms, MarkSnapshot) else None
+        self._recompute_cart_counters()
 
     def cart_buckets(self) -> Dict[str, List[DuplicateFile]]:
         to_delete: List[DuplicateFile] = []
