@@ -210,7 +210,7 @@ def _main(page: ft.Page) -> None:
     folder_picker = ft.FilePicker()
     page.services.append(folder_picker)
 
-    from cerebro.v2.ui.flet_app.theme import set_ui_font_size_px
+    from cerebro.v2.ui.flet_app.theme import set_tree_font_scale_applied, set_ui_font_size_px, get_ui_font_scale
 
     _appear0 = settings.get("appearance") if isinstance(settings, dict) else {}
     _fs0 = 13
@@ -752,6 +752,7 @@ def _main(page: ft.Page) -> None:
     bridge.set_on_theme_change(_on_theme_change)
     bridge.set_on_stats_refresh_ui(dashboard_page._schedule_dashboard_data_fetch)
     _on_theme_change(bridge.app_theme)
+    set_tree_font_scale_applied(get_ui_font_scale())
 
     history_page.load_history(bridge.get_scan_history_table_rows())
     history_page.load_deletion_history(bridge.get_deletion_history_table_rows())

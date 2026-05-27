@@ -511,6 +511,7 @@ class SettingsPage(ft.Column):
             self._appearance_font_label.update()
         # Live preview so slider has visible effect immediately.
         self._apply_font_size_to_page(value)
+        self._t = theme_for_mode(self._bridge.app_theme)
 
     def _on_partial_banner_autohide_change(self, enabled: bool) -> None:
         self._general_partial_banner_timeout.disabled = not bool(enabled)

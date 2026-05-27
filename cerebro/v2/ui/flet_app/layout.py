@@ -431,6 +431,10 @@ class AppLayout(ft.Column):
         self._content_host.bgcolor = ft.Colors.TRANSPARENT
 
         self._apply_nav_theme()
+        nav_size = self._t.typography.size_sm
+        self._brand_text.size = nav_size
+        for label in self._nav_labels.values():
+            label.size = nav_size
 
         self.apply_shell_gradient(getattr(self._bridge, "active_gradient_id", "material_purple"))
 

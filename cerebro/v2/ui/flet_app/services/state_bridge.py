@@ -135,12 +135,23 @@ class StateBridge:
         self._on_theme_change = cb
 
     def refresh_app_typography(self) -> None:
-        """Re-run the theme callback so pages pick up ``theme.set_ui_font_size_px``."""
-        if self._on_theme_change:
-            try:
-                self._on_theme_change(self._visual_theme)
-            except Exception:
-                _log.exception("refresh_app_typography failed")
+        """Rescale built UI text after Settings → Appearance font size changes."""
+        from cerebro.v2.ui.flet_app.theme import build_flet_theme, get_active_preset
+        from cerebro.v2.ui.flet_app.utils.typography_refresh import sync_page_font_scale
+
+        preset = get_active_preset()
+        mode_str = self._visual_theme
+        seed = getattr(preset, "seed", None) if preset is not None else None
+        try:
+            self._page.theme = build_flet_theme(mode_str, seed=seed)
+        except Exception:
+            _log.debug("Could not refresh page.theme for typography", exc_info=True)
+
+        sync_page_font_scale(self._page)
+        try:
+            self._page.update()
+        except Exception:
+            _log.debug("page.update after typography refresh failed", exc_info=True)
 
     def register_progress_control(self, ctrl: ft.Control) -> None:
         """Register a control to update on scan-progress actions."""

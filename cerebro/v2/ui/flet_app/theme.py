@@ -43,6 +43,7 @@ def get_active_preset() -> Optional["PalettePreset"]:
 
 _UI_FONT_BASE_PX: int = 13
 _ui_font_scale: float = 1.0
+_tree_font_scale_applied: float = 1.0
 
 
 def set_ui_font_size_px(size: int) -> None:
@@ -54,6 +55,15 @@ def set_ui_font_size_px(size: int) -> None:
 
 def get_ui_font_scale() -> float:
     return _ui_font_scale
+
+
+def get_tree_font_scale_applied() -> float:
+    return _tree_font_scale_applied
+
+
+def set_tree_font_scale_applied(scale: float) -> None:
+    global _tree_font_scale_applied
+    _tree_font_scale_applied = max(0.001, float(scale))
 
 
 def _scaled_typography(base: Typography) -> Typography:
@@ -436,7 +446,23 @@ def build_flet_theme(mode: str, seed: str | None = None) -> ft.Theme:
         color_scheme=scheme,
         font_family=Typography().family,
         visual_density=ft.VisualDensity.COMFORTABLE,
+        text_theme=_build_flet_text_theme(mode),
     )
+
+
+def _build_flet_text_theme(mode: str) -> ft.TextTheme | None:
+    """Material text roles scaled to match Settings → Appearance font size."""
+    try:
+        ty = theme_for_mode(mode).typography
+        return ft.TextTheme(
+            body_medium=ft.TextStyle(size=ty.size_base, font_family=ty.family),
+            body_small=ft.TextStyle(size=ty.size_sm, font_family=ty.family),
+            title_medium=ft.TextStyle(size=ty.size_md, font_family=ty.family),
+            title_large=ft.TextStyle(size=ty.size_lg, font_family=ty.family),
+            label_large=ft.TextStyle(size=ty.size_sm, font_family=ty.family),
+        )
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

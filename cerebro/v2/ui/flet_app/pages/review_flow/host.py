@@ -115,6 +115,7 @@ class ReviewFlowHost(ft.Column):
 
     def _render_active_screen(self) -> None:
         started = time.perf_counter()
+        self._t = theme_for_mode(self._bridge.app_theme)
         t = self._t
         screen = self._router.active_screen()
         if screen not in ("overview", "browse", "inspect"):
