@@ -166,6 +166,9 @@ class ScanOrchestrator:
 
     def _run_scan(self) -> None:
         """Run the scan in a background thread."""
+        engine = self._active_engine
+        if engine is None:
+            return
         try:
             def wrapper_callback(progress: ScanProgress) -> None:
                 """Thread-safe wrapper for progress callback."""
@@ -175,8 +178,8 @@ class ScanOrchestrator:
                     # For now, call directly (UI should handle thread safety)
                     self._progress_callback(progress)
 
-            self._active_engine.start(wrapper_callback)
-            self._active_engine.wait_until_done(timeout=None)
+            engine.start(wrapper_callback)
+            engine.wait_until_done(timeout=None)
         except (OSError, ValueError, RuntimeError, AttributeError, TypeError, KeyError, ImportError) as e:
             if self._progress_callback:
                 error_progress = ScanProgress(
