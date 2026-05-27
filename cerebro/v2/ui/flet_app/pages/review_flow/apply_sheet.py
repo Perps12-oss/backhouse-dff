@@ -74,6 +74,7 @@ def build_apply_sheet_column(
     on_new_scan: Callable[[ft.ControlEvent | None], None],
     outcome_return_label: str = "Back to browse",
     outcome_show_return: bool = True,
+    simple_empty_outcome: bool = False,
 ) -> ft.Column:
     title = ft.Text("Remove files", weight=ft.FontWeight.W_700, size=t.typography.size_md)
     footer_close = ft.TextButton("Cancel", on_click=on_close)
@@ -192,9 +193,54 @@ def build_apply_sheet_column(
         )
 
     success_icon = ft.Icon(ft.icons.Icons.CHECK_CIRCLE, color=t.colors.success, size=36)
-    header = ft.Row([success_icon, ft.Text("Done", weight=ft.FontWeight.W_700)], spacing=8)
+    done_label = "All cleaned up" if simple_empty_outcome else "Done"
+    header = ft.Row([success_icon, ft.Text(done_label, weight=ft.FontWeight.W_700)], spacing=8)
 
     restore_visible = outcome.deleted_count > 0
+    if simple_empty_outcome:
+        return ft.Column(
+            [
+                title,
+                header,
+                ft.Text(
+                    "No duplicate sets are left in this review.",
+                    size=t.typography.size_sm,
+                    color=t.colors.fg_muted,
+                    width=_APPLY_BODY_WIDTH,
+                ),
+                ft.Text(
+                    _fmt_stats_line(outcome.deleted_count, outcome.freed_bytes, outcome.error_count),
+                    size=t.typography.size_sm,
+                ),
+                *err_controls,
+                ft.Container(height=8),
+                ft.OutlinedButton(
+                    "Restore from managed storage",
+                    visible=restore_visible,
+                    on_click=on_restore_managed,
+                ),
+                ft.Row(
+                    [
+                        ft.TextButton("Stay here", on_click=on_back_overview),
+                        ft.Container(expand=True),
+                        ft.FilledButton(
+                            "Start new scan",
+                            on_click=on_new_scan,
+                            style=pill_filled_accent(t, text_size=t.typography.size_sm),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
+                ),
+            ],
+            spacing=8,
+            tight=True,
+            scroll=ft.ScrollMode.AUTO,
+            height=420,
+        )
+
     return ft.Column(
         [
             title,

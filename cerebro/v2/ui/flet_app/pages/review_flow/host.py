@@ -97,8 +97,6 @@ class ReviewFlowHost(ft.Column):
         self._apply_undo_snapshot: Optional[dict] = None
         self._last_apply_outcome: Optional[ApplyOutcomeModel] = None
         self._apply_opened_compact: bool = False
-        self._simple_zero_sets_prompted: bool = False
-        self._simple_zero_sets_dialog: Optional[ft.AlertDialog] = None
         self._browse_sidebar_session_built: Optional[bool] = None
         self._inspect_stub = False
         self._inspect_preview_generation = 0
@@ -645,8 +643,6 @@ class ReviewFlowHost(ft.Column):
         self._apply_dialog = None
         self._apply_confirm_chk = None
         self._apply_opened_compact = False
-        self._simple_zero_sets_prompted = False
-        self._simple_zero_sets_dialog = None
 
     def _apply_close_sheet(self, _e=None) -> None:
         try:
@@ -674,6 +670,15 @@ class ReviewFlowHost(ft.Column):
         else:
             outcome_return_label = "Back to browse" if n_groups > 0 else "Back to review"
             outcome_show_return = True
+        oo = self._last_apply_outcome
+        simple_empty_merge = (
+            bool(simple)
+            and step == "outcome"
+            and oo is not None
+            and n_groups == 0
+            and not oo.failures
+            and int(oo.error_count) == 0
+        )
         col = build_apply_sheet_column(
             t,
             step=step,
@@ -694,6 +699,7 @@ class ReviewFlowHost(ft.Column):
             on_new_scan=lambda _e: self._apply_finish_new_scan(),
             outcome_return_label=outcome_return_label,
             outcome_show_return=outcome_show_return,
+            simple_empty_outcome=simple_empty_merge,
         )
         self._apply_outer.content = col
         self._safe_update(self._apply_outer)
@@ -716,10 +722,8 @@ class ReviewFlowHost(ft.Column):
         if not self._state.begin_delete_preparation():
             return
         self._push_marked_paths_to_store()
-        compact = self._is_simple_review_mode() and self._router.active_screen() == "overview"
+        compact = self._is_simple_review_mode() and self._router.active_screen() in ("overview", "browse")
         self._apply_opened_compact = compact
-        self._simple_zero_sets_prompted = False
-        self._simple_zero_sets_dialog = None
         self._apply_step = "confirm" if compact else "summary"
         self._last_apply_outcome = None
         self._apply_undo_snapshot = None
@@ -790,7 +794,6 @@ class ReviewFlowHost(ft.Column):
             self._apply_refresh_body()
             self._state.finish_delete_transaction()
             self._show_apply_undo_toast(simulated=True)
-            self._maybe_prompt_new_scan_when_empty_simple()
             return
 
         self._push_delete_undo_bundle(paths)
@@ -840,7 +843,6 @@ class ReviewFlowHost(ft.Column):
                 self._state.finish_delete_transaction()
                 self._update_sidebar_counts_only()
                 self._show_apply_undo_toast(simulated=False)
-                self._maybe_prompt_new_scan_when_empty_simple()
 
             from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
 
@@ -853,71 +855,6 @@ class ReviewFlowHost(ft.Column):
             progress_callback=on_progress,
             done_callback=on_done,
         )
-
-    def _maybe_prompt_new_scan_when_empty_simple(self) -> None:
-        """Simple mode: when cleanup leaves 0 sets, auto-open a \"Start new scan\" prompt."""
-        if self._simple_zero_sets_prompted:
-            return
-        if not self._is_simple_review_mode():
-            return
-        if self._apply_step != "outcome":
-            return
-        if len(self._state.scan_results) != 0:
-            return
-
-        self._simple_zero_sets_prompted = True
-        t = self._t
-
-        def _close_prompt(_e=None) -> None:
-            if self._simple_zero_sets_dialog is None:
-                return
-            try:
-                self._bridge.dismiss_top_dialog()
-            except Exception:
-                pass
-            self._simple_zero_sets_dialog = None
-
-        def _start_new_scan(_e=None) -> None:
-            _close_prompt()
-            self._apply_close_sheet()
-            self._bridge.navigate("dashboard")
-
-        self._simple_zero_sets_dialog = ft.AlertDialog(
-            modal=True,
-            bgcolor=t.colors.bg2,
-            shape=ft.RoundedRectangleBorder(radius=16),
-            content_padding=ft.padding.all(16),
-            inset_padding=ft.padding.symmetric(horizontal=24, vertical=48),
-            content=ft.Column(
-                [
-                    ft.Text("All cleaned up", weight=ft.FontWeight.W_700, size=t.typography.size_md),
-                    ft.Text(
-                        "No duplicate sets are left in this review. Start a new scan now?",
-                        size=t.typography.size_sm,
-                        color=t.colors.fg_muted,
-                        width=420,
-                    ),
-                    ft.Container(height=8),
-                    ft.Row(
-                        [
-                            ft.TextButton("Stay here", on_click=_close_prompt),
-                            ft.Container(expand=True),
-                            ft.FilledButton(
-                                "Start new scan",
-                                on_click=_start_new_scan,
-                                style=pill_filled_accent(t),
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.END,
-                        spacing=8,
-                    ),
-                ],
-                tight=True,
-                spacing=8,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-        )
-        self._bridge.show_modal_dialog(self._simple_zero_sets_dialog)
 
     def _show_apply_undo_toast(self, *, simulated: bool) -> None:
         msg = "Simulated apply (no files moved)." if simulated else "Last batch can be restored from managed storage."
