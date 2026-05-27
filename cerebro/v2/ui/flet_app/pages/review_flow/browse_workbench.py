@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import flet as ft
 
+from cerebro.v2.ui.flet_app.components.common.safe_controls import safe_update
 from cerebro.v2.ui.flet_app.pages.review_flow.progress_sidebar import (
     ProgressSidebarRefs,
     update_progress_sidebar_refs,
@@ -72,6 +73,4 @@ def refresh_browse_workstation_sidebar(
     simple_details: bool = False,
 ) -> None:
     update_progress_sidebar_refs(refs, "browse", state, simple_details=simple_details)
-    from cerebro.v2.ui.flet_app.components.common.safe_controls import safe_update
-
     safe_update(container)

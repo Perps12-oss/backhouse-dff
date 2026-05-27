@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional
@@ -35,6 +37,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow.review_preferences import (
     save_review_preferences,
     is_simple_review_mode,
 )
+from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
 from cerebro.v2.ui.flet_app.pages.review_flow.media_filter import (
     filter_paths_for_media_scope,
     normalized_media_type,
@@ -58,6 +61,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow import skeletons
 from cerebro.v2.session_schema import validate_review_session_payload
 from cerebro.v2.ui.flet_app.theme import theme_for_mode
 from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_accent
+from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
 
 if TYPE_CHECKING:
     from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
@@ -811,8 +815,6 @@ class ReviewFlowHost(ft.Column):
                     self._apply_progress_label.value = f"{done}/{total} processed ({pct}%)"
                 self._safe_update(self._apply_outer)
 
-            from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
-
             run_on_ui_thread(self._bridge.flet_page, _ui_progress, refresh_page=False)
 
         def on_done(new_groups, deleted_count, failed_count, bytes_reclaimed, exc) -> None:
@@ -843,8 +845,6 @@ class ReviewFlowHost(ft.Column):
                 self._state.finish_delete_transaction()
                 self._update_sidebar_counts_only()
                 self._show_apply_undo_toast(simulated=False)
-
-            from cerebro.v2.ui.flet_app.services.ui_marshal import run_on_ui_thread
 
             run_on_ui_thread(self._bridge.flet_page, _finish, refresh_page=False)
 
@@ -1025,8 +1025,6 @@ class ReviewFlowHost(ft.Column):
         self._update_sidebar_counts_only()
 
     def _apply_smart_rule_to_all(self, rule: str) -> None:
-        from cerebro.v2.ui.flet_app.pages.review_flow.smart_rules import apply_rule_with_pipeline
-
         self._state.push_undo_snapshot()
         self._state.begin_selection_recompute()
         groups = self._state.visible_groups()
@@ -1888,9 +1886,6 @@ class ReviewFlowHost(ft.Column):
 
     def _save_snapshot_async(self, path_str: str, snapshot_json: str, done_cb=None) -> None:
         """Phase 4 — Write snapshot to disk on a daemon thread (atomic via .tmp rename)."""
-        import threading
-        import pathlib
-
         def _worker() -> None:
             try:
                 p = pathlib.Path(path_str)
