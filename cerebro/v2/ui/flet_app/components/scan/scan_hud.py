@@ -142,7 +142,7 @@ class ScanHUD(ft.Container):
         self._phase_hash_bar = ft.ProgressBar(
             width=_phase_track_w,
             bar_height=8,
-            color="#00BFA5",
+            color=t.colors.success,
             bgcolor=t.colors.bg3,
             value=None,
         )
@@ -188,7 +188,7 @@ class ScanHUD(ft.Container):
         )
 
         # Circular scan progress view — swaps in over main content during active scan
-        self._ring_default_color = "#00BFA5"
+        self._ring_default_color = t.colors.success
         self._ring = ft.ProgressRing(
             width=80,
             height=80,
@@ -946,7 +946,7 @@ class ScanHUD(ft.Container):
         except Exception:
             pass
         self._ring.value = None
-        self._ring.color = "#F59E0B"
+        self._ring.color = self._t.colors.warning
         self._ring_label.value = "Scan cancelled"
         self._ring_label.opacity = 1.0
         self._ring_phase_label.value = ""
@@ -983,7 +983,7 @@ class ScanHUD(ft.Container):
         """Engine has returned — present an explicit review vs home decision (stays on scan view)."""
         self._stop_scan_elapsed_timer()
         self._ring.value = None
-        self._ring.color = "#F59E0B"
+        self._ring.color = self._t.colors.warning
         self._ring_label.value = "Scan cancelled"
         self._ring_label.opacity = 1.0
         self._ring_path.value = ""

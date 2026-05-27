@@ -22,6 +22,7 @@ from cerebro.v2.ui.flet_app.routes import default_route, key_for_route
 from cerebro.v2.ui.flet_app.services.backend_service import BackendService
 from cerebro.v2.ui.flet_app.services.state_bridge import StateBridge
 from cerebro.v2.ui.flet_app.theme import build_flet_theme, theme_for_mode
+from cerebro.v2.ui.flet_app.palette_themes import default_preset
 from cerebro.v2.ui.flet_app.utils.motion import sync_reduce_motion_storage
 from cerebro.v2.ui.flet_app.utils.shortcuts import register_global_shortcuts
 from cerebro.v2.ui.flet_app.flet_compat import assert_supported_flet
@@ -90,7 +91,7 @@ def _main(page: ft.Page) -> None:
     page.window.min_height = 600
     page.theme_mode = ft.ThemeMode.SYSTEM
     # Filled from apply_preset_theme once settings are loaded.
-    page.bgcolor = "#121212"
+    page.bgcolor = default_preset().bg
     page.padding = 0
     page.spacing = 0
 
@@ -294,7 +295,11 @@ def _main(page: ft.Page) -> None:
             padding=ft.Padding.symmetric(horizontal=8),
             content=ft.Row(
                 [
-                    ft.Icon(ft.icons.Icons.AUTO_AWESOME, size=16, color="#22D3EE"),
+                    ft.Icon(
+                        ft.icons.Icons.AUTO_AWESOME,
+                        size=16,
+                        color=theme_for_mode(bridge.app_theme).colors.accent,
+                    ),
                     ft.Text("Cerebro", size=12, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
                     ft.IconButton(ft.icons.Icons.REMOVE, icon_size=14, on_click=lambda _e: _min_btn(), tooltip="Minimise"),
@@ -418,7 +423,13 @@ def _main(page: ft.Page) -> None:
             ]
             list_view.controls = [_row(label, action) for label, action in filtered]
             if not list_view.controls:
-                list_view.controls = [ft.Text("No matching actions.", size=12, color="#94A3B8")]
+                list_view.controls = [
+                    ft.Text(
+                        "No matching actions.",
+                        size=12,
+                        color=theme_for_mode(bridge.app_theme).colors.fg_muted,
+                    )
+                ]
             try:
                 if list_view.page is not None:
                     list_view.update()
@@ -484,24 +495,24 @@ def _main(page: ft.Page) -> None:
             steps[0][0],
             size=20,
             weight=ft.FontWeight.BOLD,
-            color="#E6EDF3",
+            color=_onb_t.colors.fg,
         )
         desc_text = ft.Text(
             steps[0][1],
             size=13,
-            color="#9FB0C2",
+            color=_onb_t.colors.fg_muted,
         )
         progress = ft.ProgressBar(
             value=1 / 3,
             bar_height=6,
             color=_onb_accent,
-            bgcolor=ft.Colors.with_opacity(0.18, "#FFFFFF"),
+            bgcolor=ft.Colors.with_opacity(0.18, _onb_t.colors.fg),
             border_radius=999,
         )
         dont_show_again = ft.Checkbox(
             label="Don't show again",
             value=False,
-            label_style=ft.TextStyle(size=12, color="#9FB0C2"),
+            label_style=ft.TextStyle(size=12, color=_onb_t.colors.fg_muted),
         )
 
         def _render_step() -> None:
@@ -558,8 +569,8 @@ def _main(page: ft.Page) -> None:
                 width=560,
                 padding=16,
                 border_radius=14,
-                bgcolor="#1e1e1e",
-                border=ft.border.all(1, ft.Colors.with_opacity(0.16, "#FFFFFF")),
+                bgcolor=_onb_t.colors.bg2,
+                border=ft.border.all(1, ft.Colors.with_opacity(0.35, _onb_t.colors.border)),
                 content=ft.Column(
                     [step_badge, title_text, desc_text, progress, dont_show_again],
                     spacing=12,
@@ -570,7 +581,7 @@ def _main(page: ft.Page) -> None:
                 ft.TextButton(
                     "Skip",
                     on_click=lambda _e: _finish(),
-                    style=ft.ButtonStyle(color="#9FB0C2"),
+                    style=ft.ButtonStyle(color=_onb_t.colors.fg_muted),
                 ),
                 ft.FilledButton(
                     "Next",
@@ -582,7 +593,7 @@ def _main(page: ft.Page) -> None:
                     ),
                 ),
             ],
-            bgcolor="#0B121A",
+            bgcolor=_onb_t.colors.bg,
             shape=ft.RoundedRectangleBorder(radius=18),
         )
         bridge.show_modal_dialog(dlg)

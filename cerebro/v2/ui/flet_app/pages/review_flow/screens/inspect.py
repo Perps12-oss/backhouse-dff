@@ -14,6 +14,7 @@ from cerebro.v2.ui.flet_app.pages.review_flow.state import (
 )
 from cerebro.v2.ui.flet_app.media_preview import build_media_placeholder, preview_kind_for_path
 from cerebro.v2.ui.flet_app.services.thumbnail_cache import is_previewable_path
+from cerebro.v2.ui.flet_app.pill_button_styles import pill_filled_critical
 from cerebro.v2.ui.flet_app.theme import ThemeTokens, fmt_size
 
 _INSPECT_PREVIEW_H = 400
@@ -427,7 +428,11 @@ def build_inspect_screen(
                     ft.OutlinedButton("Keep left file", on_click=on_keep_left),
                     ft.OutlinedButton("Keep right file", on_click=on_keep_right),
                     ft.OutlinedButton("Keep both", on_click=on_keep_both),
-                    ft.FilledButton("Delete all in set", on_click=on_delete_all),
+                    ft.FilledButton(
+                        "Delete all in set",
+                        on_click=on_delete_all,
+                        style=pill_filled_critical(t, text_size=t.typography.size_sm),
+                    ),
                     ft.FilledButton("Mark & next set", on_click=on_mark_next),
                 ],
                 wrap=True,

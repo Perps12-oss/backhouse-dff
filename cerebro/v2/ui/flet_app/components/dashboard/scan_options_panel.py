@@ -58,7 +58,7 @@ class DashboardScanOptionsPanel:
             label="Scan inside archives (coming soon)",
             value=False,
             disabled=True,
-            active_color="#F59E0B",
+            active_color=t.colors.warning,
             label_text_style=ft.TextStyle(color=t.colors.fg_muted, size=t.typography.size_sm),
             tooltip="Archive extraction is not yet implemented; this option is disabled.",
             on_change=on_archives_change,
@@ -66,7 +66,7 @@ class DashboardScanOptionsPanel:
         self.archives_warning = ft.Text(
             "Archive scanning is not available yet — enable when a future release adds extraction.",
             size=t.typography.size_xs,
-            color="#F59E0B",
+            color=t.colors.warning,
             italic=True,
             visible=False,
         )
