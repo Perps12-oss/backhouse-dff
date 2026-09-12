@@ -1,33 +1,41 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main, HOUSE-KEEPING]
-  pull_request:
-    branches: [main]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  quality:
-    runs-on: ubuntu-latest
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff mypy pytest pytest-memray
+          pip install ruff mypy pytest pytest-cov bandit
 
-      - name: Ruff (scoped)
+      - name: Ruff (scoped production paths)
         run: |
           python -m ruff check \
             cerebro/core/safety/deletion_gate.py \
@@ -45,23 +53,34 @@ jobs:
             tests/test_preview_manager.py \
             main.py
 
-      - name: Mypy (scoped)
-        run: |
-          python -m mypy --follow-imports=skip --ignore-missing-imports main.py
+      - name: Ruff F821 (undefined names)
+        run: python -m ruff check cerebro/core/safety/deletion_gate.py cerebro/core/session.py cerebro/core/pipeline.py main.py --select F821
 
-      - name: Pytest
-        run: |
-          sudo apt-get update && sudo apt-get install -y xvfb
-          xvfb-run -a python -m pytest -q
+      - name: Bandit (high)
+        run: bandit -r cerebro/core/safety --severity-level high
+
+      - name: Mypy (scoped)
+        run: python -m mypy --follow-imports=skip --ignore-missing-imports main.py
+
+      - name: Install xvfb
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Pytest (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q --cov=cerebro --cov-report=xml --ignore=tests/test_memory_bounds.py
+
+      - name: Pytest (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -q --cov=cerebro --cov-report=xml --ignore=tests/test_memory_bounds.py
 
       - name: Runtime smoke
         run: |
           python -c "import main; print('import main OK')"
-          # Post-v1 audit Cut 3 invariant: only "files" is registered for file
-          # scans. "files_classic" (FileDedupEngine) was removed. Assert both.
           python -c "from cerebro.engines.orchestrator import ScanOrchestrator; o=ScanOrchestrator(); assert type(o._engines['files']).__name__ == 'TurboFileEngine'; assert 'files_classic' not in o.get_available_modes(); print('single-entrance invariant OK')"
 
       - name: Startup time check
+        if: runner.os == 'Linux'
         run: |
           START=$(python -c "import time; print(int(time.time() * 1000))")
           python -c "import cerebro"
@@ -73,6 +92,27 @@ jobs:
             exit 1
           fi
 
-      - name: Memory bounds
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  memory:
+    name: memory bounds (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
         run: |
-          xvfb-run -a python -m pytest tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-memray
+          sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Memory bounds
+        run: xvfb-run -a python -m pytest tests/test_memory_bounds.py -v --memray --memray-bin-path=/tmp/memray-bounds.bin
